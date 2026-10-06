@@ -101,15 +101,23 @@ def ceil_step(value: float, step: int) -> int:
     return int(math.ceil(value / step - 1e-9)) * step
 
 
-def shares_for(price: float, code: str, target_amount: float = TARGET_AMOUNT) -> int:
+def shares_for(price: float, code: str, target_amount: float = TARGET_AMOUNT,
+               is_index: bool = False) -> int:
     """`shares = ceil_step(max(min_lot, target_amount / price))`（设计文档 §5.4d-quater 第 4 节）。
 
     高价端由 `min_lot` 兜底（茅台 100 股 = 12.6 万，实际放大 2.5 倍 —— 报告须披露），
     低价端由 `target_amount` 抬到"免疫 5 元兜底"的临界之上。
 
     本金视为**充足**（v1.11 定案，`skip` 分支已整体删除）⇒ 本函数没有"买不起"分支。
+
+    `is_index=True`（2026-10-06 用户拍板「指数当个股」）：**跳过 `lot_rule` 的代码前缀
+    判板块**，一律用 `DEFAULT_LOT`（1 手 = 100 股、100 股递增）。理由：指数 1 点 = 1 元
+    （点位即"股价"），但 `lot_rule` 的北交所分支含 `"88"` 前缀 ⇒ `sh880491` 这类板块指数
+    会被误判成 `step=1`，点位 < 500 时出现 167 股这类碎股。**不要**改成"在 lot_rule 里
+    加指数前缀规则"——`sz000001` 是平安银行，前缀启发式必误伤；指数判定只能由调用方
+    （`Runner` 已注入 `is_index`）显式传入。
     """
-    min_lot, step = lot_rule(code)
+    min_lot, step = DEFAULT_LOT if is_index else lot_rule(code)
     p = float(price)
     if p <= 0:
         return int(min_lot)

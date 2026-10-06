@@ -5461,10 +5461,9 @@
         }
 
         function _btCol(x) { return Number(x) >= 0 ? "#FF3C3C" : "#00F0F0"; }   // 涨红跌绿（与统计面板同款）
-        // 指数页专用：金额/成本族字段在指数上没有对应标的物，标「不适用」而不是「—」。
-        //   「—」= 无样本（数据缺失）；「不适用」= 口径在标的上不存在 —— 两者必须分开，
-        //   否则指数页会显示一串像真数字的成本与倍率，或把"口径不存在"误读成"没数据"。
-        function _btNA() { return '<span style="color:#8b93a7;font-size:11px;">不适用</span>'; }
+        // `_btNA`（指数页「不适用」徽章）已随 2026-10-06「指数当个股」拍板删除：
+        //   字段与个股完全一致地下发与渲染，不再有任何「不适用」分流；指数的假设
+        //   由口径披露行说明（横幅 + disclosures）。
         // 2026-10-06 补充裁定：正值**不带 + 号**（红/灰都不带）—— 正负由颜色表达，
         //   符号再表达一遍是冗余；负数自带的 `-` 号保留。
         function _btPct(x, nd) {
@@ -5547,7 +5546,8 @@
                     + statsEsc(cal.bsp_types || "（全不勾）") + ' 类</div>';
             }
 
-            // ①b 指数标识：指数不可交易 ⇒ 股数 / 成本 / 净收益率整族「不适用」。
+            // ①b 指数标识（2026-10-06 拍板「指数当个股」）：字段与个股完全一致，
+            //     不再有任何「不适用」分流；横幅只披露假想假设本身。
             //     判定不在前端做（前端只看后端 `is_index`）—— 页面级 SSOT 是
             //     `App.AppUtils.is_index`（含 88xx 板块指数 / ds 扩展指数 / hk 字母
             //     代码），**不是**取数层的 `DataAPI.TdxAPI._is_index_code`（那只认
@@ -5556,33 +5556,21 @@
             if (isIndex) {
                 html += '<div class="stats-row" style="background:rgba(0,240,240,0.10);'
                     + 'border-left:3px solid #00F0F0;padding:4px 6px;margin-bottom:6px;'
-                    + 'font-size:11px;color:#5fd7de;">指数标的（不可交易）：股数 / 成本 / 净收益率'
-                    + '口径不适用；下列仅价格侧指标（胜率、毛 R、盈亏比、持仓根数）有效</div>';
+                    + 'font-size:11px;color:#5fd7de;">指数按个股假想：1点=1元、'
+                    + '1手=100股、费率同个股（示意值，看信号质量）</div>';
             }
 
-            // ② 核心区：一行六格（对齐「成交统计」面板的 .stats-hero）
-            //   2026-10-06 用户裁定：四格 → 六格 —— 把明细区的「盈亏比 / 盈利因子」
-            //   提上来，与「交易笔数 / 净收益率(均) / 胜率 / 期望值(R)」并列。
-            //   期望值(R) 的 R 后缀留在标签里（值的量纲是 R 倍数），保留 2 位小数。
-            //   `bt-hero` 是给 CSS 的钩子：六格比期货统计面板的四格挤，
-            //   只给这一处降一号标签字号（见 app.css 的 `.bt-hero` 规则）。
+            // ② 核心区：一行五格（对齐「成交统计」面板的 .stats-hero）
+            //   2026-10-06 统计口径统一轮（v2.1 定案）：六格 → 五格 —— 「净收益率(均)」
+            //   （含浮口径）删除、期望值(R) 改为「期望值(%/笔)」：四指标（胜率 / 盈亏比 /
+            //   盈利因子 / 期望值）一律**已实现**口径、未平仓笔不进任何分子分母，与期货
+            //   「期望值(元/笔)」同构不同单位。期望值(%/笔) = 每笔净收益率% 的等权平均
+            //   （`avg_net_return_pct`），保留 2 位小数。
+            //   `bt-hero` 是给 CSS 的钩子：五格仍比期货统计面板的四格挤一格，
+            //   保留这一处降一号标签字号（见 app.css 的 `.bt-hero` 规则）。
             html += '<div class="stats-hero bt-hero">';
             html += '<div class="stats-cell"><span class="stats-label">交易笔数</span><span class="stats-value">'
                 + run.filled + '</span></div>';
-            // 净收益率(均)：后端给的是**含浮**口径（`*_with_open` = 已平仓 + 未平仓浮动
-            //   的等权平均），有未平仓笔时值后加「浮」字（与逐笔明细同一套措辞）——
-            //   不标就会被读成"全部已落袋"。笔数取自 `*_open_count`，不用 `s.u` 顶替：
-            //   `s.u` 是全部未平仓笔，含浮平均只并进**算得出净收益率**的那些（指数侧为 0）。
-            var _avgAll = s.avg_net_return_pct_with_open;
-            var _nOpenIn = Number(s.avg_net_return_open_count || 0);
-            html += '<div class="stats-cell"><span class="stats-label">净收益率(均)</span><span class="stats-value">'
-                + (isIndex ? _btNA()
-                    : ('<span style="color:' + _btCol(_avgAll) + '">' + _btPct(_avgAll) + '</span>'
-                       + (_nOpenIn > 0
-                          ? '<span style="color:#8b93a7;font-size:10px;cursor:help;"'
-                            + ' title="含 ' + _nOpenIn + ' 笔未平仓的浮动净收益率'
-                            + '（截止最后一根 K 线收盘价估值，非成交结果）"> 浮</span>'
-                          : ''))) + '</span></div>';
             html += '<div class="stats-cell"><span class="stats-label">胜率</span><span class="stats-value">'
                 + (s.win_rate === null || s.win_rate === undefined
                     ? "—" : (Number(s.win_rate) * 100).toFixed(1) + "%") + '</span></div>';
@@ -5590,8 +5578,8 @@
                 + _btNum(s.profit_loss_ratio, 3) + '</span></div>';
             html += '<div class="stats-cell"><span class="stats-label">盈利因子</span><span class="stats-value">'
                 + _btNum(s.profit_factor, 3) + '</span></div>';
-            html += '<div class="stats-cell"><span class="stats-label">期望值(R)</span><span class="stats-value" style="color:'
-                + _btCol(s.expectancy_r) + '">' + _btNum(s.expectancy_r, 2) + '</span></div>';
+            html += '<div class="stats-cell"><span class="stats-label">期望值(%/笔)</span><span class="stats-value" style="color:'
+                + _btCol(s.avg_net_return_pct) + '">' + _btPct(s.avg_net_return_pct) + '</span></div>';
             html += '</div>';
 
             // ③ 明细行
@@ -5608,22 +5596,21 @@
                 + _dispName + ' · ' + statsEsc(tgt.freq_label || "") + '</span></div>';
             html += '<div class="stats-row"><span class="stats-label">区间 / K线</span><span class="stats-value">'
                 + statsEsc((tgt.date_from || "") + " ~ " + (tgt.date_to || "")) + '（' + tgt.bars + ' 根）</span></div>';
-            // 仓位口径三项（§5.4d-quater：报告必须披露放大倍数与 min_lot 借道）
-            //   指数不可交易 ⇒ 整块「不适用」（后端已把这些字段置 null）
+            // 仓位口径两项（§5.4d-quater：报告必须披露放大倍数）
             //   2026-10-06 用户裁定：金额一律用**万元** —— `50000 元` 要数位数，
             //   `5 万元` 一眼读出来。行序 = 目标成交额 → 实际成交额。
             //   同日补充裁定：①「最小申报 / 借道笔数」行删除（`min_lot` /
             //   `min_lot_derived_trades` 照常下发，CLI 摘要照印）；②「最大单笔放大」
             //   改名「实际成交额」—— 值格式不变（倍数（万元）），名字说人话。
+            //   v2.2（指数当个股）：指数不再「不适用」，照常显示（上证 3842 点的
+            //   放大倍数 ≈ 7.7 倍，如实披露 —— 假设本身由口径行说明）。
             html += '<div class="stats-row"><span class="stats-label">目标成交额</span><span class="stats-value">'
-                + (isIndex ? _btNA()
-                    : (cal.target_amount === undefined || cal.target_amount === null
-                        ? "—" : _btWan(cal.target_amount))) + '</span></div>';
+                + (cal.target_amount === undefined || cal.target_amount === null
+                    ? "—" : _btWan(cal.target_amount)) + '</span></div>';
             html += '<div class="stats-row"><span class="stats-label">实际成交额</span><span class="stats-value">'
-                + (isIndex ? _btNA()
-                    : ((cal.max_notional_multiple === null || cal.max_notional_multiple === undefined
-                        ? "—" : Number(cal.max_notional_multiple).toFixed(2) + " 倍")
-                       + '（' + _btWan(cal.max_notional) + '）')) + '</span></div>';
+                + ((cal.max_notional_multiple === null || cal.max_notional_multiple === undefined
+                    ? "—" : Number(cal.max_notional_multiple).toFixed(2) + " 倍")
+                   + '（' + _btWan(cal.max_notional) + '）') + '</span></div>';
             html += '<div class="stats-row"><span class="stats-label">胜负平</span><span class="stats-value">'
                 + '胜 ' + s.w + ' / 亏 ' + s.l + ' / 平 ' + s.e + (s.u ? ' / 未平 ' + s.u : '') + '</span></div>';
             // 「平均持仓 / 最好·最差 R」行 2026-10-06 用户裁定**移除**：样本少时
@@ -5700,7 +5687,8 @@
                             + '<span style="color:#8b93a7;font-size:10px;"> 浮</span>';
                     }
                 } else if (t.net_return_pct === null || t.net_return_pct === undefined) {
-                    // 净收益率缺失（指数）时只留 R —— 顶部徽标已说明原因，逐行不再重复
+                    // 净收益率缺失（notional 为 0 的病态样本）时只留 R —— 纯兜底分支：
+                    //   v2.2 后指数与个股同形、净收益率族恒有值，此分支正常不再触发。
                     metric = '<span style="color:' + _btCol(t.r_multiple) + '">'
                         + _btNum(t.r_multiple, 2) + 'R</span>';
                 } else {

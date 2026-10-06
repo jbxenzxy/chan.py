@@ -199,12 +199,11 @@ def sort_exit_reasons(keys) -> List[str]:
 def caliber_lines(result: RunResult) -> List[str]:
     """口径行（区间 / 周期 / 出场参数 / 费率 / 偏离披露）。
 
-    指数标的（`result.is_index`）额外追加一条**不适用**声明：指数不可交易
-    ⇒ 费率 / `target_amount` / 股数 / 成本那一整套「元口径」全是虚构的数字，
-    必须在口径行里点名，否则摘要上会印出一串看着像真的成本与倍率
-    （实测上证指数 `max_notional` 达 `target_amount` 的 7.9 倍 —— 那是因为
-    指数点位高、`target_amount/price` 落到了 `min_lot` 上，与"买不买得起"无关）。
-    纯**价格**口径（区间 / 周期 / 出场参数 / 偏离披露）对指数依然成立，故保留。
+    指数标的（`result.is_index`）额外追加一条**假设披露**（⚠ 2026-10-06 用户
+    拍板「指数当个股」后的改判，取代旧的「不适用」声明）：指数按个股假想 ——
+    1 点 = 1 元、1 手 = 100 股、费率与个股同一套，所有指标（含净收益率 / 成本）
+    照常产出；回测目的是看信号质量，假想仓位不影响判据。披露只说清数字建立在
+    什么假设上，不再把任何口径标成「不适用」。
     """
     lo = result.start_dt or "(不限)"
     hi = result.target_dt or "(不限)"
@@ -230,10 +229,8 @@ def caliber_lines(result: RunResult) -> List[str]:
     ]
     if result.is_index:
         lines.append(
-            "⚠ 指数标的（不可交易）：上方「费率 / target_amount」与股数、成本、净收益率"
-            "均不适用（该套数字在指数上没有对应标的物）；"
-            "本次结果中仅区间 / 周期 / 出场参数 / 偏离披露以及价格侧指标"
-            "（胜率、毛 R、盈亏比、持仓根数）有效。")
+            "指数按个股假想：1点=1元、1手=100股、费率同个股；"
+            "全部指标（含净收益率 / 成本）与个股同一套算式，结果为示意值。")
     return lines
 
 
@@ -252,12 +249,12 @@ def summary_text(result: RunResult, metrics: Metrics | None = None) -> str:
         L.append("胜/亏/平 = {}/{}/{}   胜率 {}".format(
             m.w, m.l, m.e,
             "-" if m.win_rate is None else "%.1f%%" % (m.win_rate * 100)))
-        # 指数不可交易 ⇒ 净收益率（成本口径）标「不适用」，不印一个虚构数字。
-        # 期望 R 是**毛**口径（纯价格），指数与个股同样成立，照常印。
+        # 净收益率与期望 R 指数、个股同一套算式（v2.2「指数当个股」：旧的
+        # 「(不适用·指数)」分流已摘除，摘要与个股完全一致）。期望 R 是**毛**
+        # 口径（纯价格），照常印。
         L.append("期望 R（毛）= {}   平均净收益率 = {}".format(
             "-" if m.expectancy_r is None else "%.4f" % m.expectancy_r,
-            "(不适用·指数)" if result.is_index else
-            ("-" if m.avg_net_return is None else "%.4f%%" % (m.avg_net_return * 100))))
+            "-" if m.avg_net_return is None else "%.4f%%" % (m.avg_net_return * 100)))
         L.append("盈亏比 = {}   盈利因子 = {}   平均持仓根数 = {}".format(
             "-" if m.profit_loss_ratio is None else "%.4f" % m.profit_loss_ratio,
             "-" if m.profit_factor is None else "%.4f" % m.profit_factor,

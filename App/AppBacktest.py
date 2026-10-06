@@ -30,14 +30,13 @@ CSV / HTML 报告导出留给 CLI 批跑。
   - 双窗态：本入口只复刻**单窗口**口径（`lv_list=[主级别]`、不启用区间套）。
     页处于双窗态时由**前端**拦截（禁用 + 提示"请切回单窗"），本模块不做猜测。
   - **指数标的**（判定 SSOT = `App/AppUtils.is_index`，与 `meta.is_index` /
-    前端「成分股」置灰同源）：取数分支与形态引擎与个股
-    完全同源，但**元口径整族置 null** —— `shares` / `cost_cash` / `net_return_pct`、
-    `caliber.{target_amount,min_lot,lot_step,min_lot_derived_trades,max_notional,
-    max_notional_multiple}` 以及 `summary.avg_net_return_pct` 一律 `None`，
-    并在 `caliber.lines` 末尾与 `disclosures` 各追加一条「不适用」声明。
-    指数不可交易 ⇒ 这些数字没有对应标的物（实测上证指数 `max_notional` 达
-    `target_amount` 的 7.9 倍，纯属"指数点位高/`min_lot` 兜底"的假象）。
-    **价格侧口径照常**：胜率 / 毛 R / 盈亏比 / 持仓根数 —— 指数页的价值就在于此。
+    前端「成分股」置灰同源）：⚠ **2026-10-06 用户拍板「指数当个股」**——
+    假想模型 = 1 点 = 1 元（点位即"股价"）、1 手 = 100 股（所有指数统一，
+    `Runner` 把 `is_index` 传入 sizing 强制 `DEFAULT_LOT`）、费率与个股同一套、
+    本金视为充足。⇒ **响应形状与个股逐字段一致，无任何分流**（v1.18 的
+    「元口径整族置 null + 不适用声明」已整体摘除）；指数回测的目的就是看
+    信号质量，假想仓位不影响判据。口径上只在 `disclosures` 末尾追加一句
+    「指数按个股假想」（假设必须披露的惯例，与前复权 / T+0 同类）。
   - 出场原因是**三选一**（止损 / 保本(1R) / 跟踪止盈），文案由
     `Backtest.Report.exit_reason_labels()` 生成并随响应下发（`exit_reason_labels` /
     `exit_reason_legend`）⇒ 前端**不硬编码**任何 reason 文案，与 `python -m
@@ -134,16 +133,17 @@ def _pct(x):
     return None if x is None else round(float(x) * 100.0, 6)
 
 
-def _bucket_rows(groups: Dict[str, Any], is_index: bool = False) -> Dict[str, Any]:
-    """分类型 / 分原因桶（`is_index` = True 时金额口径的净收益率置 null）。
+def _bucket_rows(groups: Dict[str, Any]) -> Dict[str, Any]:
+    """分类型 / 分原因桶（指数与个股同形：v2.2 摘除了指数置 null 的分流）。
 
-    `n/w/l/e` 与 `expectancy_r` 是价格侧口径，指数与个股都成立，照常给。
+    `n/w/l/e` 与 `expectancy_r` 是价格侧口径；`avg_net_return_pct` 指数与个股
+    同一套算式（指数按个股假想，2026-10-06 拍板）。
     """
     out = {}
     for k, v in sorted((groups or {}).items()):
         out[str(k)] = {
             "n": int(v["n"]), "w": int(v["w"]), "l": int(v["l"]), "e": int(v["e"]),
-            "avg_net_return_pct": None if is_index else _pct(v.get("avg_net_return")),
+            "avg_net_return_pct": _pct(v.get("avg_net_return")),
             "expectancy_r": (None if v.get("expectancy_r") is None
                              else round(float(v["expectancy_r"]), 6)),
         }
@@ -151,9 +151,9 @@ def _bucket_rows(groups: Dict[str, Any], is_index: bool = False) -> Dict[str, An
 
 
 def _disclosures(is_index: bool) -> List[str]:
-    """口径披露（与「止盈止损」推演同款三条）；指数额外追加「不适用」一条。
+    """口径披露（与「止盈止损」推演同款两条）；指数额外追加「按个股假想」一条。
 
-    为什么单列成函数而不是就地写列表字面量：`is_index` 分流是本响应契约的一部分
+    为什么单列成函数而不是就地写列表字面量：`is_index` 披露是本响应契约的一部分
     （护栏 `Test/test_stock_backtest.py` 会逐条比对），集中一处便于断言。
     """
     base = [
@@ -163,8 +163,9 @@ def _disclosures(is_index: bool) -> List[str]:
         "不建模涨跌停/停牌",
     ]
     if is_index:
-        base.append("指数不可交易：股数 / 成本 / 净收益率口径不适用，"
-                    "仅价格侧指标（胜率、毛 R、盈亏比、持仓根数）有效")
+        # v2.2 定案（指数当个股）：旧的「不适用」声明改为披露假想假设本身 ——
+        #   字段与个股完全一致地下发，只是要让人知道这些数建立在什么假设上。
+        base.append("指数按个股假想：1点=1元、1手=100股、费率同个股（示意值）")
     return base
 
 
@@ -202,7 +203,7 @@ def compute_stock_backtest(code: str, body: Dict[str, Any]) -> Dict[str, Any]:
         from Backtest.Filter import filter_from_choices
         from Backtest.Report import (caliber_lines, exit_reason_labels,
                                      exit_reason_legend)
-        from Backtest.ExitParams import TARGET_AMOUNT, lot_rule
+        from Backtest.ExitParams import DEFAULT_LOT, TARGET_AMOUNT, lot_rule
     except Exception as e:                                            # noqa: BLE001
         raise AppError("回测初始化失败（Backtest/Trading 导入异常）：{}: {}".format(
             type(e).__name__, e)) from e
@@ -213,16 +214,16 @@ def compute_stock_backtest(code: str, body: Dict[str, Any]) -> Dict[str, Any]:
     #   于是"全不勾"静默变成"全放行" —— 恰好相反。
     filt = None if choices is None else filter_from_choices(choices)
 
-    # ── 指数分流（§4.4 指数页）──────────────────────────────────────────
-    #    指数**不可交易** ⇒ 「元口径」整族（target_amount / 股数 / 名义金额 / 成本 /
-    #    净收益率）在这类标的上是虚构数字，一律置 null 并在 caliber / disclosures
-    #    里点名「不适用」。**价格侧口径不动**（胜率 / 毛 R / 盈亏比 / 持仓根数），
-    #    它们在指数上依然成立 —— 指数页的价值本来就在于"形态信号本身的胜率"。
-    #    判定 SSOT = `App.AppUtils.is_index`（页面级：含 88xx 板块指数 / ds 扩展指数 /
-    #    hk 字母代码），**不是** `DataAPI.TdxAPI._is_index_code`（那只是取数层的
-    #    A 股指数段判定）—— 用后者会漏 88xxxx，与 `meta.is_index` 自相矛盾。
-    #    判定结果注入 `Runner.run(is_index=...)`：`Backtest/` 禁 import `App`
-    #    （§5.9 R31 层表），故判定只能在 App 层做、在 Backtest 层消费。
+    # ── 指数判定（§4.4 指数页；2026-10-06 拍板「指数当个股」）──────────────
+    #    判定 SSOT = `App.AppUtils.is_index`（页面级：含 88xx 板块指数 / ds 扩展
+    #    指数 / hk 字母代码），**不是** `DataAPI.TdxAPI._is_index_code`（那只是
+    #    取数层的 A 股指数段判定）—— 用后者会漏 88xxxx，与 `meta.is_index`
+    #    自相矛盾。判定结果注入 `Runner.run(is_index=...)`：`Backtest/` 禁
+    #    import `App`（§5.9 R31 层表），故判定只能在 App 层做、在 Backtest 层
+    #    消费。**消费点只有两处**：① sizing 强制 `DEFAULT_LOT`（`shares_for`
+    #    的 `is_index` 参数，1 手 = 100 股统一）② disclosures 追加「按个股
+    #    假想」一句 —— v1.18 的「元口径整族置 null」分流已整体摘除（v2.2），
+    #    响应与个股逐字段一致。
     is_index = bool(_app_is_index(market, num))
 
     # `[L, R]` = 页面加载序列的首尾（§4.4：所见即所测）。传进去而不是留 None：
@@ -234,21 +235,18 @@ def compute_stock_backtest(code: str, body: Dict[str, Any]) -> Dict[str, Any]:
                      bsp_filter=filt, is_index=is_index)
     met = compute_metrics(res)
 
-    def _amt(v):
-        """金额 / 成本族字段 → 指数时置 null（个股原样返回）。
-
-        ⚠ **只在构响应字典时调用**，不要提前把局部变量置 None：下游还有
-          `int(min_lot)` / `max_notional / TARGET_AMOUNT` 这类运算，
-          早置空会先炸在 `int(None)` 上（而不是安静地给出 null）。
-        """
-        return None if is_index else v
-
-    # ── 仓位口径（三项披露：min_lot / 借道笔数 / 放大倍数）──
+    # ── 仓位口径（实际成交额 / 放大倍数披露）──
     #    "借道" = 该笔股数由 `min_lot` 兜底（而非 target_amount/price）决定。
     #    判据直接照 `shares_for` 的式子：`target_amount / price <= min_lot`
     #    ⇒ 内层 max 取了 min_lot。高价股（茅台）典型。
-    #    这里的**计算照常做**（指数也走一遍，保证两路同源）；分流发生在构响应处。
-    min_lot, lot_step = lot_rule("%s%s" % (market, num))
+    #    ⚠ v2.2（指数当个股）：指数不用 `lot_rule` 的前缀判板块（`sh880491`
+    #    会被 `"88"` 前缀误判成北交所 `step=1`），与 `Runner` 的 sizing 同源
+    #    —— 一律 `DEFAULT_LOT`，保证这里显示的 min_lot/step 与真实股数算式
+    #    完全一致。
+    if is_index:
+        min_lot, lot_step = DEFAULT_LOT
+    else:
+        min_lot, lot_step = lot_rule("%s%s" % (market, num))
     min_lot_derived = sum(
         1 for t in res.trades
         if t.entry_price and t.entry_price > 0
@@ -275,7 +273,7 @@ def compute_stock_backtest(code: str, body: Dict[str, Any]) -> Dict[str, Any]:
             "entry_date": t.entry_date,
             "entry_price": None if t.entry_price is None else round(float(t.entry_price), 6),
             "r_distance": None if t.r_distance is None else round(float(t.r_distance), 6),
-            "shares": _amt(int(t.shares)),
+            "shares": int(t.shares),
             "exit_date": t.exit_date,
             "exit_price": None if t.exit_price is None else round(float(t.exit_price), 6),
             "exit_reason": t.exit_reason,
@@ -283,16 +281,16 @@ def compute_stock_backtest(code: str, body: Dict[str, Any]) -> Dict[str, Any]:
             "r_multiple": (None if t.r_multiple is None
                            else round(float(t.r_multiple), 6)),
             "gross_return_pct": _pct(t.gross_return),
-            "net_return_pct": _amt(_pct(t.net_return)),
-            "cost_cash": _amt(None if t.cost_cash is None else round(float(t.cost_cash), 4)),
+            "net_return_pct": _pct(t.net_return),
+            "cost_cash": None if t.cost_cash is None else round(float(t.cost_cash), 4),
             # 未平仓浮动（截止最后一根 K 线收盘价的估值，**不是**成交结果）：
             #   已平笔这三项恒为 null（Runner 只在 `still_open` 上填），前端据此分流。
-            #   指数时百分比不适用（净收益率族）⇒ 只留价格侧的 `unrealized_r`。
+            #   指数与个股同形（v2.2 摘除分流）：净收益率族照常下发。
             "unrealized_price": (None if t.unrealized_price is None
                                  else round(float(t.unrealized_price), 6)),
             "unrealized_r": (None if t.unrealized_r is None
                              else round(float(t.unrealized_r), 6)),
-            "unrealized_net_return_pct": _amt(_pct(t.unrealized_net_return)),
+            "unrealized_net_return_pct": _pct(t.unrealized_net_return),
             "open": bool(t.open_),
         })
 
@@ -328,13 +326,12 @@ def compute_stock_backtest(code: str, body: Dict[str, Any]) -> Dict[str, Any]:
                                   else round(float(met.profit_loss_ratio), 6)),
             "profit_factor": (None if met.profit_factor is None
                               else round(float(met.profit_factor), 6)),
-            "avg_net_return_pct": _amt(_pct(met.avg_net_return)),
-            # 含浮口径（面板「净收益率(均)」带「浮」字用的就是它）：
-            #   `*_with_open` = 已平仓 + 未平仓浮动 的等权平均；`*_open_count` = 并进来的
-            #   未平仓笔数（>0 ⇒ 前端加「浮」标）。两者与 `avg_net_return_pct` **并列**
-            #   下发 —— 不是替换后者，前端要能同时讲清"落袋"与"眼下"。
-            #   指数侧同族分流：`_amt` 把整个净收益率族置 null（指数上无金额口径）。
-            "avg_net_return_pct_with_open": _amt(_pct(met.avg_net_return_with_open)),
+            "avg_net_return_pct": _pct(met.avg_net_return),
+            # 含浮口径（⚠ 2026-10-06 同日裁定：面板核心区**不再显示**——核心区第五格
+            #   改为「期望值(%/笔)」= 已实现口径；本字段照常下发保留，CLI / 契约测试
+            #   照印，谁要谁取）：`*_with_open` = 已平仓 + 未平仓浮动 的等权平均；
+            #   `*_open_count` = 并进来的未平仓笔数。指数与个股同形（v2.2 摘除分流）。
+            "avg_net_return_pct_with_open": _pct(met.avg_net_return_with_open),
             "avg_net_return_open_count": int(sum(
                 1 for t in res.still_open if t.unrealized_net_return is not None)),
             "expectancy_r": (None if met.expectancy_r is None
@@ -344,8 +341,8 @@ def compute_stock_backtest(code: str, body: Dict[str, Any]) -> Dict[str, Any]:
             "max_win_r": None if met.max_win_r is None else round(float(met.max_win_r), 6),
             "max_loss_r": None if met.max_loss_r is None else round(float(met.max_loss_r), 6),
         },
-        "by_bsp_type": _bucket_rows(met.by_bsp_type, is_index),
-        "by_reason": _bucket_rows(met.by_reason, is_index),
+        "by_bsp_type": _bucket_rows(met.by_bsp_type),
+        "by_reason": _bucket_rows(met.by_reason),
         # 出场原因三选一的显示文案 + 口径说明（键序 = sl / breakeven / trailing，稳定）
         "exit_reason_labels": _reason_labels,
         "exit_reason_legend": _reason_legend,
@@ -353,12 +350,12 @@ def compute_stock_backtest(code: str, body: Dict[str, Any]) -> Dict[str, Any]:
         "caliber": {
             "lines": list(caliber_lines(res)),
             "is_index": is_index,
-            "target_amount": _amt(float(TARGET_AMOUNT)),
-            "min_lot": _amt(int(min_lot)),
-            "lot_step": _amt(int(lot_step)),
-            "min_lot_derived_trades": _amt(int(min_lot_derived)),
-            "max_notional": _amt(round(max_notional, 2)),
-            "max_notional_multiple": (_amt(round(max_notional / TARGET_AMOUNT, 4))
+            "target_amount": float(TARGET_AMOUNT),
+            "min_lot": int(min_lot),
+            "lot_step": int(lot_step),
+            "min_lot_derived_trades": int(min_lot_derived),
+            "max_notional": round(max_notional, 2),
+            "max_notional_multiple": (round(max_notional / TARGET_AMOUNT, 4)
                                       if TARGET_AMOUNT else None),
             "bsp_types": (None if choices is None else str(choices)),
         },

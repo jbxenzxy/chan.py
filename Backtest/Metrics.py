@@ -20,11 +20,13 @@
     期望 R 倍数用**毛**（不扣成本）= 策略本身的质量，跨标的可比；
     平均净收益率 % 用**净** = 落到口袋的比例。别以为是笔误。
 
-⚠ **含浮口径只此一处**（2026-10-06 用户裁定）
+⚠ **含浮口径已退出面板**（2026-10-06 两轮裁定的演变，防止后来人改错方向）
 ---------------------------------------------------------------------
-    `avg_net_return_with_open` = 已平仓 + 未平仓浮动 的等权平均 ——
-    面板「净收益率(均)」带「浮」字显示的就是它。其余指标一律**已实现**口径。
-    两族**并列产出**、谁也别顶掉谁：落袋比例与眼下浮盈是两件不同的事。
+    `avg_net_return_with_open` = 已平仓 + 未平仓浮动 的等权平均。
+    当日上午裁定"与已实现口径**并列产出**、面板显示「净收益率(均)」带「浮」标"；
+    **同日统计口径统一轮推翻并列**：面板核心区四指标（胜率 / 盈亏比 / 盈利因子 /
+    期望值(%/笔)）一律**已实现**口径、未平仓笔不进任何分子分母 —— 本字段**照常
+    计算、照常下发**（CLI / 契约测试消费），只是面板不再显示。别把它当死代码删。
 """
 from __future__ import annotations
 
@@ -83,9 +85,9 @@ class Metrics:
     profit_loss_ratio: Optional[float] = None
     profit_factor: Optional[float] = None
     avg_net_return: Optional[float] = None     # 等权算术平均（**不许**金额累加）；只含已平仓
-    # 同式，但把**未平仓**笔的浮动净收益率一并进分母。面板「净收益率(均)」带「浮」字
-    #   显示的就是它。两个口径**并列保留**而不是二选一：已实现 = 落袋、含浮 = 眼下，
-    #   把后者顶掉前者会让人再也看不到"扣完成本真正到手多少"。
+    # 同式，但把**未平仓**笔的浮动净收益率一并进分母。⚠ 面板已不显示（v2.1 统一
+    #   口径轮：核心区一律已实现口径），本字段照常下发 —— CLI / 契约测试消费，
+    #   与 `avg_net_return` 并列保留而非删除。
     avg_net_return_with_open: Optional[float] = None
     expectancy_r: Optional[float] = None       # 毛 R 算术平均
     avg_bars_held: Optional[float] = None
@@ -100,8 +102,10 @@ def compute(result: RunResult) -> Metrics:
 
     **已平仓口径**（未平仓只计数、不进分母）：`n/w/l/e`、`win_rate`、
     `profit_loss_ratio`、`profit_factor`、`expectancy_r`、`avg_net_return`、
-    `avg_bars_held`、`max_win_r` / `max_loss_r`。
-    **唯一含浮**：`avg_net_return_with_open` —— 已平仓 + 未平仓浮动的等权平均。
+    `avg_bars_held`、`max_win_r` / `max_loss_r` —— **四指标（胜率 / 盈亏比 /
+    盈利因子 / 期望值(%/笔)）全部只统计已平仓笔**（v2.1 统一口径定案）。
+    **唯一含浮**：`avg_net_return_with_open` —— 已平仓 + 未平仓浮动的等权平均，
+    照常产出但面板不显示（见模块头）。
     """
     closed = result.closed
     m = Metrics(

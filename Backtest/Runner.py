@@ -357,8 +357,11 @@ def run(
       代价：`python -m Backtest.Runner` 单跑指数时要显式加 `--is-index`
       （CLI 无法自行判定，同上理由）。
 
-    该标记**只标注、不参与任何计算** —— 引擎侧对指数与个股走的是同一套价格序列与
-    同一套状态机，保证"同一份 K 线在两侧跑出的形态信号逐字段相同"。
+    该标记只在一处参与计算（2026-10-06 用户拍板「指数当个股」）：**sizing**——
+    `shares_for(..., is_index=True)` 跳过 `lot_rule` 的代码前缀判板块，指数一律
+    `DEFAULT_LOT`（1 手 = 100 股）；指数 1 点 = 1 元、费率与个股同一套。其余全部
+    同个股：同一套价格序列、同一套状态机、同一套成本函数 —— 显示与个股完全一致
+    （v2.2 定案摘除了 App 层的指数「不适用」分流）。
     """
     import Chan
     from DataAPI import TdxAPI
@@ -459,7 +462,7 @@ def run(
                     entry_date=bar.date,
                     entry_price=entry,
                     r_distance=float(plan.params.get("R") or 0.0),
-                    shares=shares_for(entry, full_code, tgt),
+                    shares=shares_for(entry, full_code, tgt, is_index=is_idx),
                     entry_frame=frame,
                 ))
                 # 此处必为 FLAT（上面的 `if state is State.IN_TRADE: … continue`

@@ -27,15 +27,17 @@
   ⑧ 前端 `_btBspTypes()` 四态（node 抽真函数）
   ⑨ 前端 `syncStatsButtonLabel()` 三态 + 市场态切换收面板 + 首同步不关 + 文案未变不关
   ⑩ 前端 `toggleStats()` 股票态分流：不碰 stats-panel
-  ⑪ 指数分流（P0-⑥）：`AppUtils.is_index` 判定同源（含 88xx 板块指数 / ds / hk）
-     + 元口径 6 字段与逐笔金额三项置 null + 价格侧 12 字段两侧逐字段相等
+  ⑪ 指数同形（P0-⑥；⚠ v2.2 改判「指数当个股」）：`AppUtils.is_index` 判定同源
+     （含 88xx 板块指数 / ds / hk）+ 响应与个股**逐字段一致、无任何置 null 分流**
+     （v1.18 的「金额族置 null」已整体摘除）+ 价格侧 12 字段两侧逐字段相等
      （同一份 K 线只换代码题头 ⇒ 判别力来自实验设计）+ 口径行/披露只追加不改写
-     + `Report.caliber_lines` / `summary_text` 直连（Backtest 层不依赖 App）
-     + 前端 `renderBacktest` 真渲染：指数页 6 处「不适用」且只剩胜率一个 `%`
+     （指数追加「按个股假想」披露一句）+ `Report.caliber_lines` / `summary_text`
+     直连（Backtest 层不依赖 App）+ 前端 `renderBacktest` 真渲染：指数页渲染
+     「按个股假想」横幅、无任何「不适用」
   ⑫ 出场原因**三选一**（止损 / 保本(1R) / 跟踪止盈，v1.18）：映射随响应下发
      （`exit_reason_labels` / `exit_reason_legend`）+ 逐笔 `exit_reason` 仍是引擎原值
      + 三种原因在日线切片里都真实出现 + **未平仓浮动估值**三字段（价 / R / 净收益率）
-     与已实现字段**互不越界**（两族槽位隔离）+ 指数侧浮动百分比置 null
+     与已实现字段**互不越界**（两族槽位隔离）
      + 前端真渲染：中文原因、持仓中「浮」、分类型桶可读化、`n==1` 标注「最好＝最差」
      （node 不在位时 ⑧⑨⑩⑪⑫ SKIP）
 
@@ -373,9 +375,11 @@ def part6(kl):
         except BadRequestError as e:
             check("{} 拆解为 ({}, …)".format(_code, _mkt), False, str(e))
     d_ds = _call("ds932000", "d", kl)
-    check("ds932000 端到端跑通且判为指数（is_index=True ⇒ 金额族置 null）",
+    check("ds932000 端到端跑通且判为指数（⚠ v2.2 同形：金额族与个股一致、不再置 null）",
           d_ds.get("ok") is True and d_ds["target"]["is_index"] is True
-          and d_ds["trades"] and all(t["net_return_pct"] is None for t in d_ds["trades"]),
+          and d_ds["trades"] and all(t["net_return_pct"] is not None
+                                     for t in d_ds["trades"] if not t["open"])
+          and d_ds["summary"]["avg_net_return_pct"] is not None,
           "ok=%r is_index=%r" % (d_ds.get("ok"), d_ds["target"].get("is_index")))
 
 
@@ -563,12 +567,13 @@ def part8_9_10_11(d_idx, d_stock, d30=None, d1=None):
         "_closed = { bt: 0, stats: 0 }; FUTURES = false;\n"
         "window.toggleStats();\n"
         "out.push('T1=' + JSON.stringify({ toggled: _toggled, closed: _closed }));\n"
-        # ── ⑪ renderBacktest 指数分流（喂**真响应**，不喂手写假数据）──
+        # ── ⑪ renderBacktest 指数同形（喂**真响应**，不喂手写假数据）──
         "function _naCount() { return (BT_HTML.match(/不适用/g) || []).length; }\n"
         "function _pctCount() { return (BT_HTML.match(/%/g) || []).length; }\n"
         "function _i(x) { return BT_HTML.indexOf(x); }\n"
         "function _btSnap() { return JSON.stringify({ na: _naCount(), pct: _pctCount(),"
-        " badge: BT_HTML.indexOf('指数标的（不可交易）') >= 0,"
+        " badge: BT_HTML.indexOf('指数按个股假想') >= 0,"
+        " oldBadge: BT_HTML.indexOf('指数标的（不可交易）') >= 0,"
         " calRow: BT_HTML.indexOf('目标成交额') >= 0,"
         " seen: BT_HTML.indexOf('首见信号') >= 0,"
         # ⑼⑽⑾ 仓位两行必须紧跟「区间 / K线」，且内部序 = 目标成交额 → 实际成交额
@@ -624,7 +629,6 @@ def part8_9_10_11(d_idx, d_stock, d30=None, d1=None):
                + _extract_fn(appjs, "_btBspTypes") + "\n"
                + _extract_assign(appjs, "toggleStats") + "\n"
                + _extract_any_fn(appjs, "_btCol") + "\n"
-               + _extract_any_fn(appjs, "_btNA") + "\n"
                + _extract_any_fn(appjs, "_btPct") + "\n"
                + _extract_any_fn(appjs, "_btNum") + "\n"
                + _extract_any_fn(appjs, "_btWan") + "\n"
@@ -684,34 +688,34 @@ def part8_9_10_11(d_idx, d_stock, d30=None, d1=None):
     check("⑩ 股票态 toggleStats 分流到回测（toggled=1 且不碰统计面板）",
           t1["toggled"] == 1 and t1["closed"] == {"bt": 0, "stats": 0}, kv["T1"])
 
-    # ⑪ renderBacktest 指数分流
+    # ⑪ renderBacktest 指数同形（v2.2：指数当个股，分流摘除）
     r1, r2 = json.loads(kv["R1"]), json.loads(kv["R2"])
-    check("⑪ 指数页渲染出「不可交易」徽标（后端 is_index 直达前端）",
+    check("⑪ 指数页渲染「按个股假想」横幅（后端 is_index 直达前端）",
           r1["badge"] is True, kv["R1"])
-    # 5 处 = 徽标 1 + 净收益率(均) 1 + 仓位两行 2 + 口径披露行 1（最小申报行
-    #   2026-10-06 补充裁定删除 ⇒ 6 → 5）
-    check("⑪ 指数页「不适用」恰好 5 处（徽标 / 净收益率 / 仓位两行 / 披露行）",
-          r1["na"] == 5, kv["R1"])
-    check("⑪ 指数页 HTML 只剩胜率一个 %（净收益率族不再印数字）",
-          r1["pct"] == 1, kv["R1"])
-    check("⑪ 个股页无「不可交易」徽标、无「不适用」（分流不外溢）",
+    check("⑪ 旧「不可交易」徽标零残留（v2.2 改判后不许回潮）",
+          r1["oldBadge"] is False, kv["R1"])
+    check("⑪ 指数页零「不适用」（v2.2 摘除全部分流：徽标 / 净收益率 / 仓位两行 / 披露行）",
+          r1["na"] == 0, kv["R1"])
+    check("⑪ 指数页净收益率族照常印 %（% 个数 > 1：胜率 + 期望值(%/笔) + 逐笔净收益率）",
+          r1["pct"] > 1, kv["R1"])
+    check("⑪ 个股页无「按个股假想」横幅、无「不适用」（披露不外溢）",
           r2["badge"] is False and r2["na"] == 0, kv["R2"])
-    check("⑪ 个股页保留净收益率百分号（% 个数严格多于指数页）",
-          r2["pct"] > r1["pct"], kv["R2"])
-    check("⑪ 两侧都渲染「目标成交额」行（指数只是值变「不适用」，不是删行）",
+    check("⑪ 个股页保留净收益率百分号",
+          r2["pct"] > 1, kv["R2"])
+    check("⑪ 两侧都渲染「目标成交额」行（同形：指数不再是「不适用」，也不是删行）",
           r1["calRow"] is True and r2["calRow"] is True, kv["R1"] + " / " + kv["R2"])
 
-    # ⑷ 核心区六格（2026-10-06 用户裁定）：格位与顺序是**契约**，不是排版细节 ——
-    #   前端把「盈亏比 / 盈利因子」从明细区提到核心区，三个标签同时改名
-    #   （实际胜率→胜率、平均净收益率→净收益率(均)、期望 R→期望值(R)）。
+    # ⑷ 核心区五格（v2.1 统计口径统一轮 + v2.2 指数同形）：格位与顺序是**契约**，
+    #   不是排版细节 —— 「净收益率(均)」删除、期望值(R)→期望值(%/笔)。
     #   这里钉"有几个格子、各叫什么、什么序"，改了名字/顺序立刻红。
-    check("⑷ 核心区六格顺序 = 交易笔数 / 净收益率(均) / 胜率 / 盈亏比 / 盈利因子 / 期望值(R)",
-          kv["H2"] == "交易笔数|净收益率(均)|胜率|盈亏比|盈利因子|期望值(R)", kv["H2"])
-    check("⑷ 指数页核心区格位同构（只是值变「不适用」，格序不变）",
+    check("⑷ 核心区五格顺序 = 交易笔数 / 胜率 / 盈亏比 / 盈利因子 / 期望值(%/笔)",
+          kv["H2"] == "交易笔数|胜率|盈亏比|盈利因子|期望值(%/笔)", kv["H2"])
+    check("⑷ 指数页核心区格位同构（同标签同序，值不再「不适用」）",
           kv["H1"] == kv["H2"], kv["H1"])
-    check("⑷ 旧核心区标签（实际胜率 / 平均净收益率 / 期望 R）已退役",
+    check("⑷ 旧核心区标签（实际胜率 / 平均净收益率 / 期望 R / 净收益率(均) / 期望值(R)）已退役",
           "实际胜率" not in kv["H2"] and "平均净收益率" not in kv["H2"]
-          and "期望 R" not in kv["H2"], kv["H2"])
+          and "期望 R" not in kv["H2"] and "净收益率(均)" not in kv["H2"]
+          and "期望值(R)" not in kv["H2"], kv["H2"])
     check("⑹ 「首见信号 / 拒收 / 过滤」行已从面板移除（后端 run.* 字段照常下发）",
           r1["seen"] is False and r2["seen"] is False, kv["R1"] + " / " + kv["R2"])
     check("⑼⑽⑾ 仓位两行紧跟「区间 / K线」，序 = 目标成交额 → 实际成交额",
@@ -739,9 +743,11 @@ def part8_9_10_11(d_idx, d_stock, d30=None, d1=None):
 
 
 # ══════════════════════════════════════════════════════════════════════
-# ⑪ 指数分流（P0-⑥）：元口径族置 null / 价格侧逐字段不动
+# ⑪ 指数同形（P0-⑥；⚠ v2.2 改判「指数当个股」）：响应与个股逐字段一致，
+#    旧的「元口径族置 null」分流已整体摘除 —— 断言从"指数必须 null"翻转为
+#    "指数与个股同形"（同字段、同值），并钉住口径披露只追加假设、无「不适用」。
 # ══════════════════════════════════════════════════════════════════════
-# 指数侧必须为 null 的「元口径」6 字段（金额 / 成本族）
+# 口径 6 字段（金额 / 成本族）—— v2.2 起指数与个股**同形**（都非 null 且同值）
 _AMT_CAL_KEYS = ("target_amount", "min_lot", "lot_step", "min_lot_derived_trades",
                  "max_notional", "max_notional_multiple")
 # 价格侧 summary 字段 —— 与标的类型（个股 / 指数）无关，两侧必须逐字段相等
@@ -750,19 +756,22 @@ _PRICE_SUM_KEYS = ("n", "w", "l", "e", "u", "win_rate", "profit_loss_ratio",
                    "max_win_r", "max_loss_r")
 _RUN_KEYS = ("bars_total", "signals_seen", "signals_filtered", "signals_rejected",
              "filled", "closed", "still_open")
+# v2.2 同形后，逐笔金额/成本族（shares / cost_cash / net_return_pct）两侧也必然
+# 相等（本样本 lot 规则恰好一致：sz002190 主板 (100,100) ≡ 指数强制值），一并入契约
 _TRADE_KEYS = ("trade_id", "side", "bsp_type", "entry_date", "entry_price",
                "r_distance", "exit_date", "exit_reason", "r_multiple",
-               "gross_return_pct")
+               "gross_return_pct", "shares", "cost_cash", "net_return_pct")
 
 
 def part11(kl, d_stock):
-    """指数页分流：判定同源 + 元口径置 null + 价格侧零变化。
+    """指数同形：判定同源 + 响应与个股逐字段一致（v2.2「指数当个股」）。
 
     样本策略：**同一份 K 线切片**（sz002190 日线）只换代码题头 ——
     `sh000001`（指数）vs `sz002190`（个股）。这样两侧的形态信号必然逐字段相同，
-    任何差异都只能来自 `is_index` 分流本身 ⇒ 判别力来自实验设计，不靠运气。
+    任何差异都只能来自 `is_index` 的消费点（现在只剩 sizing 的 lot 强制与披露
+    追加）⇒ 判别力来自实验设计，不靠运气。
     """
-    print("══ ⑪ 指数分流（P0-⑥）：元口径 null / 价格侧不动 ══")
+    print("══ ⑪ 指数同形（v2.2：指数当个股，无分流）══")
     from App.AppUtils import is_index                      # 页面级 SSOT
     from DataAPI.TdxAPI import _is_index_code              # 取数层私有段判定
 
@@ -798,33 +807,43 @@ def part11(kl, d_stock):
                                      d_idx["caliber"].get("is_index"),
                                      d_stock["target"].get("is_index"),
                                      d_stock["caliber"].get("is_index")))
-    # 板块指数（meta.is_index=True 但取数层不认）也要分流 —— 这条钉的是"判定同源"
+    # 板块指数（meta.is_index=True 但取数层不认）也要标注 —— 这条钉的是"判定同源"；
+    #   v2.2 同形后金额族照常产出（不再是 null），且 sizing 强制 (100,100)
+    #   （`lot_rule` 的 `"88"` 前缀会把 sh880xxx 误判成北交所 step=1，已由
+    #   `shares_for(is_index=True)` 旁路）
     d_sec = _call("sh880491", "d", kl)
-    check("⑪ 板块指数 sh880491 同样分流（与 meta.is_index 一致，不受取数层段判定影响）",
+    check("⑪ 板块指数 sh880491 同样标注（与 meta.is_index 一致）且金额族非 null",
           d_sec["target"]["is_index"] is True
-          and d_sec["caliber"]["max_notional_multiple"] is None,
-          "is_index=%r maxmult=%r" % (d_sec["target"]["is_index"],
-                                      d_sec["caliber"]["max_notional_multiple"]))
+          and d_sec["caliber"]["max_notional_multiple"] is not None
+          and d_sec["caliber"]["min_lot"] == 100
+          and d_sec["caliber"]["lot_step"] == 100,
+          "is_index=%r maxmult=%r minlot=%r/%r" % (
+              d_sec["target"]["is_index"],
+              d_sec["caliber"]["max_notional_multiple"],
+              d_sec["caliber"]["min_lot"], d_sec["caliber"]["lot_step"]))
 
-    check("⑪ 元口径 6 字段：指数全 null / 个股全非 null（分流不外溢）",
-          all(d_idx["caliber"][k] is None for k in _AMT_CAL_KEYS)
-          and all(d_stock["caliber"][k] is not None for k in _AMT_CAL_KEYS),
+    check("⑪ 口径 6 字段：指数与个股同形（全非 null 且同值；本样本 lot 规则一致）",
+          all(d_idx["caliber"][k] is not None for k in _AMT_CAL_KEYS)
+          and all(d_idx["caliber"][k] == d_stock["caliber"][k]
+                  for k in _AMT_CAL_KEYS),
           "idx=%r" % {k: d_idx["caliber"][k] for k in _AMT_CAL_KEYS})
-    check("⑪ summary.avg_net_return_pct：指数 null / 个股非 null",
-          d_idx["summary"]["avg_net_return_pct"] is None
-          and d_stock["summary"]["avg_net_return_pct"] is not None)
-    check("⑪ by_bsp_type：指数桶内 avg_net_return_pct 全 null（样本非空）",
+    check("⑪ summary.avg_net_return_pct：指数与个股同值（同形，不再置 null）",
+          d_idx["summary"]["avg_net_return_pct"] is not None
+          and d_idx["summary"]["avg_net_return_pct"]
+          == d_stock["summary"]["avg_net_return_pct"])
+    check("⑪ by_bsp_type：指数桶内 avg_net_return_pct 全非 null（样本非空，同形）",
           bool(d_idx["by_bsp_type"])
-          and all(v["avg_net_return_pct"] is None for v in d_idx["by_bsp_type"].values()),
+          and all(v["avg_net_return_pct"] is not None
+                  for v in d_idx["by_bsp_type"].values()),
           "by_bsp_type=%r" % d_idx["by_bsp_type"])
     check("⑪ by_bsp_type：指数桶内 n / expectancy_r 保留（价格侧口径）",
           all(int(v["n"]) > 0 and v["expectancy_r"] is not None
               for v in d_idx["by_bsp_type"].values()),
           "by_bsp_type=%r" % d_idx["by_bsp_type"])
-    check("⑪ 逐笔 shares / cost_cash / net_return_pct：指数全 null（样本非空）",
+    check("⑪ 逐笔 shares / cost_cash / net_return_pct：指数全非 null（样本非空，同形）",
           bool(d_idx["trades"])
-          and all(t["shares"] is None and t["cost_cash"] is None
-                  and t["net_return_pct"] is None for t in d_idx["trades"]),
+          and all(t["shares"] is not None and t["cost_cash"] is not None
+                  and t["net_return_pct"] is not None for t in d_idx["trades"]),
           "首笔=%r" % (d_idx["trades"][0] if d_idx["trades"] else None))
     check("⑪ 逐笔 gross_return_pct / r_multiple：指数保留（价格侧口径）",
           bool(d_idx["trades"])
@@ -843,15 +862,16 @@ def part11(kl, d_stock):
           [[t[k] for k in _TRADE_KEYS] for t in d_idx["trades"]]
           == [[t[k] for k in _TRADE_KEYS] for t in d_stock["trades"]])
 
-    # ④ 口径行 / 披露：只追加一条，不改写既有
-    check("⑪ disclosures：个股 2 条 / 指数 3 条，且末条说「不适用」",
+    # ④ 口径行 / 披露：只追加一条假设披露，不改写既有（v2.2：内容改为「按个股假想」）
+    check("⑪ disclosures：个股 2 条 / 指数 3 条，末条披露「按个股假想」",
           len(d_stock["disclosures"]) == 2 and len(d_idx["disclosures"]) == 3
-          and "不适用" in d_idx["disclosures"][-1],
+          and "按个股假想" in d_idx["disclosures"][-1],
           "idx=%r" % (d_idx["disclosures"],))
-    check("⑪ caliber.lines：个股 4 条 / 指数 5 条，且末条说「不适用」",
+    check("⑪ caliber.lines：个股 4 条 / 指数 5 条，末条披露「按个股假想」且全文无「不适用」",
           len(d_stock["caliber"]["lines"]) == 4
           and len(d_idx["caliber"]["lines"]) == 5
-          and "不适用" in d_idx["caliber"]["lines"][-1],
+          and "按个股假想" in d_idx["caliber"]["lines"][-1]
+          and not any("不适用" in x for x in d_idx["caliber"]["lines"]),
           "idx_lines=%r" % (d_idx["caliber"]["lines"],))
     # 口径行 = [0]标的/周期/区间 [1]出场参数 [2]费率 [3]偏离披露 [4]指数追加
     # 只有 [0] 含标的代码故必然不同；[1:4] 三条必须逐字相同 —— 否则就是分流
@@ -869,38 +889,41 @@ def part11(kl, d_stock):
           and not any("**" in str(x) for x in d_idx["disclosures"]),
           "lines=%r" % d_idx["caliber"]["lines"])
 
-    # ⑤ Backtest 层直连（层表：Backtest 不得 import App，故分流只能靠注入 + is_index）
+    # ⑤ Backtest 层直连（层表：Backtest 不得 import App，故标注只能靠注入 + is_index）
     from Backtest.Report import caliber_lines
     from Backtest.Runner import RunResult
     r_idx = RunResult(market="sh", code="000001", freq="d", is_index=True)
     r_stk = RunResult(market="sz", code="002190", freq="d", is_index=False)
     check("⑪ Backtest.Report.caliber_lines 直接吃 RunResult.is_index（不依赖 App 层）",
           len(caliber_lines(r_idx)) == 5
-          and any("不适用" in x for x in caliber_lines(r_idx)),
+          and any("按个股假想" in x for x in caliber_lines(r_idx))
+          and not any("不适用" in x for x in caliber_lines(r_idx)),
           "lines=%r" % (caliber_lines(r_idx),))
     check("⑪ is_index=False（默认）时不追加 —— 既有调用方行为零变化",
           len(caliber_lines(r_stk)) == 4
-          and not any("不适用" in x for x in caliber_lines(r_stk)))
-    check("⑪ RunResult.is_index 默认 False（不显式注入就不分流）",
+          and not any("按个股假想" in x for x in caliber_lines(r_stk)))
+    check("⑪ RunResult.is_index 默认 False（不显式注入就不标注）",
           RunResult(market="sh", code="000001", freq="d").is_index is False)
     from Backtest.Metrics import compute
     from Backtest.Report import summary_text
     from Backtest.Runner import load_records, run as bt_run
     # 真跑一轮（不走 App 层）才能拿到非空 metrics —— `summary_text` 的净收益率
-    # 那一行在 `m.n == 0` 时不打印，空 RunResult 测不出分流。
+    # 那一行在 `m.n == 0` 时不打印，空 RunResult 测不出同形。
     recs = load_records(os.path.join(FIXTURES, "sz002190_d.json"))
     rr_idx = bt_run("sh", "000001", "d", records=recs, is_index=True)
     rr_stk = bt_run("sz", "002190", "d", records=recs)
     txt_idx = summary_text(rr_idx, compute(rr_idx))
     txt_stk = summary_text(rr_stk, compute(rr_stk))
-    check("⑪ 控制台摘要分流：指数标「不适用·指数」而非印虚构净收益率",
-          "(不适用·指数)" in txt_idx and "(不适用·指数)" not in txt_stk,
+    check("⑪ 控制台摘要同形：指数不再标「(不适用·指数)」，净收益率照常印",
+          "(不适用" not in txt_idx
+          and "平均净收益率" in txt_idx
+          and "平均净收益率" in txt_stk,
           "idx=%r" % txt_idx[:180])
     check("⑪ 控制台摘要的期望 R（毛）对指数照常印（价格侧口径有效）",
           "期望 R（毛）" in txt_idx)
-    check("⑪ 控制台摘要整段里「不适用」只出现在指数侧",
-          "不适用" in txt_idx and "不适用" not in txt_stk)
-    check("⑪ 未注入 is_index（默认 False）时 Runner 不分流 —— 注入是唯一开关",
+    check("⑪ 控制台摘要里「不适用」两侧都绝迹（v2.2 同形）",
+          "不适用" not in txt_idx and "不适用" not in txt_stk)
+    check("⑪ 未注入 is_index（默认 False）时 Runner 不标注 —— 注入是唯一开关",
           rr_stk.is_index is False and rr_idx.is_index is True)
     return d_idx
 
@@ -1004,11 +1027,11 @@ def part12():
           "realized=%r closed_mean=%.6f" % (s30["avg_net_return_pct"],
                                             sum(_realized) / len(_realized)))
 
-    # ── 指数侧：未平仓的净收益率「不适用」，价格侧的 R 照常 ──
+    # ── 指数侧：v2.2 同形 —— 未平仓浮动净收益率照常给（不再置 null），价格侧的 R 照常 ──
     di = _call("sh000001", "30m", kl30)
     oi = [x for x in di["trades"] if x["open"]]
-    check("⑫ 指数页未平仓笔：unrealized_net_return_pct = null（不适用）/ 毛 R 保留",
-          len(oi) == 1 and oi[0]["unrealized_net_return_pct"] is None
+    check("⑫ 指数页未平仓笔：unrealized_net_return_pct 非 null（同形）/ 毛 R 保留",
+          len(oi) == 1 and oi[0]["unrealized_net_return_pct"] is not None
           and oi[0]["unrealized_r"] is not None,
           "open=%r" % (oi[0] if oi else None))
 
