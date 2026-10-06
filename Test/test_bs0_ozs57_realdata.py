@@ -57,14 +57,16 @@ FIX_DIR = os.path.join(TEST_DIR, "fixtures_real")
 SAMPLE = "sz002190_d.json"
 
 # 冻结基线（来源见 docstring：全 A 股日线两次全量扫描）
+# 2026-10-06 4th/nzs/68th 新增「DIF 背驰前置闸」（_is_stroke_divergence(MACD_ALGO.DIF)，
+# 要求离开笔DIF峰值 < 进入笔DIF峰值；面积判据保留于后）——4th 原 2 笔 T0（2023/04）
+# 过面积但未过 DIF 闸而归零，以下三项随新口径重冻：
 BASE_ENTER_57TH = 30
-BASE_LOOSE_T0_DATES = ["2023/04/27", "2023/04/28",
-                       "2025/07/17", "2025/07/18", "2025/07/21", "2025/07/22",
+BASE_LOOSE_T0_DATES = ["2025/07/17", "2025/07/18", "2025/07/21", "2025/07/22",
                        "2025/08/18", "2025/08/19"]
-BASE_STRICT_T0_DATES = ["2023/04/27", "2023/04/28"]
+BASE_STRICT_T0_DATES = []
 BASE_LOOSE_57TH_T0_COUNT = 6
 BASE_STRICT_57TH_T0_COUNT = 0
-BASE_4TH_T0_COUNT = 2
+BASE_4TH_T0_COUNT = 0
 BASE_T3_COUNT = 3
 
 BRANCHES = (

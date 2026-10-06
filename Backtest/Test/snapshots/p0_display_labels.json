@@ -3,22 +3,21 @@
   "by_reason": {
    "breakeven": 1,
    "sl": 3,
-   "trailing": 2
+   "trailing": 1
   },
   "fixture": "sz002190_d.json",
   "labels_in_trade_order": [
    "止损",
    "保本",
    "止损",
-   "跟踪止盈",
    "止损",
    "跟踪止盈"
   ],
-  "n": 6,
+  "n": 5,
   "open": 0,
   "summary_last_lines": [
-   "分类型 0:n=3 avgR=4.104, 3:n=3 avgR=-0.896",
-   "分原因 止损:n=3, 保本:n=1, 跟踪止盈:n=2"
+   "分类型 0:n=2 avgR=5.649, 3:n=3 avgR=-0.896",
+   "分原因 止损:n=3, 保本:n=1, 跟踪止盈:n=1"
   ]
  },
  "exit_reason_order": [

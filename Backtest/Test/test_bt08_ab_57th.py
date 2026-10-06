@@ -280,9 +280,11 @@ def main(argv):
     check("⑤ 放宽新增的 0 类交易 > 0 笔", d_filled > 0, "Δfilled=%d" % d_filled)
     check("⑤ 放宽新增部分是**正贡献**（Δ合计R > 0，非稀释）",
           d_sum > 0, "Δ合计R=%.4f" % d_sum)
-    check("⑤ 放宽后 0 类期望 R 不低于严格（口径改善而非恶化）",
-          b0["expectancy_r"] is not None and a0["expectancy_r"] is not None
-          and b0["expectancy_r"] >= a0["expectancy_r"],
+    # 2026-10-06 DIF 前置闸后严格臂 0 类交易可能为 0（期望R=None）——空基线视为空真通过；
+    # 放宽臂反而无交易（严格有、放宽无）仍判失败（真异常）。
+    check("⑤ 放宽后 0 类期望 R 不低于严格（口径改善而非恶化；严格臂无0类交易=空基线，空真通过）",
+          a0["expectancy_r"] is None
+          or (b0["expectancy_r"] is not None and b0["expectancy_r"] >= a0["expectancy_r"]),
           "严格=%s 放宽=%s" % (a0["expectancy_r"], b0["expectancy_r"]))
 
     # ⑥ 全放行口径同样对照（两类混合后的总账）
@@ -302,9 +304,10 @@ def main(argv):
         return None if not sc["filled"] else round(sig / sc["filled"], 4)
     print("\n── ⑦ 信号数 vs 交易笔数（§2.7 簇问题实证）──")
     for arm, sc in (("严格", a0), ("放宽", b0)):
-        print("   %s  0类信号=%d  交易笔数=%d  虚高=%.2f×"
+        _ratio_disp = _ratio(sc)  # 2026-10-06 DIF 前置闸后严格臂可能 0 笔 → 虚高无定义，显示 —
+        print("   %s  0类信号=%d  交易笔数=%d  虚高=%s"
               % (arm, sc["signals_seen"] - sc["signals_filtered"],
-                 sc["filled"], _ratio(sc)))
+                 sc["filled"], "—" if _ratio_disp is None else "%.2f×" % _ratio_disp))
     check("⑦ 放宽臂 0 类「信号数/笔数」虚高 > 2×（簇确实存在，报表必须报笔数）",
           _ratio(b0) is not None and _ratio(b0) > 2.0,
           "虚高=%s" % _ratio(b0))

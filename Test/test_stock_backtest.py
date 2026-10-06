@@ -120,12 +120,13 @@ def part1():
           "keys=%r" % sorted(d.keys()))
 
     run, s, tgt = d["run"], d["summary"], d["target"]
-    check("交易笔数 = 6（P0-④ 基线）", run["filled"] == 6, "filled=%r" % run["filled"])
-    check("胜负平 = 2/4/0", (s["w"], s["l"], s["e"]) == (2, 4, 0),
+    # 2026-10-06 0类 4th/nzs/68th 新增 DIF 背驰前置闸后重冻：6→5 笔（4th 的 2023/04 一笔被 DIF 闸拦下）
+    check("交易笔数 = 5（P0-④ 基线）", run["filled"] == 5, "filled=%r" % run["filled"])
+    check("胜负平 = 1/4/0", (s["w"], s["l"], s["e"]) == (1, 4, 0),
           "w/l/e=%r" % ((s["w"], s["l"], s["e"]),))
-    check("实际胜率 = 2/6 ≈ 0.3333", abs(s["win_rate"] - 2.0 / 6.0) < 1e-6,
+    check("实际胜率 = 1/5 = 0.2", abs(s["win_rate"] - 1.0 / 5.0) < 1e-6,
           "win_rate=%r" % s["win_rate"])
-    check("期望 R ≈ 1.604417（L3 启动阈值 2R 口径）", abs(s["expectancy_r"] - 1.604417) < 1e-3,
+    check("期望 R ≈ 1.7224（L3 启动阈值 2R 口径）", abs(s["expectancy_r"] - 1.7224) < 1e-3,
           "expectancy_r=%r" % s["expectancy_r"])
     check("区间 [2021-01-04, 2026-09-30] 且 bars=1393",
           tgt["date_from"] == "2021-01-04" and tgt["date_to"] == "2026-09-30"
@@ -239,14 +240,14 @@ def part3(kl, base_exp):
     d03 = _call("sz002190", "d", kl, bsp_types="0,3")
     d_empty = _call("sz002190", "d", kl, bsp_types="")
 
-    check('"0" → 3 笔 / R≈4.1044',
-          d0["run"]["filled"] == 3 and abs(d0["summary"]["expectancy_r"] - 4.1044) < 1e-3,
+    check('"0" → 2 笔 / R≈5.64935',
+          d0["run"]["filled"] == 2 and abs(d0["summary"]["expectancy_r"] - 5.64935) < 1e-3,
           "filled=%r R=%r" % (d0["run"]["filled"], d0["summary"]["expectancy_r"]))
     check('"3" → 3 笔 / R≈-0.8956',
           d3["run"]["filled"] == 3 and abs(d3["summary"]["expectancy_r"] + 0.8956) < 1e-3,
           "filled=%r R=%r" % (d3["run"]["filled"], d3["summary"]["expectancy_r"]))
     check('"0,3" ≡ 全放行（笔数与 R 同基线）',
-          d03["run"]["filled"] == d_none["run"]["filled"] == 6
+          d03["run"]["filled"] == d_none["run"]["filled"] == 5
           and abs(d03["summary"]["expectancy_r"] - base_exp) < 1e-9,
           "filled=%r R=%r base=%r" % (d03["run"]["filled"],
                                       d03["summary"]["expectancy_r"], base_exp))

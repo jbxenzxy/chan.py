@@ -36,25 +36,25 @@
    "file": "sz002190_d.json",
    "freq": "d",
    "metrics": {
-    "avg_bars_held": 6.16666667,
-    "avg_net_return": 0.0553531839,
+    "avg_bars_held": 6.0,
+    "avg_net_return": 0.0601421207,
     "e": 0,
-    "expectancy_r": 1.60441667,
+    "expectancy_r": 1.7224,
     "l": 4,
     "max_loss_r": -1.4214,
     "max_win_r": 12.7201,
-    "n": 6,
-    "profit_factor": 2.45899623,
+    "n": 5,
+    "profit_factor": 2.32101897,
     "u": 0,
-    "w": 2,
-    "win_rate": 0.3333333333
+    "w": 1,
+    "win_rate": 0.2
    },
    "note": "日线；基准样本（p0_sz002190_d.json 详版在 bt01）",
    "run": {
     "bars_total": 1393,
     "signals_filtered": 0,
-    "signals_rejected": 5,
-    "signals_seen": 11,
+    "signals_rejected": 4,
+    "signals_seen": 9,
     "type_appended_after_freeze": 0
    },
    "sha256": "56083668fff052dbfc5edceda3f7c7ae46e7a99f31db094c9e46d0727583fdc0",
@@ -108,22 +108,6 @@
      "trade_id": 3
     },
     {
-     "bars_held": 7,
-     "bsp_type": "0",
-     "entry_date": "2023-04-27",
-     "entry_price": 21.788,
-     "exit_date": "2023-05-11",
-     "exit_price": 22.488,
-     "exit_reason": "trailing",
-     "net_return": 0.0314085001,
-     "open": false,
-     "r_distance": 0.69,
-     "r_multiple": 1.0145,
-     "shares": 2300,
-     "side": "long",
-     "trade_id": 4
-    },
-    {
      "bars_held": 11,
      "bsp_type": "0",
      "entry_date": "2025-07-17",
@@ -137,7 +121,7 @@
      "r_multiple": -1.4214,
      "shares": 1400,
      "side": "long",
-     "trade_id": 5
+     "trade_id": 4
     },
     {
      "bars_held": 6,
@@ -153,7 +137,7 @@
      "r_multiple": 12.7201,
      "shares": 1400,
      "side": "long",
-     "trade_id": 6
+     "trade_id": 5
     }
    ]
   },

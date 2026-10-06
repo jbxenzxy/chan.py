@@ -62,13 +62,13 @@
    ],
    "drift_count": 3,
    "ever_but_not_final": [],
-   "ever_seen": 11,
+   "ever_seen": 9,
    "field_revision_signals": [
     "2021-08-23 type=3 buy=True",
     "2021-12-22 type=3 buy=True",
     "2022-05-24 type=3 buy=False"
    ],
-   "final_alive": 11,
+   "final_alive": 9,
    "fixture": {
     "bars": 1393,
     "file": "sz002190_d.json",
@@ -83,14 +83,14 @@
     "2021-12-22 type=3 buy=True": 1,
     "2022-05-24 type=3 buy=False": 4
    },
-   "signals_total": 11,
+   "signals_total": 9,
    "xcheck": {
     "drift_trade_rows": [
      {
       "A_first": 1.61,
       "A_last": 3.61,
       "bsp_type": "3",
-      "r_distance": 2.565714,
+      "r_distance": 1.61,
       "r_lt_A_last": true,
       "side": "long",
       "trade_entry_date": "2021-08-23",
@@ -100,7 +100,7 @@
       "A_first": 0.71,
       "A_last": 1.06,
       "bsp_type": "3",
-      "r_distance": 3.121429,
+      "r_distance": 1.560714,
       "r_lt_A_last": false,
       "side": "long",
       "trade_entry_date": "2021-12-22",
@@ -110,7 +110,7 @@
       "A_first": 1.7,
       "A_last": 5.61,
       "bsp_type": "3",
-      "r_distance": 1.874286,
+      "r_distance": 1.7,
       "r_lt_A_last": true,
       "side": "short",
       "trade_entry_date": "2022-05-24",
@@ -118,8 +118,8 @@
      }
     ],
     "r_lt_A_last_count": 2,
-    "signals_seen": 11,
-    "trades": 6
+    "signals_seen": 9,
+    "trades": 5
    }
   },
   {
@@ -210,7 +210,7 @@
       "A_first": 0.14,
       "A_last": 0.55,
       "bsp_type": "3",
-      "r_distance": 0.282857,
+      "r_distance": 0.141429,
       "r_lt_A_last": true,
       "side": "short",
       "trade_entry_date": "2026-02-13 15:00",
@@ -220,7 +220,7 @@
       "A_first": 0.15,
       "A_last": 0.74,
       "bsp_type": "3",
-      "r_distance": 0.274286,
+      "r_distance": 0.15,
       "r_lt_A_last": true,
       "side": "short",
       "trade_entry_date": "2026-05-06 14:00",
@@ -230,7 +230,7 @@
       "A_first": 0.22,
       "A_last": 0.53,
       "bsp_type": "3",
-      "r_distance": 0.45,
+      "r_distance": 0.225,
       "r_lt_A_last": true,
       "side": "long",
       "trade_entry_date": "2026-06-16 11:30",

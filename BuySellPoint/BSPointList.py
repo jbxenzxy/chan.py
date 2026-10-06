@@ -1053,7 +1053,16 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           dominant=fence_dominant, lines=fence_lines)
             return
 
-        # ㈢ 离开笔4和进入笔，MACD面积背驰
+        # ㈢ 离开笔4和进入笔，要求离开笔DIF峰值 < 进入笔DIF峰值
+        is_diver_dif, dif_out_metric, dif_in_metric = self._is_stroke_divergence(stroke_n, entry_bi, MACD_ALGO.DIF, config)
+        if not is_diver_dif:
+            self._dbg_bs0(' _cal_bs0point_4th', '跳过: MACD DIF 未背驰',
+                          dif_in_metric=round(dif_in_metric, 2), dif_out_metric=round(dif_out_metric, 2),
+                          dif_rate=round(dif_out_metric / (dif_in_metric + 1e-7), 2),
+                          threshold=round(config.divergence_rate, 2))
+            return
+
+        # ㈣ 离开笔4和进入笔，MACD面积背驰
         in_metric = entry_bi.cal_macd_metric(config.macd_algo, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA_HALF 有意义
         out_metric = stroke_n.cal_macd_metric(config.macd_algo, is_reverse=True)
         divergence_rate = out_metric / (in_metric + 1e-7)
@@ -1155,7 +1164,16 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           dominant=fence_dominant, lines=fence_lines)
             return False
 
-        # ㈣ 离开笔和进入笔，MACD面积背驰
+        # ㈣ 离开笔和进入笔，要求离开笔DIF峰值 < 进入笔DIF峰值
+        is_diver_dif, dif_out_metric, dif_in_metric = self._is_stroke_divergence(stroke_n, entry_bi, MACD_ALGO.DIF, config)
+        if not is_diver_dif:
+            self._dbg_bs0(' _cal_bs0point_nth_nzs', '跳过: MACD DIF 未背驰',
+                          dif_in_metric=round(dif_in_metric, 2), dif_out_metric=round(dif_out_metric, 2),
+                          dif_rate=round(dif_out_metric / (dif_in_metric + 1e-7), 2),
+                          threshold=round(config.divergence_rate, 2))
+            return False
+
+        # ㈤ 离开笔和进入笔，MACD面积背驰
         in_metric = entry_bi.cal_macd_metric(config.macd_algo, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA_HALF 有意义
         out_metric = stroke_n.cal_macd_metric(config.macd_algo, is_reverse=True)
         divergence_rate = out_metric / (in_metric + 1e-7)
@@ -1321,7 +1339,16 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           dominant=fence_dominant, lines=fence_lines)
             return
 
-        # ㈢ 离开笔6/8和进入笔，MACD面积背驰
+        # ㈢ 离开笔6/8和进入笔，要求离开笔DIF峰值 < 进入笔DIF峰值
+        is_diver_dif, dif_out_metric, dif_in_metric = self._is_stroke_divergence(stroke_n, entry_bi, MACD_ALGO.DIF, config)
+        if not is_diver_dif:
+            self._dbg_bs0(' _cal_bs0point_nth_ozs_68th', '跳过: MACD DIF 未背驰',
+                          dif_in_metric=round(dif_in_metric, 2), dif_out_metric=round(dif_out_metric, 2),
+                          dif_rate=round(dif_out_metric / (dif_in_metric + 1e-7), 2),
+                          threshold=round(config.divergence_rate, 2))
+            return
+
+        # ㈣ 离开笔6/8和进入笔，MACD面积背驰
         in_metric = entry_bi.cal_macd_metric(config.macd_algo, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA_HALF 有意义
         out_metric = stroke_n.cal_macd_metric(config.macd_algo, is_reverse=True)
         divergence_rate = out_metric / (in_metric + 1e-7)
