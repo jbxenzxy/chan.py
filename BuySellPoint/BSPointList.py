@@ -991,7 +991,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         # ⑶ MACD BAR 背驰判定（笔C vs 笔A，最近同向笔）
         is_buy = stroke_n.is_down()
         config = self.config.GetBSConfig(is_buy)
-        is_diver, n_metric, nm2_metric = self._is_stroke_divergence(stroke_n, stroke_a, config)
+        is_diver, n_metric, nm2_metric = self._is_stroke_divergence(stroke_n, stroke_a, MACD_ALGO.BAR, config)
         divergence_rate = n_metric / (nm2_metric + 1e-7)
         if not is_diver:
             self._dbg_bs0(' _cal_bs0point_3rd', f'{case_str}: 跳过。最近同向笔 MACD BAR 未背驰',
@@ -1252,7 +1252,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             return
 
         # ㈣ MACD BAR 背驰判定（笔n vs 笔(n-2)，最近同向笔）
-        is_diver, n_metric, nm2_metric = self._is_stroke_divergence(stroke_n, stroke_nm2, config)
+        is_diver, n_metric, nm2_metric = self._is_stroke_divergence(stroke_n, stroke_nm2, MACD_ALGO.BAR, config)
         divergence_rate = n_metric / (nm2_metric + 1e-7)
         if not is_diver:
             self._dbg_bs0(' _cal_bs0point_nth_ozs_57th', '跳过。最近同向笔 MACD BAR 未背驰',
@@ -1456,7 +1456,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             return
 
         # ㈤ MACD BAR 背驰判定（笔n vs 笔(n-2)，最近同向笔）
-        is_diver, n_metric, nm2_metric = self._is_stroke_divergence(stroke_n, stroke_nm2, config)
+        is_diver, n_metric, nm2_metric = self._is_stroke_divergence(stroke_n, stroke_nm2, MACD_ALGO.BAR, config)
         divergence_rate = n_metric / (nm2_metric + 1e-7)
         if not is_diver:
             self._dbg_bs1('cal_bs1point', '跳过: 最近同向，MACD BAR未背驰',
@@ -1831,13 +1831,12 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             return zs_range + (peak_range - zs_range) * weight, ratio, False
 
     @staticmethod
-    def _is_stroke_divergence(n, nm2, config):
+    def _is_stroke_divergence(n, nm2, macd_algo, config):
         """
-        最近同向笔MACD BAR背驰比较
-        比较当下笔N与其最近同向笔N-2的BAR值，判断当下笔力度是否不足
+        最近同向笔 MACD背驰比较(macd_algo 指定比较指标，如 MACD_ALGO.BAR / MACD_ALGO.DIF)
         """
-        n_metric   = n.cal_macd_metric(MACD_ALGO.BAR, is_reverse=False) # 2026-09-25 PEAK→BAR；is_reverse 仅对 MACD_ALGO.AREA_HALF 有意义
-        nm2_metric = nm2.cal_macd_metric(MACD_ALGO.BAR, is_reverse=True)
+        n_metric   = n.cal_macd_metric(macd_algo, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA_HALF 有意义
+        nm2_metric = nm2.cal_macd_metric(macd_algo, is_reverse=True)
         is_diver   = n_metric < config.divergence_rate * nm2_metric
         return is_diver, n_metric, nm2_metric
 
