@@ -147,16 +147,6 @@ class ExitCheck:
 class LayeredExitPolicy:
     name = "LayeredExitPolicy"
 
-    # R 观测阈值（评审补 · 用户拍板「A < 3.0」）：结构距离 A 低于本值时打
-    #   WARNING（见 _initial_r）。取值含义 = **已删除的 min_r_points 地板原值** ——
-    #   IF/IH 与商品档当时是 3.0，IC/IM 是 5.0。
-    #   ⚠️ A 的单位是**报价点数**，不同品种量级不同 → 本值是"观测灵敏度"旋钮，
-    #   不是风控参数：它**不参与、也不会改变** R = max(A, B) 的取值，
-    #   只决定多早把现场打到控制台。要更早抓样本就调大本值（如按 IC/IM 口径设 5.0）。
-    #   本属性**不是配置项**：ExitPolicyParams 是 extra="forbid"，它只走类属性，
-    #   避免和"改标定值必须过 git 评审"的纪律混淆。
-    r_alert_a_floor: float = 3.0
-
     # ---------- 参数 ----------
     def __init__(self, params=None):
         self.params = dict(params or {})
@@ -266,25 +256,20 @@ class LayeredExitPolicy:
             删除 min_r_points 后，R 不再有绝对点数地板 —— 这是刻意的：
             口径是「有分型才有买卖点 → 有买卖点才入场 → 入场时 A 恒 > 0」，
             且 B（2×ATR）在正常行情下量级远大于旧地板，R 的地板是多余的。
-            因此本函数**不兜底、不钳下限**，只打 WARNING 把现场丢到控制台抓样本。
-            两个观测点（都**不改变** R 的取值）：
+            因此本函数**不兜底、不钳下限**，只在结构性异常时打 WARNING。
+            观测点（都**不改变** R 的取值）：
 
-            [1] `A < r_alert_a_floor`（默认 3.0）——评审后**放宽**
-                原实现只在 `A == 0` 出声，恰好把真正会出问题的区间吞掉了。
-                风险窗口是 `0 < A < 地板`：B 未就绪时（Q5 后 ATR 缓冲跨日连续，
-                B 未就绪只剩「新进程前 atr_period+1 根 bar」这一个窗口）R 只由 A 决定，
-                A=0.1 时止损距离从 3.0 点塌到 1 tick —— 实测同一根普通 bar 下
-                旧版持仓存活、新版第一根就判 sl。三支文案便于 grep 区分成因：
-                  `[R 结构距离缺失]` = 信号压根没带分型（fractal ≤ 0 哨兵）；
-                  `[R 结构距离归零]` = 带了分型但 A ≤ 0（穿越分型 / 分型贴身到等于入场价）；
-                  `[R 结构距离偏小]` = 0 < A < 地板（分型贴身但未归零）。
+            [1] `[R 结构距离缺失]` / `[R 结构距离归零]`
+                前者 = 信号压根没带分型（fractal ≤ 0 哨兵）—— 查信号源；
+                后者 = 带了分型但 A ≤ 0（穿越分型 / 分型贴身到等于入场价）。
                 已知成因候选：① 信号未携带分型；② 入场价已穿越分型（陈旧信号）；
-                ③ 分型贴身（A 极小）；④ 买卖点无右肩 K 线时 bsp.klu 退回
-                bi.get_end_klu()（chan.py BuySellPoint/BS_Point.py），该 K 线收在
-                自身极值点时 A = 0。
-                ⚠️ 阈值单位是**报价点数**，IC/IM 的旧地板原为 5.0（比 3.0 宽一档）——
-                本告警不按品种分档；要按 IC/IM 口径收窄，改类属性
-                `LayeredExitPolicy.r_alert_a_floor`。
+                ③ 买卖点无右肩 K 线时 bsp.klu 退回 bi.get_end_klu()
+                （chan.py BuySellPoint/BS_Point.py），该 K 线收在自身极值点时 A = 0。
+                ⚠ 原第三支 `[R 结构距离偏小]`（0 < A < 3.0，评审后放宽的阈值）已删
+                （2026-10-06 用户裁定）：阈值是**报价点数**绝对值，对低价 / 点位小
+                的品种量级失真 —— 36 元的票结构距离 0.3 点是常态，告警天天刷屏；
+                且它只观测、不改 R，留下只有噪音。历史取值 = 已删 min_r_points
+                地板原值 3.0（IC/IM 当时 5.0）。
 
             [2] `R <= 0` → `[R 归零]`（评审补 · 用户要求"R=0 加控制台告警"）。
                 R=0 是唯一会让 L3 整层失效的值（check() 里的 `R > 0` 判定），
@@ -316,22 +301,20 @@ class LayeredExitPolicy:
         atr = self._atr() if self.use_atr else None
         if atr:
             B = self.atr_sl_multiple * atr
-        # 观测告警 [1]：A < 地板（默认 3.0）。不改 R 的取值，只把现场打出来。
-        #   分三支，便于 grep 时一眼区分成因（详见 docstring）：
+        # 观测告警 [1]：结构性异常（分型缺失 / A 归零）。不改 R 的取值，只把现场打出来。
+        #   两支文案便于 grep 时一眼区分成因（详见 docstring）：
         #     [R 结构距离缺失] = 信号压根没带分型（fractal ≤ 0 哨兵）→ 查信号源；
-        #     [R 结构距离归零] = 带了分型但 A ≤ 0（穿越分型 / 分型贴身到等于入场价）；
-        #     [R 结构距离偏小] = 0 < A < 地板（分型贴身但未归零）→ 查行情与分型口径。
-        if A < self.r_alert_a_floor:
-            _kind = ("结构距离缺失" if _fractal_missing
-                     else "结构距离归零" if A <= 0.0
-                     else "结构距离偏小")
+        #     [R 结构距离归零] = 带了分型但 A ≤ 0（穿越分型 / 分型贴身到等于入场价）。
+        #   原第三支「[R 结构距离偏小]（0 < A < 3.0）」已删（2026-10-06 用户裁定）：
+        #   绝对点数阈值对低价品种量级失真、天天刷屏，且它只观测不改 R。
+        if _fractal_missing or A <= 0.0:
+            _kind = "结构距离缺失" if _fractal_missing else "结构距离归零"
             _log.warning(
-                "[R %s] A=%.6g < 阈值 %.6g：R 可能只由结构距离 A 决定（B 未就绪时尤其）"
+                "[R %s] A=%.6g：R 可能只由结构距离 A 决定（B 未就绪时尤其）"
                 "：side=%s entry=%.6g fractal_low=%.6g fractal_high=%.6g atr=%s "
                 "B=%.6g signal_key=%s —— 请核对分型是否缺失/穿越/贴身"
-                "（本条仅观测，R = max(A, B) 不变；阈值见 LayeredExitPolicy."
-                "r_alert_a_floor）",
-                _kind, A, self.r_alert_a_floor,
+                "（本条仅观测，R = max(A, B) 不变）",
+                _kind, A,
                 getattr(signal.side, "value", signal.side), entry_price,
                 signal.fractal_low, signal.fractal_high, atr, B,
                 getattr(signal, "key", "?"))

@@ -330,9 +330,10 @@ class ExitConfig(BaseModel):
 
         注：R 本身不设下限（评审 · 采纳"有分型才有买卖点"的口径，
         删除 min_r_points 后不再补地板）。可观测性由 LayeredExitPolicy._initial_r()
-        的两条 WARNING 负责，不在配置层拦：
-          `[R 结构距离*]` —— A < LayeredExitPolicy.r_alert_a_floor
-                              （默认 3.0 = 已删地板原值；IC/IM 原为 5.0）；
+        的 WARNING 负责，不在配置层拦（结构性异常才出声）：
+          `[R 结构距离缺失/归零]` —— 信号未带分型（哨兵 ≤ 0）或 A ≤ 0
+                              （2026-10-06 用户裁定删除「偏小」支：绝对点数
+                              阈值对低价品种量级失真，且只观测不改 R）；
           `[R 归零]`      —— R = max(A, B) = 0。
         """
         if self.breakeven_trigger_r > 0 and \

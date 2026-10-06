@@ -150,23 +150,23 @@ def _bucket_rows(groups: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def _disclosures(is_index: bool) -> List[str]:
-    """口径披露（与「止盈止损」推演同款两条）；指数额外追加「按个股假想」一条。
+def _disclosures() -> List[str]:
+    """口径披露（与「止盈止损」推演同款两条，指数与个股**同一份**）。
 
-    为什么单列成函数而不是就地写列表字面量：`is_index` 披露是本响应契约的一部分
+    ⚠ 指数假想假设**不在**这里披露（2026-10-06 用户裁定：面板顶部横幅已写
+    「指数按个股假想：1点=1元、1手=100股、费率同个股」，底部披露再写一遍是
+    重复）—— 面板披露恒为两条；CLI 口径行的假设披露在
+    `Backtest.Report.caliber_lines`（那里没有横幅，不重复）。
+
+    为什么单列成函数而不是就地写列表字面量：披露文案是本响应契约的一部分
     （护栏 `Test/test_stock_backtest.py` 会逐条比对），集中一处便于断言。
     """
-    base = [
-        # 披露文案 2026-10-06 用户裁定收敛为两条（原三条 + 单窗态一并撤销）：
-        #   「多空双向」是引擎事实（Runner 按 sig.side 开多/开空），不是宣传语。
+    # 披露文案 2026-10-06 用户裁定收敛为两条（原三条 + 单窗态一并撤销）：
+    #   「多空双向」是引擎事实（Runner 按 sig.side 开多/开空），不是宣传语。
+    return [
         "按T+0、多空双向",
         "不建模涨跌停/停牌",
     ]
-    if is_index:
-        # v2.2 定案（指数当个股）：旧的「不适用」声明改为披露假想假设本身 ——
-        #   字段与个股完全一致地下发，只是要让人知道这些数建立在什么假设上。
-        base.append("指数按个股假想：1点=1元、1手=100股、费率同个股（示意值）")
-    return base
 
 
 def compute_stock_backtest(code: str, body: Dict[str, Any]) -> Dict[str, Any]:
@@ -359,5 +359,5 @@ def compute_stock_backtest(code: str, body: Dict[str, Any]) -> Dict[str, Any]:
                                       if TARGET_AMOUNT else None),
             "bsp_types": (None if choices is None else str(choices)),
         },
-        "disclosures": _disclosures(is_index),
+        "disclosures": _disclosures(),
     }

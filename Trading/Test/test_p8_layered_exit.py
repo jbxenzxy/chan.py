@@ -147,11 +147,12 @@ def main():
     plan5 = pol5.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0), 100.0, state)
     check("无 ATR/无结构 R=0 → 止损 = 99.8（P2 边界保护）", plan5.stop_price, 99.8)
 
-    print("\n[3b] A 观测告警（2026-09-15 评审补 · 阈值放宽为 A < 3.0）：不改 R 口径，只打 WARNING 抓样本")
+    print("\n[3b] A 观测告警（结构性异常才出声；2026-10-06 用户裁定删「偏小」支）：不改 R 口径")
     # 口径（用户拍板）：有分型才有买卖点 → 入场时 A 恒 > 0，故 R 不设下限、不兜底。
-    #   但 A 偏小时必须出声：评审后阈值由 A==0 放宽为 **A < 3.0**
-    #   （= 已删 min_r_points 地板原值），三支文案便于 grep ——
-    #   [R 结构距离缺失] / [R 结构距离归零] / [R 结构距离偏小]；另有 [R 归零]（R=0）。
+    #   WARNING 只在**结构性异常**时出声，两支文案便于 grep ——
+    #   [R 结构距离缺失]（信号未带分型）/ [R 结构距离归零]（A ≤ 0）；另有 [R 归零]（R=0）。
+    #   ⚠ 原第三支 [R 结构距离偏小]（0 < A < 3.0）已删（2026-10-06）：绝对点数阈值
+    #   对低价品种量级失真、天天刷屏，且只观测不改 R ⇒ 0 < A < 3.0 必须**安静**。
     import logging as _logging
 
     class _CapLog(_logging.Handler):
@@ -187,21 +188,21 @@ def main():
     _cap.msgs = []
     pol5w.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0,
                            fractal_low=97.0), 100.0, state)
-    check("A=3.0 正常路径 → 不打告警（阈值严格小于）", _cap.msgs, [])
-    # ④ 阈值放宽后的边界（评审 · 用户拍板「改为 A < 3.0」）：
-    #    A=2.9 → 必须出声；A=3.0 → 必须安静。这两条把"风险窗口 0 < A < 地板"的
-    #    内部真正钉住 —— 原实现只测 A=0 这个极端点，区间内部全是盲区。
+    check("A=3.0 正常路径 → 不打告警", _cap.msgs, [])
+    # ④ 「偏小」支已删（2026-10-06 用户裁定）：0 < A < 旧地板 3.0 的区间必须**安静** ——
+    #    A=2.9 与 A=3.0 都不打任何 WARNING（绝对点数阈值对低价品种量级失真，
+    #    36 元的票结构距离 0.3 点是常态）。这条钉"删干净"，防止哪天回潮。
     _cap.msgs = []
     pol5w.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0,
                            fractal_low=97.1), 100.0, state)
-    check("A=2.9 < 阈值 3.0 → 打 WARNING [R 结构距离偏小]",
-          any("R 结构距离偏小" in m for m in _cap.msgs), True)
+    check("A=2.9（旧「偏小」区间）→ 不打任何 WARNING（该支已删）",
+          _cap.msgs, [])
     _cap.msgs = []
     pol5w.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0,
                            fractal_low=97.0), 100.0, state)
-    check("A=3.0 == 阈值 → 严格小于，不打告警", _cap.msgs, [])
+    check("A=3.0 → 不打告警", _cap.msgs, [])
     # ⑤ R 归零观测（评审补 · 用户要求"R=0 加控制台告警"）：
-    #    R > 0 时不得出 [R 归零]（与 [R 结构距离偏小] 严格分开）；R = 0 时必须出。
+    #    R > 0 时不得出 [R 归零]（与结构距离两支严格分开）；R = 0 时必须出。
     _cap.msgs = []
     pol5w.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0,
                            fractal_low=97.1), 100.0, state)
@@ -289,8 +290,8 @@ def main():
           pol12.p.breakeven_buffer_r, 0.5)
     check("breakeven_trigger_r 默认 = 1.0（缓冲 < 触发的不变式基准）",
           pol12.p.breakeven_trigger_r, 1.0)
-    check("r_alert_a_floor 默认 = 3.0（A 告警灵敏度，取自被删 min_r_points 原值）",
-          pol12.r_alert_a_floor, 3.0)
+    # r_alert_a_floor 类属性已随「偏小」告警删除（2026-10-06 用户裁定）——
+    #   此处不再有默认值断言；删配置键须同步删其测试样本（memory 铁律）。
 
     print("\n[8b] 不落任何止盈单：止盈交给 L3 跟踪（唯一出口）")
     polB = LayeredExitPolicy({"use_atr": False,

@@ -30,8 +30,8 @@
   ⑪ 指数同形（P0-⑥；⚠ v2.2 改判「指数当个股」）：`AppUtils.is_index` 判定同源
      （含 88xx 板块指数 / ds / hk）+ 响应与个股**逐字段一致、无任何置 null 分流**
      （v1.18 的「金额族置 null」已整体摘除）+ 价格侧 12 字段两侧逐字段相等
-     （同一份 K 线只换代码题头 ⇒ 判别力来自实验设计）+ 口径行/披露只追加不改写
-     （指数追加「按个股假想」披露一句）+ `Report.caliber_lines` / `summary_text`
+     （同一份 K 线只换代码题头 ⇒ 判别力来自实验设计）+ 口径行（CLI）追加「按个股
+     假想」披露一句；面板底部披露与个股同一份（假设由横幅披露，不重复）
      直连（Backtest 层不依赖 App）+ 前端 `renderBacktest` 真渲染：指数页渲染
      「按个股假想」横幅、无任何「不适用」
   ⑫ 出场原因**三选一**（止损 / 保本(1R) / 跟踪止盈，v1.18）：映射随响应下发
@@ -862,10 +862,11 @@ def part11(kl, d_stock):
           [[t[k] for k in _TRADE_KEYS] for t in d_idx["trades"]]
           == [[t[k] for k in _TRADE_KEYS] for t in d_stock["trades"]])
 
-    # ④ 口径行 / 披露：只追加一条假设披露，不改写既有（v2.2：内容改为「按个股假想」）
-    check("⑪ disclosures：个股 2 条 / 指数 3 条，末条披露「按个股假想」",
-          len(d_stock["disclosures"]) == 2 and len(d_idx["disclosures"]) == 3
-          and "按个股假想" in d_idx["disclosures"][-1],
+    # ④ 口径行 / 披露（v2.2 同日去重裁定：指数假设只在横幅与 CLI 口径行披露，
+    #   面板底部 disclosures 与个股**同一份**两条 —— 不再追加第三条）
+    check("⑪ disclosures：个股 / 指数同为 2 条（指数假设由横幅披露，底部不重复）",
+          len(d_stock["disclosures"]) == 2 and len(d_idx["disclosures"]) == 2
+          and d_idx["disclosures"] == d_stock["disclosures"],
           "idx=%r" % (d_idx["disclosures"],))
     check("⑪ caliber.lines：个股 4 条 / 指数 5 条，末条披露「按个股假想」且全文无「不适用」",
           len(d_stock["caliber"]["lines"]) == 4
