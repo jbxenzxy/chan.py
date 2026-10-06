@@ -167,20 +167,45 @@ def exit_reason_legend(exit_params: Optional[Dict[str, Any]] = None) -> Dict[str
 
     与 `exit_reason_labels` 同源同参：两个函数各写一份数字的后果是
     "标签写 1R、图例写 0.5R"这种只坏一半的漂移。
+
+    ⚠ **三条文案必须双向成立**（2026-10-06 用户裁定）：回测是**双向开仓**的
+    （同一轮里 long / short 都有 —— `snapshots/p0_display_labels.json` 的
+    `m30.open_trade.side` 就是 `short`），而图例**每轮一份**、不区分多空，
+    所以「收盘价跌破」「入场价 − R」「抬到入场价上方」这类**只对多头成立**的写法
+    一律不许出现。保护线落在入场价的哪一侧、离场看的是跌破还是涨破，都由持仓方向
+    决定，文案必须把多空两支都写出来：
+
+        多头（long）   保护线在入场价**下方**，收盘价**跌破**它离场
+        空头（short）  保护线在入场价**上方**，收盘价**涨破**它离场
+
+    这不是文案修辞 —— `Trading/Strategy/Exit.py` 里正是两支：`plan()` 的初始保护价
+    `base − R` / `base + R`，`check()` 的触发比较 `close < stop` / `close > stop`。
     """
     p = resolved_exit_params(exit_params)
+    # 保本保护线落在入场价的哪一侧 = 「持仓方向 × buffer 符号」共同决定
+    #   （多头 = 入场价 + buffer×R，空头 = 入场价 − buffer×R）：
+    #     buffer ≥ 0 → 落**有利侧**（多头在上方 / 空头在下方），锁定 buffer×R 浮盈；
+    #     buffer < 0 → 落**不利侧**（多头在下方 / 空头在上方），把止损从初始 R 收窄。
+    #   两个方向各写一份「上方 / 下方」，不许共用同一个词 —— 共用一个词就是只对多头成立。
+    _buf = float(p["breakeven_buffer_r"])
+    _be_long = "上方" if _buf >= 0 else "下方"
+    _be_short = "下方" if _buf >= 0 else "上方"
     return {
-        "sl": "止损：收盘价跌破止损保护线离场。保护线 = 入场价 − R"
-              "（R = max(结构距离, 2×ATR)），从未被抬过。",
-        # 2026-10-06 补充裁定：正值不带 + 号 —— 图例里的线位也改文字表述
-        #   （「上方 / 下方」），不再用 `入场价+0.5R` 这种算式写法。
-        "breakeven": "保本：浮盈 > {tr}R 后把保护线抬到入场价{pos} {buf}R 处，"
-                     "收盘价跌破该线离场。".format(
+        "sl": "止损：收盘价落到保护线的不利侧离场（多头＝跌破、空头＝涨破）。"
+              "保护线在入场价的不利侧 R 处（多头 入场价 − R、空头 入场价 + R；"
+              "R = max(结构距离, 2×ATR)），从未被 L3 动过。",
+        # 「收紧到」是双向动词：多空两支的保护线都朝更靠近入场价的方向移动
+        #   （初始 R → buffer×R，buffer 取任何合法值都更紧）。用「抬到」会只对多头
+        #   成立 —— 空头的保护价是往下走的。
+        "breakeven": "保本：浮盈 > {tr}R 后把保护线收紧到「入场价{side} {buf}R」处"
+                     "（多头在入场价{side}、空头在入场价{anti}），"
+                     "收盘价落到该线不利侧离场。".format(
                          tr=_fmt_r(p["breakeven_trigger_r"]),
-                         pos=("上方" if p["breakeven_buffer_r"] >= 0 else "下方"),
-                         buf=_fmt_r(abs(p["breakeven_buffer_r"]))),
-        "trailing": "跟踪止盈：浮盈 > {wl}R 后启动跟踪，保护线 = 至今最有利价 − {td}R，"
-                    "收盘价跌破该线离场（该笔锁住多少 R 见行内 R 倍数）。".format(
+                         side=_be_long, anti=_be_short,
+                         buf=_fmt_r(abs(_buf))),
+        "trailing": "跟踪止盈：浮盈 > {wl}R 后启动跟踪，保护线 = 至今最有利价向不利侧退 "
+                    "{td}R（多头 最高价 − {td}R、空头 最低价 + {td}R），"
+                    "收盘价落到该线不利侧离场（该笔锁住多少 R 见行内 R 倍数）。".format(
                         wl=_fmt_r(p["win_loss_ratio"]),
                         td=_fmt_r(p["trailing_trigger_r"])),
     }
@@ -276,7 +301,7 @@ def summary_text(result: RunResult, metrics: Metrics | None = None) -> str:
 def trades_table(result: RunResult) -> str:
     """逐笔明细表（控制台用，等宽）。
 
-    原因列印 `exit_reason_labels` 的中文（`sl`/`breakeven`/`trailing` → 止损 / 保本(1R) /
+    原因列印 `exit_reason_labels` 的中文（`sl`/`breakeven`/`trailing` → 止损 / 保本 /
     跟踪止盈）；未平仓笔的原因列留空 —— 它还没有出场，填「持仓中」到原因列是把
     状态冒充成原因。
 

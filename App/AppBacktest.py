@@ -35,9 +35,10 @@ CSV / HTML 报告导出留给 CLI 批跑。
     `Runner` 把 `is_index` 传入 sizing 强制 `DEFAULT_LOT`）、费率与个股同一套、
     本金视为充足。⇒ **响应形状与个股逐字段一致，无任何分流**（v1.18 的
     「元口径整族置 null + 不适用声明」已整体摘除）；指数回测的目的就是看
-    信号质量，假想仓位不影响判据。口径上只在 `disclosures` 末尾追加一句
-    「指数按个股假想」（假设必须披露的惯例，与前复权 / T+0 同类）。
-  - 出场原因是**三选一**（止损 / 保本(1R) / 跟踪止盈），文案由
+    信号质量，假想仓位不影响判据。口径披露落在**前端横幅 + `Backtest.Report.caliber_lines`**
+    两处（假设必须披露的惯例，与前复权 / T+0 同类）；面板底部的 `_disclosures()`
+    **恒为两条**、指数不追加 —— 再写一遍与横幅重复（见 `_disclosures()` 自身 docstring）。
+  - 出场原因是**三选一**（止损 / 保本 / 跟踪止盈），文案由
     `Backtest.Report.exit_reason_labels()` 生成并随响应下发（`exit_reason_labels` /
     `exit_reason_legend`）⇒ 前端**不硬编码**任何 reason 文案，与 `python -m
     Backtest.Runner` 的控制台摘要永远是同一份。逐笔的 `exit_reason` 仍是引擎原值
@@ -220,10 +221,13 @@ def compute_stock_backtest(code: str, body: Dict[str, Any]) -> Dict[str, Any]:
     #    取数层的 A 股指数段判定）—— 用后者会漏 88xxxx，与 `meta.is_index`
     #    自相矛盾。判定结果注入 `Runner.run(is_index=...)`：`Backtest/` 禁
     #    import `App`（§5.9 R31 层表），故判定只能在 App 层做、在 Backtest 层
-    #    消费。**消费点只有两处**：① sizing 强制 `DEFAULT_LOT`（`shares_for`
-    #    的 `is_index` 参数，1 手 = 100 股统一）② disclosures 追加「按个股
-    #    假想」一句 —— v1.18 的「元口径整族置 null」分流已整体摘除（v2.2），
-    #    响应与个股逐字段一致。
+    #    消费。**消费点**：① sizing 强制 `DEFAULT_LOT`（`shares_for` 的
+    #    `is_index` 参数，1 手 = 100 股统一）；② 本函数内 `caliber.min_lot /
+    #    lot_step` 同样强制 `DEFAULT_LOT`（与 sizing 同源，保证显示值与真实
+    #    股数算式一致）；③ `target.is_index` / `caliber.is_index` 两个标注字段；
+    #    ④ 前端横幅 + `Backtest.Report.caliber_lines` 的「指数按个股假想」披露
+    #    （面板底部 `_disclosures()` 不追加）。v1.18 的「元口径整族置 null」
+    #    分流已整体摘除（v2.2），响应与个股逐字段一致。
     is_index = bool(_app_is_index(market, num))
 
     # `[L, R]` = 页面加载序列的首尾（§4.4：所见即所测）。传进去而不是留 None：

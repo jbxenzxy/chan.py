@@ -5463,7 +5463,7 @@
         function _btCol(x) { return Number(x) >= 0 ? "#FF3C3C" : "#00F0F0"; }   // 涨红跌绿（与统计面板同款）
         // `_btNA`（指数页「不适用」徽章）已随 2026-10-06「指数当个股」拍板删除：
         //   字段与个股完全一致地下发与渲染，不再有任何「不适用」分流；指数的假设
-        //   由口径披露行说明（横幅 + disclosures）。
+        //   由口径披露行说明（前端横幅 + Report.caliber_lines；面板底部 disclosures 不追加）。
         // 2026-10-06 补充裁定：正值**不带 + 号**（红/灰都不带）—— 正负由颜色表达，
         //   符号再表达一遍是冗余；负数自带的 `-` 号保留。
         function _btPct(x, nd) {
@@ -5530,7 +5530,7 @@
 
         function renderBacktest(d) {
             var s = d.summary || {}, run = d.run || {}, cal = d.caliber || {}, tgt = d.target || {};
-            // 出场原因三选一（止损 / 保本(1R) / 跟踪止盈）的文案由**后端下发**
+            // 出场原因三选一（止损 / 保本 / 跟踪止盈）的文案由**后端下发**
             //   （SSOT = Backtest/Report.py::exit_reason_labels，与 `python -m Backtest.Runner`
             //   的控制台摘要同一份）。前端不硬编码任何 reason 文案；查不到的 key **原样显示**
             //   —— 宁可露出一个英文标识符，也不要把没见过的原因静默吞掉。

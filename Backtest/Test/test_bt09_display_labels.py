@@ -27,6 +27,8 @@ v1.18 的两条**显示契约**（2026-10-05 用户裁定），⑩ 的含浮口�
   ① 标签映射三键值 + 键序 ≡ `EXIT_REASON_ORDER`（稳定顺序，前端不必再排一次）
   ② 名称**静态**：`breakeven_trigger_r` 改 1.5 后三选一文案逐字不变、且不含数字
   ③ 图例三条非空、与标签同源取参、且不含 Markdown 强调符（`**` 会原样吐到页面上）
+  ③b ★ 图例**双向成立**：回测双向开仓、图例每轮一份 ⇒ 三条都必须同时给出多空两支
+      （「跌破」/「入场价 − R」/「抬到上方」这类只对多头成立的写法一律红）
   ④ 引擎 reason 词表 ≡ `EXIT_REASON_ORDER`（穷举 `_phase_reason` 的 `_phase` 输入）
   ⑤ 日线切片实跑：三种原因**都真实出现过**（映射的每个键都有样本覆盖，不是死配置）
   ⑥ 「分原因」摘要行印中文标签（不再出现 `sl:` / `breakeven:` / `trailing:`）
@@ -213,8 +215,29 @@ def part_labels():
     check("③ 图例与标签**分工**：名称静态（②已钉）、带数字的解释全在图例",
           "1R" not in lab["breakeven"] and "1.5R" in lg15["breakeven"],
           "label=%r legend=%r" % (lab["breakeven"], lg15["breakeven"]))
-    check("③ 图例把「保本保护线在入场价上方 0.5R」写出来了（1R 是阈值、不是线位）",
+    check("③ 图例把「保本保护线位置 = 入场价 ± 0.5R」写出来了（1R 是阈值、不是线位）",
           "0.5R" in lg["breakeven"], "legend=%r" % lg["breakeven"])
+
+    # ③b ★ 图例**双向成立**（2026-10-06 追加）：回测是**双向开仓**的（`m30` 切片末尾
+    #     那笔未平仓就是 `side=short`），而图例**每轮一份**、不区分多空 ⇒ 只写
+    #     「跌破」「入场价 − R」「抬到入场价上方」这类多头口径的文案，对着空头持仓读就是错的。
+    #     下面四条把「三条必须同时含多空」钉死 —— 只改标题、漏改正文的漂移会立刻红。
+    check("③b ★ 图例三条都同时写了多空两支（不许只对多头成立）",
+          all(("多头" in v and "空头" in v) for v in lg.values()), "legend=%r" % lg)
+    check("③b ★ 触发动词双向：多空各自的「跌破 / 涨破」都出现（旧文案只有「跌破」）",
+          "跌破" in lg["sl"] and "涨破" in lg["sl"], "sl=%r" % lg["sl"])
+    check("③b ★ sl 图例同时给出两支保护价（多头 入场价 − R、空头 入场价 + R）",
+          "多头 入场价 − R" in lg["sl"] and "空头 入场价 + R" in lg["sl"],
+          "sl=%r" % lg["sl"])
+    check("③b ★ 保本线两侧随方向翻转（多空各取相反的一侧，不共用同一个词）",
+          ("多头在入场价上方" in lg["breakeven"]
+           and "空头在入场价下方" in lg["breakeven"])
+          or ("多头在入场价下方" in lg["breakeven"]
+              and "空头在入场价上方" in lg["breakeven"]),
+          "breakeven=%r" % lg["breakeven"])
+    check("③b ★ 保本图例用双向动词「收紧到」（「抬到」只对多头成立）",
+          "收紧到" in lg["breakeven"] and "抬到" not in lg["breakeven"],
+          "breakeven=%r" % lg["breakeven"])
 
     # ④ 引擎词表 ≡ 报告层映射键 —— 引擎哪天多一相而报告层没跟，这里立刻红
     from Trading.Infra.Records import ExitPlan

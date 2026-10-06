@@ -218,10 +218,10 @@ class RunResult:
     freq: str
     start_dt: Optional[str] = None
     target_dt: Optional[str] = None
-    is_index: bool = False               # 标的是指数（不可交易）⇒ 金额/成本口径不适用
+    is_index: bool = False               # 标的是指数（按个股假想）⇒ sizing 强制 DEFAULT_LOT
     # 本轮**实际使用**的出场参数（`run()` 写入，含调用方覆盖）⇒ 报告/文案据此自述口径。
     # `None` = 未指定（手搓的 RunResult）⇒ 报告层回落 `STOCK_EXIT_PARAMS`。
-    # 为什么必须带着走：口径行与「保本(1R)」里的那个数都从这里取，否则
+    # 为什么必须带着走：口径行与「保本」图例里的阈值都从这里取，否则
     # 调用方换了参数、报告仍印常量，正是"报告与结果不符"而又没人看得见。
     exit_params: Optional[Dict[str, Any]] = None
     bars_total: int = 0
@@ -352,7 +352,7 @@ def run(
       `88xxxx` 板块指数 / `ds` 中证扩展指数 / `hk` 字母代码，并驱动 `meta.is_index`
       与前端「成分股」置灰）。
       若本层自己按 code 段判一份，就会出现 `sh880491` 这种：`meta.is_index=True`
-      （成分股按钮置灰）而回测面板不显示「不适用」的**自相矛盾**。
+      （成分股按钮置灰）而回测面板按非指数处理（sizing 走 `lot_rule` 前缀分支）的**自相矛盾**。
       ⇒ 判定归调用方（App 层），本层只消费。
       代价：`python -m Backtest.Runner` 单跑指数时要显式加 `--is-index`
       （CLI 无法自行判定，同上理由）。
@@ -384,7 +384,7 @@ def run(
         target_dt=(None if target_dt is None else str(target_dt)),
         is_index=is_idx,
         # `params` 就是交给 `LayeredExitPolicy` 的那一份（含调用方覆盖）——
-        # 带着走，报告层的口径行 / 「保本(1R)」文案才能自述"这次用的是哪套参数"。
+        # 带着走，报告层的口径行 / 「保本」图例文案才能自述"这次用的是哪套参数"。
         exit_params=dict(params),
     )
 
@@ -488,7 +488,7 @@ def _mark_open_positions(result: RunResult, last_bar) -> None:
       · 已实现字段（`r_multiple` / `net_return` / `exit_reason` / `exit_date` /
         `bars_held` / `cost_cash`）**一律不碰**：`Metrics` 只吃 `closed` 且按
         `net_return` 符号判胜负，填了就是把没平的仓位先算进胜率。
-      · 指数标的的净收益率同样"不适用"，但那是 App 层的分流（`_amt`）——
+      · 指数标的的净收益率照常按同一套算式算（v2.2 定案「指数当个股」；v1.18 的 App 层置 `null` 分流已摘除）——
         本层照常算（与 `is_index` 只标注不计算的原则一致）。
     """
     if last_bar is None:
@@ -569,7 +569,7 @@ def _main(argv=None) -> int:
     ap.add_argument("--bsp-types", default=None,
                     help="只放行这些类型，逗号分隔，如 0,3（默认全放行）")
     ap.add_argument("--is-index", dest="is_index", action="store_true",
-                    help="标的是指数（不可交易）⇒ 报告里金额/成本口径标「不适用」。"
+                    help="标的是指数（按个股假想：1 点 = 1 元、1 手 = 100 股）⇒ 报告口径行追加「指数按个股假想」披露。"
                          "CLI 无法自行判定，须显式给（页面侧由 App/AppBacktest 注入）")
     ap.add_argument("--csv", default=None, help="把逐笔清单写到该 CSV")
     args = ap.parse_args(argv)
