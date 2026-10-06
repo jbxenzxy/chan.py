@@ -263,6 +263,11 @@
                 <label style="cursor:pointer;"><input type="radio" name="scan-mode" value="fangliang" onchange="updateScanRecentDisabled()" style="accent-color:#e94560;margin-right:4px;">放量</label>
                 <label style="cursor:pointer;"><input type="radio" name="scan-mode" value="fx_d" onchange="updateScanRecentDisabled()" style="accent-color:#e94560;margin-right:4px;">底分型</label>
                 <label style="cursor:pointer;"><input type="radio" name="scan-mode" value="bsp" onchange="updateScanRecentDisabled()" style="accent-color:#e94560;margin-right:4px;">买/卖点</label>
+                <!-- 回测扫描：对来源内每票跑一遍与页面「回测」按钮同一套内核，
+                     结果按期望值(%/笔)降序。用不到「最近N根」（整条序列参与
+                     回测，同 updateScanRecentDisabled 里置灰），但**扫描来源与
+                     扫描周期照常可用** —— 这正是它区别于标注扫描的地方。 -->
+                <label style="cursor:pointer;"><input type="radio" name="scan-mode" value="backtest" onchange="updateScanRecentDisabled()" style="accent-color:#e94560;margin-right:4px;">回测</label>
             </div>
             <div class="annotation-dialog-btns">
                 <button class="annotation-dialog-btn primary" onclick="scanModeDialogConfirm()">确认</button>
@@ -356,6 +361,6 @@
             </div>
         </div>
     </aside>
-    <script src="app.js?v=65"></script>
+    <script src="app.js?v=66"></script>
 
 </body></html>

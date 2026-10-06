@@ -732,7 +732,8 @@ class Scanner:
         }
 
     # ── 单只扫描 ─────────────────────────────────────────────────────
-    def scan_one(self, code, freq="d", prefix="", recent="1", source="zxg", mode=""):
+    def scan_one(self, code, freq="d", prefix="", recent="1", source="zxg", mode="",
+                 bsp_types=None):
         """扫描单只股票（唯一调用方：AppScanPool._worker_scan_one，worker 进程内）
 
         并发安全不依赖锁，而是三层隔离：
@@ -740,6 +741,13 @@ class Scanner:
           · 数据注入  —— CChan 构建经 tdx_data_context 每请求线程局部注入；
           · 缓存操作  —— app_data.cache_* 各自持 stocks_cache_lock。
         （本模块顶部注释记录了为何不需要该锁）
+
+        bsp_types: `mode=""`（买/卖点扫描，默认模式）与 `mode="backtest"` 两处消费
+        —— 页面「设置 → 买卖点类型」的勾选串（如 `"0,3"`）。两处都是**事前过滤**
+        且与单页「回测」按钮同源（§4.7.3 共用一份 bspFilter），所以"扫描模式选
+        回测还是买/卖点"得到的是同一个门。`None` = 未启用过滤（全放行）与
+        `""` = 四类全不勾（零命中 / 零成交）是两种**不同**语义，透传时不得合并
+        （口径详注见 App/AppBacktest.py）。其余模式不消费该参数。
         """
         t_scan_start = time.time()
         try:
@@ -890,23 +898,100 @@ class Scanner:
                     "a_is_rise": a_is_rise,
                 }
 
+            # ── 回测扫描模式 ──
+            # 对每票跑一遍与页面「回测」按钮**同一套内核**（App/AppBacktest），
+            # 把页面那次请求的输入整体搬到 worker 里：K 线直接复用本函数上面
+            # `analyze_stock` 的加载序列（与页面送上去的 `chartData.klines`
+            # 同源、同 lookback 派生），**不二次取数**。
+            #
+            # 与页面回测的唯一口径差异（需在结果面板披露）：扫描时没有"当前
+            # 页面"，故区间恒取 lookback 配置的最新 N 根；页面若正处**复盘 /
+            # 选点**态，其加载序列会被截断，同一票两边数字可以不同。
+            #
+            # `recent` 对本模式无意义（弹窗中该输入框置灰），整条序列参与回测。
+            if mode == "backtest":
+                market_code = (market + code) if market else code
+                if not market:
+                    # prefix 缺失（正常清单不会出现）：按裸代码推断市场，
+                    # 别让一票的代码形态问题变成一次"回测失败"。
+                    from App import AppUtils as _u
+                    _mkt, _bare = _u._get_stock_market_code(code)
+                    if _mkt:
+                        market_code = _mkt + _bare
+                from App.AppBacktest import compute_stock_backtest
+                try:
+                    bt = compute_stock_backtest(
+                        market_code,
+                        {"freq": freq, "klines": klines, "bsp_types": bsp_types},
+                    )
+                except Exception as exc:  # noqa: BLE001 —— 单票收敛为"跳过"
+                    # 新股 / 停牌票的 klines 为空或不足会让内核抛 BadRequestError。
+                    # 这是**数据问题不是批量故障**，按跳过处理并计入既有"跳过 N 只"
+                    # 汇总（否则一票缺数据会让整批扫描以"扫描失败"收场）。
+                    append_scan_skip(f"{code} - 回测跳过: {exc}")
+                    t_total = time.time() - t_scan_start
+                    log.info(f"[耗时-扫描-回测] {code} 跳过: {exc}, 总{t_total:.3f}s")
+                    return {"code": market_code, "error": f"回测跳过: {exc}"}
+
+                _tgt = bt.get("target") or {}
+                _run = bt.get("run") or {}
+                _sum = bt.get("summary") or {}
+                t_filter = time.time() - t0
+                t_total = time.time() - t_scan_start
+                log.info(f"[耗时-扫描-回测] {code} 总{t_total:.3f}s(分析{t_analyze:.3f}s "
+                         f"回测{t_filter:.3f}s) 成交{_run.get('filled')}笔 "
+                         f"期望{_sum.get('avg_net_return_pct')}")
+                # ⚠ K 线缓存**不删**（与 bsp / fx_d / fangliang 的轻过滤模式相反）：
+                # 本模式是重计算（CChan + Runner + Metrics），缓存留着供用户
+                # 点开大图时直接复用，删了等于把刚算完的东西扔掉。
+                return {
+                    "code": market_code, "name": stock_name,
+                    "freq": freq,
+                    "bars": int(_tgt.get("bars") or 0),
+                    "date_from": _tgt.get("date_from"),
+                    "date_to": _tgt.get("date_to"),
+                    "filled": int(_run.get("filled") or 0),
+                    "closed": int(_run.get("closed") or 0),
+                    "still_open": int(_run.get("still_open") or 0),
+                    "win_rate": _sum.get("win_rate"),
+                    "avg_net_return_pct": _sum.get("avg_net_return_pct"),
+                    "profit_loss_ratio": _sum.get("profit_loss_ratio"),
+                    "profit_factor": _sum.get("profit_factor"),
+                    "expectancy_r": _sum.get("expectancy_r"),
+                }
+
             # ── 买卖点扫描模式 ──
+            # 买卖点类型过滤（与「设置 → 买卖点类型」同口径）：
+            #   **事前过滤** —— 不通过的类型不进候选，连"最新买卖点是买还是卖"
+            #   的判定都不参与（§4.7.3 定案：放行后再滤 = 事后过滤 ⇒ 被拒类型
+            #   会间接影响放行类型）。
+            #   判据复用 `Backtest.Filter.bsp_type_allowed` —— 它与 Trading 引擎的
+            #   `_bsp_type_allowed` 逐字同源、由 `Trading/Test/test_p59_bsp_type_filter.py`
+            #   钉住，也与前端 `drawBspMarkers` 的显示口径一致 ⇒
+            #   **图上画的 = 扫描扫的 = 自动下单用的**，三者过同一条门。
+            #   `bsp_types=None`（页面四类全勾 = 未启用过滤）⇒ 全放行；`""`（四类
+            #   全不勾）⇒ 一条点都收不到（命中数天然为 0），二者语义相反不可合并。
+            from Backtest.Filter import bsp_type_allowed, filter_from_choices
+            _bsp_filt = None if bsp_types is None else filter_from_choices(bsp_types)
             recent_dates = set()
             for k in klines[-recent_days:]:
                 recent_dates.add(k.get("date", ""))
             buy_points = []
             sell_points = []
             for bsp in bsps:
-                if bsp.get("date", "") in recent_dates:
-                    point = {
-                        "type": bsp.get("type", ""),
-                        "price": bsp.get("price", 0),
-                        "date": bsp.get("date", ""),
-                    }
-                    if bsp.get("is_buy", False):
-                        buy_points.append(point)
-                    else:
-                        sell_points.append(point)
+                if bsp.get("date", "") not in recent_dates:
+                    continue
+                if not bsp_type_allowed(bsp.get("type", ""), _bsp_filt):
+                    continue
+                point = {
+                    "type": bsp.get("type", ""),
+                    "price": bsp.get("price", 0),
+                    "date": bsp.get("date", ""),
+                }
+                if bsp.get("is_buy", False):
+                    buy_points.append(point)
+                else:
+                    sell_points.append(point)
             has_points = buy_points or sell_points
 
             below_ma120 = False
@@ -1015,18 +1100,22 @@ class Scanner:
     # 共享结果经 SQLite AppScanStore 跨进程。
 
     def submit_batch_scan(self, stocks, freq="d", mode="", recent="1", source="zxg",
-                          scan_token=None):
+                          scan_token=None, bsp_types=None):
         """提交批量扫描 → {task_id, total}（薄封装，委托 AppScanPool）
 
         stocks: [{code, prefix, _source}, ...]（scan_stock_list 合并列表）。
         任务在 ProcessPool 异步执行，进度经 get_batch_scan_status 轮询。
+
+        bsp_types: 买/卖点扫描与回测扫描消费的买卖点类型勾选串，随请求透传到
+        worker（口径同单页回测，见 scan_one）。
 
         scan_token：本次扫描的会话标识（由 start() 返回）。池的收割线程
         只拿得到 task_id，故在此绑定 task_id → scan_token，让它能把跳过
         记录写回**发起它的那一次扫描**而非全局。
         """
         from App.AppScanPool import submit_batch_scan as _submit
-        result = _submit(stocks, freq=freq, mode=mode, recent=recent, source=source)
+        result = _submit(stocks, freq=freq, mode=mode, recent=recent, source=source,
+                         bsp_types=bsp_types)
         task_id = result.get("task_id") if isinstance(result, dict) else None
         if task_id and scan_token:
             # 未传 token 的旧客户端无需绑定：append_scan_skip 会回退到

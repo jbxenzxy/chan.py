@@ -212,7 +212,7 @@
 
         let _scanTaskId = null; // 当前批量扫描 task_id（中止时立即经 /api/stocks/scan/{task_id}/cancel 传播）
 
-        let _scanMode = "ann"; // "ann" = 标注扫描, "ma" = 均线分类扫描, "fangliang" = 放量扫描, "fx_d" = 底分型扫描, "bsp" = 买卖点扫描
+        let _scanMode = "ann"; // "ann" = 标注扫描, "ma" = 均线分类扫描, "fangliang" = 放量扫描, "fx_d" = 底分型扫描, "bsp" = 买卖点扫描, "backtest" = 回测扫描
 
         let _scanRecentDays = 1; // 最近N根K线，默认1
 
@@ -5446,10 +5446,13 @@
                              : (futures ? "" : "回测当前页面标的与周期（区间所见即所测）");
         }
 
-        // 买卖点类型勾选（与自动下单 / 成交统计共用同一份 bspFilter，§4.7.3）：
+        // 买卖点类型勾选（与自动下单 / 成交统计 / 股票扫描共用同一份 bspFilter，
+        //   §4.7.3）：
         //   全勾 = 未启用过滤 → 不传 bsp_types（后端 None = 全放行）；
         //   四类全不勾 → 传空串（后端 "" = 全部过滤掉）。二者是**不同语义**，
         //   合并会让"全不勾"静默变成"全放行"，恰好相反。
+        //   消费方 = 单页「回测」+ 扫描的「买/卖点」与「回测」两个模式；三者
+        //   取的是同一个函数的返回值，故过滤口径不会漂移。
         function _btBspTypes() {
             var on = ["0", "1", "2", "3"].filter(function (t) { return !!bspFilter[t]; });
             return on.length === 4 ? null : on.join(",");
@@ -5973,7 +5976,10 @@
         // 扫描模式切换时，控制"最近N根"输入框的灰化状态
         // 标注扫描：只要有标注就命中，与日期无关，输入框置灰；扫描来源也置灰
         // 底分型扫描：找最后一个分型是底分型的个股，与日期无关，输入框置灰；扫描来源可用
-        // 买卖点扫描：需要按最近N根K线过滤，输入框可用
+        // 均线分类扫描：按最新收盘价分类，与日期无关，输入框置灰；扫描来源可用
+        // 回测扫描：整条加载序列参与回测，与"最近N根"无关，输入框置灰；
+        //           扫描来源与扫描周期**都可用**（回测必须知道扫谁、按什么周期扫）
+        // 买卖点/放量扫描：需要按最近N根K线过滤，输入框可用
         function updateScanRecentDisabled() {
             var row = document.getElementById("scan-recent-row");
             var input = document.getElementById("scan-recent-days");
@@ -5982,8 +5988,9 @@
             var isAnn = selected && selected.value === "ann";
             var isMa = selected && selected.value === "ma";
             var isFxD = selected && selected.value === "fx_d";
+            var isBacktest = selected && selected.value === "backtest";
             if (row && input) {
-                if (isAnn || isMa || isFxD) {
+                if (isAnn || isMa || isFxD || isBacktest) {
                     row.style.opacity = "0.35";
                     row.style.pointerEvents = "none";
                     input.disabled = true;
@@ -6142,6 +6149,8 @@
                 document.getElementById("scan-title").textContent = freqLabel + " 放量";
             } else if (_scanMode === "fx_d") {
                 document.getElementById("scan-title").textContent = freqLabel + " 底分型";
+            } else if (_scanMode === "backtest") {
+                document.getElementById("scan-title").textContent = freqLabel + " 回测";
             } else {
                 // 标注扫描：显示全周期，不再显示当前周期
                 document.getElementById("scan-title").textContent = "全周期 标注";
@@ -6167,7 +6176,7 @@
             // 从 localStorage 恢复上次的选择
             try {
                 var savedMode = localStorage.getItem("scan_mode");
-                if (savedMode === "bsp" || savedMode === "ann" || savedMode === "ma" || savedMode === "fx_d" || savedMode === "fangliang") {
+                if (savedMode === "bsp" || savedMode === "ann" || savedMode === "ma" || savedMode === "fx_d" || savedMode === "fangliang" || savedMode === "backtest") {
                     _scanMode = savedMode;
                     var radio = document.querySelector('input[name="scan-mode"][value="' + savedMode + '"]');
                     if (radio) radio.checked = true;
@@ -6268,11 +6277,30 @@
         // 增量游标：since 按 row.seq + 1 推进（>= 语义含首行），
         // 避免全量回传 O(n²)；轮询失败退避重试：连续 3 次熔断，
         // 不因单次网络抖动丢弃已扫描结果。
+        // 提交体构造（独立成函数，让 bsp_types 的"带 / 不带"规则可被单独断言）：
+        //   · `null` / `undefined`（页面四类全勾 = 未启用过滤）→ **不带该字段**，
+        //     后端收到 None = 全放行；
+        //   · `""`（四类全不勾）→ 如实带上，后端收到 "" = 全部过滤掉
+        //     （买/卖点扫描零命中、回测扫描零成交）。
+        //   两者语义**相反**，用 `if (opts.bsp_types)` 合并会把"全不勾"静默
+        //   变成"全放行" —— 与单页回测 `_btBspTypes()` 是同一条坑（该函数的
+        //   口径说明见 App/AppBacktest.py）。买/卖点扫描与回测扫描都消费它。
+        function _scanSubmitBody(stocks, opts) {
+            var body = {
+                stocks: stocks,
+                freq: opts.freq || "d",
+                mode: opts.mode || "",
+                recent: (opts.recent != null) ? String(opts.recent) : "1",
+                source: opts.source || "zxg",
+                scan_token: opts.scan_token || ""
+            };
+            if (opts.bsp_types !== undefined && opts.bsp_types !== null) {
+                body.bsp_types = opts.bsp_types;
+            }
+            return body;
+        }
+
         function _asyncScanAll(stocks, opts, onData, onDone) {
-            var freq = opts.freq || "d";
-            var mode = opts.mode || "";
-            var recent = (opts.recent != null) ? String(opts.recent) : "1";
-            var source = opts.source || "zxg";
             var pollTimer = null;
             var stopped = false;
             var failCount = 0;
@@ -6289,11 +6317,7 @@
             fetch("/api/stocks/scan/submit", {
                 method: "POST",
                 headers: {"Content-Type": "application/json"},
-                body: JSON.stringify({
-                    stocks: stocks, freq: freq, mode: mode,
-                    recent: recent, source: source,
-                    scan_token: opts.scan_token || ""
-                })
+                body: JSON.stringify(_scanSubmitBody(stocks, opts))
             })
             .then(function(r) { return r.json(); })
             .then(function(sub) {
@@ -6558,7 +6582,7 @@
                         // 提交到后端执行池，轮询增量结果
                         // （单票响应同形，模式过滤/渲染逻辑零改动）
                         btn.textContent = "中断扫描";
-                        _asyncScanAll(stocks, {freq: freq, mode: spec.mode, recent: spec.recent, source: _scanSources.join(","), scan_token: scanToken}, function(data) {
+                        _asyncScanAll(stocks, {freq: freq, mode: spec.mode, recent: spec.recent, source: _scanSources.join(","), bsp_types: spec.bsp_types, scan_token: scanToken}, function(data) {
                             completed++;
                             if (data.skipped) { skipped++; }
                             else if (data.error) { skipped++; }
@@ -6693,6 +6717,37 @@
                 return;
             }
 
+            // backtest：回测扫描 —— 对「扫描来源」内每票，按「扫描周期」跑一遍与
+            // 页面「回测」按钮**同一套内核**（后端 scan_one 复用同一份 klines 加载
+            // 序列调 AppBacktest），结果按期望值(%/笔)从大到小排。
+            if (_scanMode === "backtest") {
+                runScan({
+                    mode: "backtest",
+                    // recent 对本模式无意义（弹窗里该输入框已置灰）：整条加载序列
+                    // 参与回测。这里传 "1" 只是满足提交体的字段形态，后端忽略它。
+                    recent: "1",
+                    errLabel: "回测扫描",
+                    // 买卖点类型过滤：与页面「回测」按钮同一口径（§4.7.3 共用
+                    // bspFilter）。`null`（四类全勾 = 未启用过滤）不带该字段，
+                    // `""`（全不勾）如实带 —— 二者语义相反，见 _scanSubmitBody。
+                    bsp_types: _btBspTypes(),
+                    initialSummary: function(preSkipped, total) {
+                        return '<div class="scan-loading"><div class="spinner"></div><br>正在回测 0/' + total + '，跳过 ' + preSkipped + ' 只，有成交 0 只</div>';
+                    },
+                    progressLine: function(completed, total, preSkipped, skipped, results) {
+                        return '<div class="scan-loading"><div class="spinner"></div><br>正在回测 ' + (completed + "/" + total) + '，跳过 ' + (preSkipped + skipped) + ' 只，有成交 ' + results.length + ' 只</div>';
+                    },
+                    // 只收「至少 1 笔成交」的票（用户裁定）：0 笔的票没有期望值可读，
+                    // 混在列表里只会稀释信噪比。"跳过"仍按既有口径单列。
+                    classify: function(data) { return (data.filled || 0) >= 1; },
+                    renderRows: function(results) { return _renderBacktestRows(results); },
+                    renderFinal: function(results, total, skipped, interrupted) {
+                        renderBacktestScanResults(results, total, skipped, interrupted);
+                    }
+                });
+                return;
+            }
+
             // fangliang：放量扫描（最近 N 根内成交额最大者为 A，且 A 大于前 120 根峰值）
             if (_scanMode === "fangliang") {
                 runScan({
@@ -6735,6 +6790,12 @@
                 mode: "",
                 recent: _scanRecentDays,
                 errLabel: "买卖点扫描",
+                // 买卖点类型过滤：与「设置 → 买卖点类型」同口径（2026-10-06 用户
+                // 拍板）—— 判据在后端复用 Backtest.Filter.bsp_type_allowed（与
+                // Trading 引擎 `_bsp_type_allowed` 逐字同源），故**图上画的 =
+                // 扫描扫的 = 自动下单用的**。与「回测扫描」走同一个 _btBspTypes()，
+                // 两个模式因此行为一致。四态语义见 _scanSubmitBody。
+                bsp_types: _btBspTypes(),
                 initialSummary: function(preSkipped, total) {
                     return '<div class="scan-loading"><div class="spinner"></div><br>正在扫描 0/' + total + '，跳过 ' + preSkipped + ' 只，买点 0 只，卖点 0 只</div>';
                 },
@@ -6840,6 +6901,11 @@
                 if (isLatestBspBuy(results[i])) { buyCount++; } else { sellCount++; }
             }
             var html = '<div class="scan-summary">' + sourceLabel + ' <b>' + total + '</b> 只，跳过 <b>' + skipped + '</b> 只，扫描 <b>' + (total - skipped) + '</b> 只，买点 <b>' + buyCount + '</b> 只，卖点 <b>' + sellCount + '</b> 只' + label + '</div>';
+            // 买卖点类型口径披露：扫描按它做**事前过滤**（后端同一门）。
+            //   不写出来的话，勾选被改过 / 全不勾时用户只会看到"图上有买卖点、
+            //   扫描却没扫到"，然后当成 bug 来查。
+            html += '<div class="scan-summary" style="font-size:10px;color:#7a8399;">'
+                + '买卖点类型：' + statsEsc(_btBspTypesLabel(_btBspTypes())) + '</div>';
             if (results.length === 0) {
                 html += '<div class="scan-no-result">当前周期下未发现买卖点股票</div>';
             } else {
@@ -6960,6 +7026,98 @@
                     html += '<span class="scan-col-tags">' + buildFangliangTagHtml(r) + '</span>';
                     html += '</div>';
                 }
+            }
+            body.innerHTML = html;
+            updateScanSaveBtn();
+        }
+
+        // ── 回测扫描（backtest 模式）────────────────────────────────────
+        // 买卖点类型过滤的中文披露：取值直接来自页面的 _btBspTypes()，**不重算** ——
+        //   重算一份必然与提交给后端的那个串漂移（那里才是真口径）。
+        function _btBspTypesLabel(types) {
+            if (types === null || types === undefined) return "全部（未启用过滤）";
+            if (types === "") return "全不勾（不会有任何成交）";
+            return String(types).split(",").map(function(t) {
+                return t.trim() + "类";
+            }).join("、");
+        }
+
+        // 期望值取值：后端 `avg_net_return_pct` 已是百分数（已 ×100，见
+        //   App/AppBacktest._pct），前端不再乘。区分 `null`（一笔都没平仓 ⇒
+        //   期望值不可算）与 0（可算且为零）—— 排序与配色都要分开处理。
+        function _btExpect(r) {
+            var v = (r || {}).avg_net_return_pct;
+            return (v === null || v === undefined) ? null : Number(v);
+        }
+
+        // 结果行渲染（进度期与终态**共用同一份**，避免两处漂移）
+        //   列：股票名 · 代码 · 笔数 · 期望值(%/笔)
+        //   排序：期望值从大到小；`null`（一笔都没平仓）沉底，不混在有值中间。
+        function _renderBacktestRows(results) {
+            var html = _scanMarketSummaryHtml(results);
+            results.sort(function(a, b) {
+                var x = _btExpect(a), y = _btExpect(b);
+                if (x === null && y === null) return 0;
+                if (x === null) return 1;                 // 无值一律排在有值之后
+                if (y === null) return -1;
+                return y - x;
+            });
+            for (var i = 0; i < results.length; i++) {
+                var r = results[i];
+                var exp = _btExpect(r);
+                // 区间 / 笔数拆解放悬停：列宽有限，塞进行里会挤掉期望值
+                var tip = (r.date_from && r.date_to)
+                    ? ("回测区间 " + r.date_from + " ~ " + r.date_to + "（" + r.bars + " 根）"
+                       + "，成交 " + r.filled + " 笔（已平 " + r.closed + " / 持仓 " + r.still_open + "）")
+                    : "点击查看K线图";
+                html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\', \'' + _scanFreq + '\')" title="' + statsEsc(tip) + '">';
+                // 默认勾选规则（用户裁定）：期望值 > 0 —— 跑完一键把正期望的票存进自选。
+                //   无值（还有未平仓笔）**不勾**：那是"还没结果"，不是"结果为正"。
+                html += chkBox(r.code, exp !== null && exp > 0);
+                html += '<span class="scan-col-name">' + statsEsc(r.name || r.code) + '</span>';
+                html += '<span class="scan-col-code">' + statsEsc(r.code) + '</span>';
+                html += '<span class="scan-col-btcount">' + r.filled + ' 笔</span>';
+                html += '<span class="scan-col-expect" style="color:'
+                    + (exp === null ? "#8b93a7" : _btCol(exp)) + '">'
+                    + (exp === null ? "—" : _btPct(exp)) + '</span>';
+                html += '</div>';
+            }
+            return html;
+        }
+
+        // 回测扫描结果渲染（终态）
+        function renderBacktestScanResults(results, total, skipped, interrupted) {
+            var body = document.getElementById("scan-body");
+            var label = interrupted ? "（已中断）" : "";
+            var sourceLabel = _scanSourceLabel();
+            var freqLabels = {"d": "日K", "w": "周K", "30m": "30分", "15m": "15分", "5m": "5分"};
+            var freqLabel = freqLabels[_scanFreq] || _scanFreq;
+            var posCount = 0, naCount = 0;
+            for (var i = 0; i < results.length; i++) {
+                var e = _btExpect(results[i]);
+                if (e === null) { naCount++; }
+                else if (e > 0) { posCount++; }
+            }
+            var html = '<div class="scan-summary">' + sourceLabel + ' <b>' + total
+                + '</b> 只，跳过 <b>' + skipped + '</b> 只，回测 <b>' + (total - skipped)
+                + '</b> 只，有成交 <b>' + results.length + '</b> 只（期望 > 0 <b>' + posCount + '</b> 只'
+                + (naCount > 0 ? '，未平仓 ' + naCount + ' 只' : '') + '）' + label + '</div>';
+            // 口径披露行：**必须披露** —— 扫描回测取的是后端 lookback 的最新 N 根，
+            //   而页面若处「复盘 / 选点」态，单页回测的加载序列会被截断，同一票两处
+            //   数字会不一样；不写清楚，日后必然被当成"回测有 bug"来查。
+            if (results.length > 0) {
+                var r0 = results[0];
+                html += '<div class="scan-summary" style="font-size:10px;color:#7a8399;">'
+                    + freqLabel + ' · 区间：最新 ' + r0.bars + ' 根（截至 '
+                    + statsEsc(r0.date_to || "—") + '）'
+                    + ' · 买卖点类型：' + statsEsc(_btBspTypesLabel(_btBspTypes()))
+                    + '</div>';
+            }
+            if (results.length === 0) {
+                html += '<div class="scan-no-result">当前周期下没有股票产生成交'
+                    + (skipped > 0 ? '（另有 ' + skipped + ' 只被跳过）' : '') + '</div>';
+            } else {
+                html += _renderBacktestRows(results);
             }
             body.innerHTML = html;
             updateScanSaveBtn();

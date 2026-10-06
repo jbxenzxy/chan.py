@@ -749,6 +749,17 @@ COMPONENTS = [
     # 双窗禁用、市场态切换收面板、首同步不关、toggleStats 分流）。
     ("stock_backtest",
      [sys.executable, os.path.join("Test", "test_stock_backtest.py")]),
+    # 回测扫描（扫描模式 "backtest"）：对「扫描来源 × 扫描周期」逐票跑一遍与
+    # 单页回测**同一套内核**，结果按期望值(%/笔)降序。三段守护 ——
+    #   ① worker 层 `scan_one(mode="backtest")` 与 `compute_stock_backtest`
+    #      用**同一份 klines** 得逐位相等的笔数/期望值（防"另写一套算法"）；
+    #   ② bsp_types 三态（None 全放行 / "" 零成交 / 全选 ≡ None）+ 空 klines
+    #      收敛为"跳过"而非炸整批；③ 前端真函数（node 抽段）：期望值降序 +
+    #      null 沉底 / 列序 名·码·笔数·期望值 / 仅正期望默认勾选 / 涨红跌绿，
+    #      以及**弹窗置灰契约**（回测：最近N根灰，来源与周期**可用**；并附
+    #      标注模式全灰作判别力对照）+ bsp_types 全链签名与派发位置。
+    ("scan_backtest",
+     [sys.executable, os.path.join("Test", "test_scan_backtest_mode.py")]),
     # ── 暂不注册（注册即恒红 / 无拦截力，注册了门禁形同虚设）──────────
     #   Test/repro_n4_cleanup_race.py          N4 未修，且脚本只有 return 0
     #                                          （恒通过、无拦截力，须先改成

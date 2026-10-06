@@ -136,11 +136,14 @@ def _resolve_workers(app_config):
     return max(1, min(_SCAN_POOL_MAX_WORKERS, workers))
 
 
-def _worker_scan_one(task_id, code, freq, prefix, recent, source, mode, seq):
+def _worker_scan_one(task_id, code, freq, prefix, recent, source, mode, bsp_types, seq):
     """执行池 worker 函数：调用统一业务函数 scanner.scan_one，写结果到 SQLite。
 
     ⚠ 必须为模块级函数（可 pickle）。内部惰性 import，避免 spawn 导入期副作用。
     每票前检查任务中止标志（跨进程传播），不依赖进程内 _scan_aborted。
+
+    bsp_types：买/卖点扫描（mode=""）与回测扫描（mode="backtest"）消费的买卖点
+    类型勾选串（随任务透传，语义见 AppScan.scan_one；`None` 与 `""` 不可合并）。
     """
     from App.AppScanStore import get_scan_store
     store = get_scan_store()
@@ -153,7 +156,8 @@ def _worker_scan_one(task_id, code, freq, prefix, recent, source, mode, seq):
     try:
         from App.AppOrch import scanner
         result = scanner.scan_one(code, freq=freq, prefix=prefix,
-                                  recent=recent, source=source, mode=mode)
+                                  recent=recent, source=source, mode=mode,
+                                  bsp_types=bsp_types)
         if not isinstance(result, dict):
             result = {"code": code, "error": f"非字典结果: {type(result).__name__}"}
     except Exception as exc:  # noqa: BLE001 —— worker 兜底，保证 completed 收敛
@@ -295,10 +299,13 @@ def _monitor_task(task_id, futures):
         _release_scan()
 
 
-def submit_batch_scan(stocks, freq="d", mode="", recent="1", source="zxg"):
+def submit_batch_scan(stocks, freq="d", mode="", recent="1", source="zxg",
+                      bsp_types=None):
     """提交批量扫描 → task_id（薄封装入口，AppOrch.Scanner 委托）。
 
     stocks: [{code, prefix, _source}, ...]（来自 scan_stock_list 的合并列表）
+    bsp_types: 买/卖点扫描与回测扫描消费的买卖点类型勾选串（None = 全放行，
+        "" = 四类全不勾 ⇒ 零命中 / 零成交），随任务透传到 worker 内的扫描逻辑。
     返回: {task_id, total, workers, engine}。任务异步在执行池中执行，
     进度经 get_status(task_id, since) 轮询。
     """
@@ -321,6 +328,8 @@ def submit_batch_scan(stocks, freq="d", mode="", recent="1", source="zxg"):
     task_id = store.create_task(total=total, params={
         "freq": freq, "mode": mode, "recent": recent,
         "source": source, "count": total,
+        # 回测口径随任务留痕：排查"同一次扫描两页数字不同"时先看这里
+        "bsp_types": bsp_types,
     })
 
     # 池装配：失败即置任务 error 并向调用方返回，绝不把异常带出去。
@@ -353,7 +362,7 @@ def submit_batch_scan(stocks, freq="d", mode="", recent="1", source="zxg"):
                 prefix = stk.get("prefix", "")
                 src = stk.get("_source") or source
                 fut = pool.submit(_worker_scan_one, task_id, code, freq, prefix,
-                                  recent, src, mode, seq)
+                                  recent, src, mode, bsp_types, seq)
                 futures.append((fut, seq, code))
         except Exception as exc:  # noqa: BLE001 —— 派发期失败需销毁坏池自愈
             # 受限容器典型失败：队列创建失败 → 首次 submit 抛 BrokenProcessPool。

@@ -540,6 +540,21 @@
         .scan-col-ma.warn {
             color: #e94560 !important; font-weight: 600 !important;
         }
+        /* 回测扫描结果列：笔数 + 期望值(%/笔)。
+           期望值列右对齐 + tabular-nums —— 比例字体下 "3.21%" 与 "11.05%"
+           的目视长度不一致，小数点对不齐会让人误判大小（这一列就是拿来比大小的）。 */
+        .scan-col-btcount {
+            width: 46px !important; flex-shrink: 0 !important;
+            text-align: right !important; color: #8892b0 !important;
+            font-size: 11px !important; white-space: nowrap !important;
+        }
+        .scan-col-expect {
+            width: 68px !important; flex-shrink: 0 !important;
+            text-align: right !important; font-size: 11px !important;
+            font-weight: 600 !important; white-space: nowrap !important;
+            font-variant-numeric: tabular-nums !important;
+            padding-right: 2px !important;
+        }
         .scan-col-ann {
             flex: 1 1 auto !important; min-width: 0 !important;
             text-align: left !important; color: #a8b2d1 !important;
