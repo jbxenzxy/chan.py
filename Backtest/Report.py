@@ -87,7 +87,7 @@ def write_csv(result: RunResult, path: str) -> str:
 # 引擎侧 `ExitCheck.reason` 的取值**只有三种规则身份**
 # （`Trading/Strategy/Exit.py::LayeredExitPolicy._phase_reason`，2026-10-05 用户裁定为三选一）：
 #
-#   "sl"         初始止损保护线 —— L1 结构距离 / L2 (2×ATR) 取大算出的保护价，**从未被抬过**
+#   "sl"         初始止损保护线 —— L1 结构距离 / L2（atr_sl_multiple × ATR）取大算出的保护价，**从未被抬过**
 #   "breakeven"  保本保护线 —— 浮盈 **>** `breakeven_trigger_r`×R 后抬价
 #   "trailing"   跟踪保护线 —— 浮盈 **>** `win_loss_ratio`×R 后抬价
 #
@@ -114,7 +114,7 @@ def _fmt_r(v: float) -> str:
 
 
 def resolved_exit_params(exit_params: Optional[Dict[str, Any]] = None) -> Dict[str, float]:
-    """出场参数 → 四项 R 口径（缺省 / 空表 = `STOCK_EXIT_PARAMS` 经 `ExitPolicyParams` 校验）。
+    """出场参数 → 五项 R 口径（缺省 / 空表 = `STOCK_EXIT_PARAMS` 经 `ExitPolicyParams` 校验）。
 
     `None` 与 `{}` 都按"未指定"处理（空表不携带任何覆盖，与 `Runner.run` 的
     `dict(exit_params or STOCK_EXIT_PARAMS)` 同义）。
@@ -122,6 +122,13 @@ def resolved_exit_params(exit_params: Optional[Dict[str, Any]] = None) -> Dict[s
     与 `Runner.run` 同源：那边把同一份 dict 交给 `LayeredExitPolicy`，未列出的键走模型默认
     ⇒ 这里必须走**同一个模型**取默认值，不能自己抄一份 `1.0 / 0.5 / 2.0`
     （抄一份 = 多一个会漂移的事实源）。
+
+    ⚠ `atr_sl_multiple` 为什么也算「R 口径」（2026-10-06 用户裁定）：
+      `R = max(A, atr_sl_multiple × ATR)` —— **1R 的宽窄由这个倍数直接决定**
+      （它同时缩放止盈 / 保本 / 跟踪的全套 R 倍数几何）。此前本函数只回四项
+      纯 R 倍数（win_loss_ratio / trailing / breakeven_*），报告因此**看不出
+      1R 是怎么来的**：同一个 `win_loss_ratio=2.0` 在 `atr_sl_multiple` 1.0 与 2.0
+      下对应完全不同的止损宽度。补进这一项后，口径行能把 R 的两个来源都印出来。
 
     惰性 import `Trading.Strategy.Exit`：`Trading/Config.py` 在导入期构造整个 DEFAULT_CONFIG，
     `.env` 笔误会让 import 失败 ⇒ 不能放在本模块顶层（层表允许 `Trading.Strategy`，见 §5.1）。
@@ -136,6 +143,7 @@ def resolved_exit_params(exit_params: Optional[Dict[str, Any]] = None) -> Dict[s
         "trailing_trigger_r": float(p.trailing_trigger_r),
         "breakeven_trigger_r": float(p.breakeven_trigger_r),
         "breakeven_buffer_r": float(p.breakeven_buffer_r),
+        "atr_sl_multiple": float(p.atr_sl_multiple),
     }
 
 
@@ -193,7 +201,7 @@ def exit_reason_legend(exit_params: Optional[Dict[str, Any]] = None) -> Dict[str
     return {
         "sl": "止损：收盘价落到保护线的不利侧离场（多头＝跌破、空头＝涨破）。"
               "保护线在入场价的不利侧 R 处（多头 入场价 − R、空头 入场价 + R；"
-              "R = max(结构距离, 2×ATR)），从未被 L3 动过。",
+              "R = max(结构距离, atr_sl_multiple×ATR)），从未被 L3 动过。",
         # 「收紧到」是双向动词：多空两支的保护线都朝更靠近入场价的方向移动
         #   （初始 R → buffer×R，buffer 取任何合法值都更紧）。用「抬到」会只对多头
         #   成立 —— 空头的保护价是往下走的。
@@ -236,12 +244,17 @@ def caliber_lines(result: RunResult) -> List[str]:
     # 调用方经 `run(exit_params=...)` 换过参数时，拿常量印就等于报告与结果不符
     # （「换个配置数字就变了」却无人察觉，正是口径行的存在意义）。
     # 文案格式保持不变（`{}`.format(float) → "3.0"）：这行是对外口径文本，改动要有理由。
+    # `atr_sl_multiple` 一并印（2026-10-06 用户裁定）：1R = max(结构距离 A, 倍数×ATR)，
+    #   不印这个倍数，读者就只能看到 win_loss_ratio / trailing_trigger_r 两个**R 内部**
+    #   的倍数，看不出**1R 本身有多宽**是从哪来的 —— 同一套 R 倍数下把该倍数从 2.0 改成 1.0，
+    #   止损宽度减半，而这一行此前逐字不变。
     _ep = resolved_exit_params(result.exit_params)
     lines = [
         "标的 {}  周期 {}  区间 [{}, {}]".format(
             "{}{}".format(result.market, result.code), result.freq, lo, hi),
-        "出场参数 win_loss_ratio={} / trailing_trigger_r={}（毛 R 不扣成本，§5.4c）".format(
-            _ep["win_loss_ratio"], _ep["trailing_trigger_r"]),
+        "出场参数 win_loss_ratio={} / trailing_trigger_r={} / atr_sl_multiple={}"
+        "（1R = max(结构距离 A, atr_sl_multiple×ATR)；毛 R 不扣成本，§5.4c）".format(
+            _ep["win_loss_ratio"], _ep["trailing_trigger_r"], _ep["atr_sl_multiple"]),
         "费率 佣金 k={:g}（含规费与过户费）/ 最低佣金 m={:g} 元 / 印花税 s={:g}（仅卖出）/ "
         "过户费 t={:g}；名义 c=2k+s={:.4%}；target_amount=m/k={:.0f} 元".format(
             COMMISSION_RATE, MIN_COMMISSION_CASH, STAMP_DUTY_RATE, TRANSFER_FEE_RATE,

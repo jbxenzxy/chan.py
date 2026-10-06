@@ -125,7 +125,7 @@ def part1():
           "w/l/e=%r" % ((s["w"], s["l"], s["e"]),))
     check("实际胜率 = 2/6 ≈ 0.3333", abs(s["win_rate"] - 2.0 / 6.0) < 1e-6,
           "win_rate=%r" % s["win_rate"])
-    check("期望 R ≈ 1.4764", abs(s["expectancy_r"] - 1.4764) < 1e-3,
+    check("期望 R ≈ 1.604417（L3 启动阈值 2R 口径）", abs(s["expectancy_r"] - 1.604417) < 1e-3,
           "expectancy_r=%r" % s["expectancy_r"])
     check("区间 [2021-01-04, 2026-09-30] 且 bars=1393",
           tgt["date_from"] == "2021-01-04" and tgt["date_to"] == "2026-09-30"
@@ -186,7 +186,7 @@ def part2():
     d30 = _call("sz002190", "30m", kl30)
     check("30m：笔数 = 8（P0-④ 基线）", d30["run"]["filled"] == 8,
           "filled=%r" % d30["run"]["filled"])
-    check("30m：期望 R ≈ 0.2273", abs(d30["summary"]["expectancy_r"] - 0.2273) < 1e-3,
+    check("30m：期望 R ≈ 0.240257", abs(d30["summary"]["expectancy_r"] - 0.240257) < 1e-3,
           "expectancy_r=%r" % d30["summary"]["expectancy_r"])
     check("30m：区间首根 = 切片首根（2025-09-30）",
           d30["target"]["date_from"] == "2025-09-30", "target=%r" % d30["target"])
@@ -239,8 +239,8 @@ def part3(kl, base_exp):
     d03 = _call("sz002190", "d", kl, bsp_types="0,3")
     d_empty = _call("sz002190", "d", kl, bsp_types="")
 
-    check('"0" → 3 笔 / R≈3.8484',
-          d0["run"]["filled"] == 3 and abs(d0["summary"]["expectancy_r"] - 3.8484) < 1e-3,
+    check('"0" → 3 笔 / R≈4.1044',
+          d0["run"]["filled"] == 3 and abs(d0["summary"]["expectancy_r"] - 4.1044) < 1e-3,
           "filled=%r R=%r" % (d0["run"]["filled"], d0["summary"]["expectancy_r"]))
     check('"3" → 3 笔 / R≈-0.8956',
           d3["run"]["filled"] == 3 and abs(d3["summary"]["expectancy_r"] + 0.8956) < 1e-3,

@@ -389,7 +389,7 @@ Product.open_fee / closetoday_fee → Fee.cash() → Instrument.cost_cash()（�
 
 | 层 | 干什么 | 参数 |
 |---|---|---|
-| L1 | R 倍数定基线 | `R = max(结构止损 A, atr_sl_multiple × ATR)` —— **取大，不设地板**；信号未带分型时 A=0，R 退化为 2×ATR |
+| L1 | R 倍数定基线 | `R = max(结构止损 A, atr_sl_multiple × ATR)` —— **取大，不设地板**；信号未带分型时 A=0，R 退化为 atr_sl_multiple × ATR |
 | L2 | ATR 定宽窄 | `atr_period` / `atr_sl_multiple` |
 | L3 | 保本 + 跟踪锁利 | 浮盈 **>** `breakeven_trigger_r`×R 时把止损抬到入场价 ± `breakeven_buffer_r`×R；跟踪缓冲 = `trailing_trigger_r`×R |
 
@@ -619,7 +619,7 @@ python Trading/Test/smoke_simnow_phase_g.py       # 需要真实 SimNow 凭据 +
 | `Infra/Config.py`（JSON 配置加载） | **已删除**；配置入口只剩 `Trading/Config.py`，且**没有 `config.json` / `--config`**（CLI 定义 `Trading/main.py` `run`） |
 | 配置示例里 `price_tick` / `multiplier` / `open_fee_rate` / `closetoday_fee_rate` / `close_fee_rate` / `slippage_ticks` / `closetoday_first` 全放在 `instrument` 段 | 前两项与三档费率键**已归位到 `Product` 档案**；写进 `instrument` 会构造期 ValueError（`Infra/Instrument.py` `_REMOVED_KEYS`） |
 | 配置示例里 `risk.max_volume` | **已删除**；手数唯一来源 = 执行策略表第 3 列（`Infra/Product.py` `EXEC_POLICY`） |
-| 配置示例里 `stop_at_signal_extreme` | **已删除**；R = max(A, 2×ATR) 口径唯一，L3 触发 = 品种级 `win_loss_ratio`。⚠️ `trailing_trigger_r` **没删**（`Config.py`），它改了角色：跟踪缓冲倍数（×R），不再是 L3 触发阈值 |
+| 配置示例里 `stop_at_signal_extreme` | **已删除**；R = max(A, atr_sl_multiple × ATR) 口径唯一，L3 触发 = 品种级 `win_loss_ratio`。⚠️ `trailing_trigger_r` **没删**（`Config.py`），它改了角色：跟踪缓冲倍数（×R），不再是 L3 触发阈值 |
 | 「④ 风控层：手数/持仓上限全收敛在 RiskConfig」 | 本层现在**没有任何手数旋钮**，`max_open_positions` 也已删（已删键清单 `Trading/Config.py` `_DROPPED_KEYS`） |
 | 「Risk/ 风控层（手数/持仓上限）」+ `Risk.py` 内容 | `Trading/Risk/` 只剩 docstring，无代码（`Risk/__init__.py` 的 `RiskConfig` 那段说明） |
 | `Infra/` 清单含 `Config.py`、不含 `TradeStats.py` | 实为 8 个模块，含 `TradeStats.py`（见 §二） |

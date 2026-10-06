@@ -126,7 +126,7 @@ def bsp_to_dict(bsp, date_fmt: str) -> Dict[str, Any]:
 
     ⚠ `fractal_low` / `fractal_high` **必须显式给**：
       `Signal.from_bsp` 对它们走 `or 0.0` 兜底，缺省会**静默**退化成
-      `fractal ≤ 0` 哨兵 ⇒ R 只剩 2×ATR，`Exit.py` 打 `[R 结构距离缺失]` 告警。
+      `fractal ≤ 0` 哨兵 ⇒ R 只剩 ATR，`Exit.py` 打 `[R 结构距离缺失]` 告警。
     """
     klu = bsp.klu
     f_klu = bsp.bi.get_end_klu()
@@ -192,7 +192,7 @@ class BtTrade:
     bsp_type: str                # 信号类型串（type2str，可为 "1,11"）
     entry_date: str
     entry_price: float
-    r_distance: float            # 该笔入场时刻算出的 R = max(A, 2×ATR)
+    r_distance: float            # 该笔入场时刻算出的 R = max(A, atr_sl_multiple × ATR)
     shares: int = 0              # 申报股数（按 target_amount + 板块最小申报单位）
     entry_frame: int = 0         # 入场帧号（算持仓根数用；与 records 下标同序）
     exit_date: Optional[str] = None

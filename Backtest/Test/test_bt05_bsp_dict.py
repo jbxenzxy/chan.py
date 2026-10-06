@@ -15,7 +15,7 @@ bsp 组装契约：页面投影 vs 回测投影（Backtest/Test/test_bt05_bsp_di
     Backtest/Runner.py       `bsp_to_dict()`  ← 回测侧自持（R31 禁 import App）
 
 而这 9 个键是 `Trading/Infra/Records.py:Signal.from_bsp` 的**输入契约**：
-少一个 `fractal_low` 就会静默退化成 `fractal ≤ 0` 哨兵 ⇒ R 只剩 2×ATR，
+少一个 `fractal_low` 就会静默退化成 `fractal ≤ 0` 哨兵 ⇒ R 只剩 ATR，
 `Exit.py` 打 `[R 结构距离缺失]` 告警 —— 结果全错但没有一处报错。
 
 护栏怎么钉（**机器提取源，不手抄**）

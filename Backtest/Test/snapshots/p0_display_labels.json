@@ -1,24 +1,24 @@
 {
  "d": {
   "by_reason": {
-   "breakeven": 2,
+   "breakeven": 1,
    "sl": 3,
-   "trailing": 1
+   "trailing": 2
   },
   "fixture": "sz002190_d.json",
   "labels_in_trade_order": [
    "止损",
    "保本",
    "止损",
-   "保本",
+   "跟踪止盈",
    "止损",
    "跟踪止盈"
   ],
   "n": 6,
   "open": 0,
   "summary_last_lines": [
-   "分类型 0:n=3 avgR=3.848, 3:n=3 avgR=-0.896",
-   "分原因 止损:n=3, 保本:n=2, 跟踪止盈:n=1"
+   "分类型 0:n=3 avgR=4.104, 3:n=3 avgR=-0.896",
+   "分原因 止损:n=3, 保本:n=1, 跟踪止盈:n=2"
   ]
  },
  "exit_reason_order": [
@@ -34,8 +34,8 @@
  },
  "legend": {
   "breakeven": "保本：浮盈 > 1R 后把保护线收紧到「入场价上方 0.5R」处（多头在入场价上方、空头在入场价下方），收盘价落到该线不利侧离场。",
-  "sl": "止损：收盘价落到保护线的不利侧离场（多头＝跌破、空头＝涨破）。保护线在入场价的不利侧 R 处（多头 入场价 − R、空头 入场价 + R；R = max(结构距离, 2×ATR)），从未被 L3 动过。",
-  "trailing": "跟踪止盈：浮盈 > 3R 后启动跟踪，保护线 = 至今最有利价向不利侧退 1R（多头 最高价 − 1R、空头 最低价 + 1R），收盘价落到该线不利侧离场（该笔锁住多少 R 见行内 R 倍数）。"
+  "sl": "止损：收盘价落到保护线的不利侧离场（多头＝跌破、空头＝涨破）。保护线在入场价的不利侧 R 处（多头 入场价 − R、空头 入场价 + R；R = max(结构距离, atr_sl_multiple×ATR)），从未被 L3 动过。",
+  "trailing": "跟踪止盈：浮盈 > 2R 后启动跟踪，保护线 = 至今最有利价向不利侧退 1R（多头 最高价 − 1R、空头 最低价 + 1R），收盘价落到该线不利侧离场（该笔锁住多少 R 见行内 R 倍数）。"
  },
  "m30": {
   "fixture": "sz002190_30m.json",
@@ -54,10 +54,11 @@
  },
  "note": "出场原因显示文案（三选一）与未平仓浮动估值的冻结基线。改 Backtest/Report.py 的文案或 Runner._mark_open_positions 的估值口径时，先看 diff 是不是你**故意**改的那件事，再跑 --freeze。",
  "resolved_exit_params": {
+  "atr_sl_multiple": 1.0,
   "breakeven_buffer_r": 0.5,
   "breakeven_trigger_r": 1.0,
   "trailing_trigger_r": 1.0,
-  "win_loss_ratio": 3.0
+  "win_loss_ratio": 2.0
  },
  "version": 1
 }

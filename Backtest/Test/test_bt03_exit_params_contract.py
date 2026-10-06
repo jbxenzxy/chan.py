@@ -6,9 +6,9 @@
 
 背景：同一口径在迁移期有**两份常量**
 ---------------------------------------------------------------------
-    `App/AppTPSL.py:45`          `_STOCK_EXIT_OVERRIDES = {"win_loss_ratio": 3.0,
+    `App/AppTPSL.py:45`          `_STOCK_EXIT_OVERRIDES = {"win_loss_ratio": 2.0,
                                                           "trailing_trigger_r": 1.0}`
-    `Backtest/ExitParams.py`     `STOCK_EXIT_PARAMS`（同一对数值）
+    `Backtest/ExitParams.py`     `STOCK_EXIT_PARAMS`（同一组数值）
 
 `_STOCK_EXIT_OVERRIDES` 要等 TPSL **被删**才消失 ⇒ 中间期两份并存。本用例钉住
 "存在则必须相等"。
@@ -31,14 +31,17 @@
   ② `LayeredExitPolicy(STOCK_EXIT_PARAMS)` 可构造 —— 键名拼错会**当场报错**
      （`ExitPolicyParams` 是 `extra="forbid"` 的校验模型），这是"比静默用默认安全"的
      设计，本用例把"当前这份确实能构造"钉住
-  ③ 构造后 `params` 里那两个键与 SSOT 同值（防止中途被平台默认值覆盖）
+  ③ 构造后 `params` 里 SSOT 各键与 SSOT 同值（防止中途被平台默认值覆盖）
   ④ 费率口径冻结（取数日期 2026-10-05）+ 推导式自洽：
      `NOMINAL_COST_RATE == 2k + s`、`TARGET_AMOUNT == m / k`。
      费率是**会变的**（券商改佣金、政策改印花税）⇒ 改的时候改两处并在交付说明里写明，
      不许"数字悄悄漂了但没人知道"。
-  ⑤ 股票侧 `atr_sl_multiple`（2026-10-06 由 2.0 收紧到 1.0）：显式在表里 + 值冻结 +
-     与全局模型默认（实盘期货用）**刻意分叉**。防止「删掉键 ⇒ 静默回到 2.0」与
-     「顺手把全局默认也改掉 ⇒ 期货止损被一起收紧」两种无声失效。
+  ⑤ 股票侧出场口径（2026-10-06 统一轮）：`atr_sl_multiple` 显式在表里 + 值冻结 +
+     **与全局模型默认相等**。⚠ 这条本轮**改判**：上一版钉的是"刻意分叉（股票 1.0 /
+     期货 2.0）"，用户裁定「要改就股票和期货两个品种都改，回测和实盘要一致，否则回测
+     得出的结论跟实盘不一致，那做回测干嘛」⇒ 全局默认（`Trading/Config.py::ExitConfig`）
+     同步改为 1.0，本组改为钉**相等性**。两个失效方式仍都无声，都被守住：
+     「删掉键 ⇒ 显式声明消失」与「只改一边 ⇒ 回测与实盘分叉」。
 
 跑法：`python Backtest/Test/test_bt03_exit_params_contract.py`（退出码 0/1 即判决）
 """
@@ -135,15 +138,15 @@ def main():
     check("② LayeredExitPolicy(STOCK_EXIT_PARAMS) 可构造（extra=forbid 校验通过）",
           pol is not None, err)
 
-    # ── ③ 构造后两键仍与 SSOT 同值 ───────────────────────────────
+    # ── ③ 构造后各键仍与 SSOT 同值 ───────────────────────────────
     if pol is None:
-        check("③ 构造后 params 里 SSOT 两键同值", False, "② 未通过，跳过比对")
+        check("③ 构造后 params 里 SSOT 各键同值", False, "② 未通过，跳过比对")
     else:
         p = getattr(pol, "params", None)
         if not isinstance(p, dict):
             p = dict(p) if p is not None else {}
         d = [(k, p.get(k), ssot[k]) for k in sorted(ssot) if p.get(k) != ssot[k]]
-        check("③ 构造后 params 里 SSOT 两键同值", not d,
+        check("③ 构造后 params 里 SSOT 各键同值", not d,
               "; ".join("%r: 策略内=%r SSOT=%r" % t for t in d))
 
     # ── ④ 费率口径冻结 + 推导自洽 ────────────────────────────────
@@ -181,27 +184,33 @@ def main():
             d.append("%s: %r ≠ %r" % (code, got, want))
     check("④c lot_rule 板块最小申报单位（主板/科创/北交所）", not d, "\n".join(d))
 
-    # ── ⑤ 股票侧 ATR 止损倍数：显式冻结 + 与全局默认刻意分叉（2026-10-06）──
-    # 为什么单独钉这一个键：它**必须显式列在 STOCK_EXIT_PARAMS 里**，不能靠
-    # 「未列出 ⇒ 吃模型默认」这条捷径。模型默认 `ExitPolicyParams.atr_sl_multiple`
-    # 同时供 **实盘期货**（`Trading/Config.py` → `resolved_exit_params`）使用，
-    # 而股票侧 2026-10-06 被单独收紧到 1.0。两个失效方式都无声：
-    #   · 有人把键从 dict 里删掉 ⇒ 股票口径**静默回到 2.0**（R 变宽 2 倍）；
-    #   · 有人"顺手统一"把全局默认也改成 1.0 ⇒ 实盘期货止损被一起收紧。
-    # ⑤a/⑤b 钉住股票侧的显式值与值本身；⑤c 把"与全局默认不同"这件事
-    # 显式化 —— 将来真要统一两侧口径时，这条会变红提醒你一并改这里，
-    # 而不是让分叉在某次重构里悄悄消失。
+    # ── ⑤ 股票侧出场口径：显式冻结 + 与全局默认**必须相等**（2026-10-06）──
+    # 为什么单独钉这两个键：它们**必须显式列在 STOCK_EXIT_PARAMS 里**，不能靠
+    # 「未列出 ⇒ 吃模型默认」这条捷径 —— 显式列出才读得出来比对，也才有一份
+    # 可评审的"股票口径声明"。
+    # ⚠ 口径统一（2026-10-06 用户二次拍板）：`atr_sl_multiple` 由 2.0 收紧到 1.0，
+    # 且 `Trading/Config.py::ExitConfig` 的**全局默认同步改成 1.0** —— 用户原话
+    # 「要改就股票和期货两个品种都改，而且回测和实盘要一致，否则回测得出的结论跟
+    #  实盘不一致，那做回测干嘛」。故 ⑤c 钉的不再是"刻意分叉"，而是**相等性**：
+    # 股票侧 == 全局默认 == `ExitPolicyParams` 默认（后者继承 `ExitConfig`）。
+    # 两个失效方式都无声，本组同时守住：
+    #   · 有人把键从 dict 删掉 ⇒ 股票口径改成靠默认兜底，"显式声明"消失（⑤a）；
+    #   · 有人**只改一边**（改股票没改全局，或反过来）⇒ 回测与实盘口径分叉（⑤c/⑤d）。
     _model = ExitPolicyParams()
     check("⑤a atr_sl_multiple 显式存在于 STOCK_EXIT_PARAMS（不靠模型默认兜底）",
           "atr_sl_multiple" in ssot, "keys=%s" % sorted(ssot))
-    check("⑤b 股票侧 atr_sl_multiple == 1.0（2026-10-06 用户拍板，R = max(A, 1×ATR)）",
+    check("⑤b atr_sl_multiple == 1.0（2026-10-06 用户拍板，R = max(A, 1×ATR)）",
           ssot.get("atr_sl_multiple") == 1.0, "got=%r" % ssot.get("atr_sl_multiple"))
-    check("⑤c 股票侧与全局模型默认**刻意不同**（实盘期货仍走 %r）"
-          % float(_model.atr_sl_multiple),
-          ssot.get("atr_sl_multiple") != float(_model.atr_sl_multiple)
-          and float(ExitPolicyParams(**ssot).atr_sl_multiple) == 1.0,
+    check("⑤c 股票侧 == 全局默认（回测/实盘与股票/期货同一套 R 几何；只改一边即红）",
+          float(_model.atr_sl_multiple) == 1.0
+          and ssot.get("atr_sl_multiple") == float(_model.atr_sl_multiple),
           "股票=%r 全局默认=%r" % (ssot.get("atr_sl_multiple"),
                                    float(_model.atr_sl_multiple)))
+    check("⑤d win_loss_ratio == 2.0 且 == 全局默认（L3 启动阈值同规格）",
+          ssot.get("win_loss_ratio") == 2.0
+          and ssot.get("win_loss_ratio") == float(_model.win_loss_ratio),
+          "股票=%r 全局默认=%r" % (ssot.get("win_loss_ratio"),
+                                   float(_model.win_loss_ratio)))
 
     print("-" * 68)
     print("合计 %d 项，通过 %d，失败 %d，跳过 %d" % (PASS + FAIL + SKIP, PASS, FAIL, SKIP))

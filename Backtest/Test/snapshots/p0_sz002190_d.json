@@ -2,7 +2,7 @@
  "filter_scenarios": [
   {
    "bsp_types": "0",
-   "expectancy_r": 3.84836667,
+   "expectancy_r": 4.1044,
    "n": 3,
    "name": "only-0",
    "trade_ids": [
@@ -33,14 +33,14 @@
  },
  "kind": "backtest-p0-freeze",
  "metrics": {
-  "avg_bars_held": 6.33333333,
-  "avg_net_return": 0.051301397,
+  "avg_bars_held": 6.16666667,
+  "avg_net_return": 0.0553531839,
   "bars_total": 1393,
   "by_bsp_type": {
    "0": {
-    "avg_net_return": 0.1597232038,
+    "avg_net_return": 0.1678267776,
     "e": 0,
-    "expectancy_r": 3.84836667,
+    "expectancy_r": 4.1044,
     "l": 1,
     "n": 3,
     "w": 2
@@ -56,12 +56,12 @@
   },
   "by_reason": {
    "breakeven": {
-    "avg_net_return": 0.0023575869,
+    "avg_net_return": -0.0023826049,
     "e": 0,
-    "expectancy_r": 0.1072,
+    "expectancy_r": -0.032,
     "l": 1,
-    "n": 2,
-    "w": 1
+    "n": 1,
+    "w": 0
    },
    "sl": {
     "avg_net_return": -0.0750842451,
@@ -72,23 +72,23 @@
     "w": 0
    },
    "trailing": {
-    "avg_net_return": 0.5283459437,
+    "avg_net_return": 0.2798772219,
     "e": 0,
-    "expectancy_r": 12.7201,
+    "expectancy_r": 6.8673,
     "l": 0,
-    "n": 1,
-    "w": 1
+    "n": 2,
+    "w": 2
    }
   },
   "e": 0,
-  "expectancy_r": 1.4764,
+  "expectancy_r": 1.60441667,
   "filtered": 0,
   "l": 4,
   "max_loss_r": -1.4214,
   "max_win_r": 12.7201,
   "n": 6,
-  "profit_factor": 2.35219945,
-  "profit_loss_ratio": 4.7043989,
+  "profit_factor": 2.45899623,
+  "profit_loss_ratio": 4.91799246,
   "rej": 5,
   "u": 0,
   "w": 2,
@@ -163,19 +163,19 @@
    "trade_id": 3
   },
   {
-   "bars_held": 8,
+   "bars_held": 7,
    "bsp_type": "0",
-   "cost_cash": 35.3133,
+   "cost_cash": 36.0447,
    "entry_date": "2023-04-27",
    "entry_price": 21.788,
-   "exit_date": "2023-05-12",
-   "exit_price": 21.958,
-   "exit_reason": "breakeven",
-   "gross_return": 0.0078024601,
-   "net_return": 0.0070977786,
+   "exit_date": "2023-05-11",
+   "exit_price": 22.488,
+   "exit_reason": "trailing",
+   "gross_return": 0.0321277768,
+   "net_return": 0.0314085001,
    "open": false,
    "r_distance": 0.69,
-   "r_multiple": 0.2464,
+   "r_multiple": 1.0145,
    "shares": 2300,
    "side": "long",
    "trade_id": 4

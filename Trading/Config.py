@@ -278,8 +278,16 @@ class ExitConfig(BaseModel):
 
     LayeredExitPolicy（L1-L3 分层出场）：L1 R 倍数定基线 → L2 ATR 定宽窄 →
     L3 保本/跟踪锁利。原 L4 时间/收盘兜底已删除（含引擎侧收盘前强平）。
-    R 的产生见 Strategy/Exit.py：R = max(A, 2×ATR)，其中
-      A = 结构止损（分型极值距离），2×ATR = 波动率止损（自适应下限，无绝对点数地板）。
+    R 的产生见 Strategy/Exit.py：R = max(A, atr_sl_multiple × ATR)，其中
+      A = 结构止损（分型极值距离），atr_sl_multiple × ATR = 波动率止损
+      （自适应下限，无绝对点数地板；当前 `atr_sl_multiple = 1.0`）。
+
+    ⚠ 2026-10-06（用户拍板）：`atr_sl_multiple` 由 2.0 收紧到 **1.0**，且**全局唯一
+      默认值就是本字段** —— 它同时供「实盘期货」（`resolved_exit_params(cfg)` →
+      `main.py`）与「股票回测 / 股票页止盈止损」（`ExitPolicyParams` 继承本模型，
+      未显式覆盖时落到这里的默认）两条链路使用。**必须同步改**是刻意的：
+      回测与实盘、股票与期货若各持一套 ATR 倍数，回测得出的结论就不代表实盘，
+      回测本身失去意义。产品档案不设该字段 ⇒ 期货各品种同样继承本值。
 
     （原独立的 DefaultExitParamsConfig 已并入本模型，统一为单一出场参数模型；
      可选的第二套出场 DefaultExitPolicy 一并删除——生产只用 L1-L3，不再保留无用选择分支。）
@@ -295,20 +303,20 @@ class ExitConfig(BaseModel):
     # ---- L1 R 倍数定基线 ----
     # 注：已删除 `stop_at_signal_extreme` 开关。R 的口径唯一：
     #     R = max(分型极值距离 A, atr_sl_multiple × ATR)（取大，不是二选一）。
-    #     信号未携带分型时 fractal ≤ 0（哨兵）→ A = 0 → R 自动退化为 2×ATR，
+    #     信号未携带分型时 fractal ≤ 0（哨兵）→ A = 0 → R 自动退化为 atr_sl_multiple × ATR，
     #     「只靠 ATR」由数据缺失表达，无需配置项。
     stop_buffer_ticks: float = 0.0         # 止损位额外让出的 tick 缓冲
 
     # ---- L2 波动率(ATR)定宽窄 ----
     use_atr: bool = True                        # 用 ATR 自适应止损/止盈宽度
     atr_period: int = 14                        # ATR 计算周期
-    atr_sl_multiple: float = 2.0           # 初始止损距离 = 2 × ATR
+    atr_sl_multiple: float = 1.0           # 初始止损距离 = 1 × ATR（2026-10-06 由 2.0 收紧）
 
     # ---- L3 移动/保本锁利 ----
     breakeven_trigger_r: float = 1.0       # 浮盈 > 1R 时，启动保本策略（严格不等：恰好 1R 不启动）
     breakeven_buffer_r: float = 0.5        # 保本落点 = 入场价 ± 0.5R
     trailing_trigger_r: float = 0.5        # 跟踪缓冲 = 0.5 × R
-                                                #   R = max(分型距离, 2×ATR)
+                                                #   R = max(分型距离, atr_sl_multiple × ATR)
                                                 #   L3 的跟踪兑现（trail_dist = trailing_trigger_r × R）
                                                 #   L3 启动阈值 = win_loss_ratio（品种档案；具体倍数见档案条目）
                                                 #   即 浮盈 **>** win_loss_ratio × R 时进 L3（严格不等）

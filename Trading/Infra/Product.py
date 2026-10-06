@@ -350,7 +350,7 @@ class Product:
         仅 win_loss_ratio **只存在于本档案**（它同时是 L3 启动阈值，品种级；
         D1 拍板：放弃 .env 覆盖能力，调参 = 改档案 = git 评审 + 对账测试守护）。
         min_r_points（R 下限）、breakeven_buffer_ticks 删除：
-        R 改为纯自适应 max(A, 2×ATR)，保本缓冲改为全局比例 breakeven_buffer_r（ExitConfig）。
+        R 改为纯自适应 max(A, atr_sl_multiple × ATR)，保本缓冲改为全局比例 breakeven_buffer_r（ExitConfig）。
         Trading/Config.py 的 resolved_exit_params() 是唯一合并点 —— 把本返回值
         合到品种无关的 ExitConfig 上，组装出 LayeredExitPolicy 的完整参数。
         """
@@ -468,7 +468,7 @@ PRODUCT_PROFILES: Dict[str, Product] = {
     ),
     # ── 上期所金属（Tier 1 商品：流动性 + 趋势 + 形态干净，缠论画段体验好）──
     # 盈亏比（L3 启动阈值）逐品种写在各自条目上，本表不再复述具体倍数。
-    #   R 下限已删除（R = max(A, 2×ATR) 纯自适应），不再有"点数地板"。
+    #   R 下限已删除（R = max(A, atr_sl_multiple × ATR) 纯自适应），不再有"点数地板"。
     "AU": Product(
         product="AU", win_loss_ratio=2.0,
         quote_unit="元/克", price_tick=0.02, multiplier=1000.0,

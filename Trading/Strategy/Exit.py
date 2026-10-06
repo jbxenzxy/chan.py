@@ -167,7 +167,7 @@ class LayeredExitPolicy:
         self.breakeven_buffer_r = float(p.breakeven_buffer_r)
         self.trailing_trigger_r = float(p.trailing_trigger_r)
         # ATR 历史缓冲（on_bar 维护，平着也收）；跨日连续（Q5，2026-09-27）——
-        # 隔夜/周末跳空本就该进 True Range（日线/周线/30m 下的 2×ATR 因此可用），
+        # 隔夜/周末跳空本就该进 True Range（日线/周线/30m 下的 ATR 因此可用），
         # 恢复跨日清空会被 Test/test_stock_tpsl.py 的「跨日 ATR 连续」断言拦下。
         self._bars: "deque" = deque(maxlen=self.atr_period + 2)
 
@@ -183,7 +183,7 @@ class LayeredExitPolicy:
     # ---------- 钩子：每根 K 线（无论持仓与否）都会调用 ----------
     def on_bar(self, bar: Bar, state: "Instrument") -> None:
         # 跨日清空已移除（Q5，2026-09-27）：ATR 缓冲跨日连续，隔夜/周末跳空
-        # 本就该进 True Range —— 日线/周线/30m 下的 2×ATR 依赖这份连续缓冲。
+        # 本就该进 True Range —— 日线/周线/30m 下的 ATR 依赖这份连续缓冲。
         self._bars.append(bar)
 
     # ---------- ATR ----------
@@ -243,19 +243,19 @@ class LayeredExitPolicy:
         A = 结构止损（分型极值距离）：
               做多 A = entry_price − 底分型最低点(fractal_low)；
               做空 A = 顶分型最高点(fractal_high) − entry_price。
-            A ≤ 0（陈旧信号、行情已穿越分型）时钳到 0，交给 B（2×ATR）兜底。
+            A ≤ 0（陈旧信号、行情已穿越分型）时钳到 0，交给 B（atr_sl_multiple × ATR）兜底。
         B = 波动率止损 = atr_sl_multiple × ATR（use_atr 且 ATR 样本足够时）。
 
-        为什么没有「只靠 2×ATR」这个选项（原 `stop_at_signal_extreme=False`）：
-            分型极值与 2×ATR 是**取大**关系，不是二选一。信号未携带分型时
-            （fractal ≤ 0 哨兵）A 自然为 0，R 自动退化为 2×ATR —— 这个能力本来
+        为什么没有「只靠 ATR」这个选项（原 `stop_at_signal_extreme=False`）：
+            分型极值与 ATR 是**取大**关系，不是二选一。信号未携带分型时
+            （fractal ≤ 0 哨兵）A 自然为 0，R 自动退化为 atr_sl_multiple × ATR —— 这个能力本来
             就由「数据缺失」表达，不需要一个配置项去重复表达同一件事。
             留着开关只会让人以为「两种止损方案可选」，而实际上只有一种。
 
         关于「R 会不会退化」（评审 · 结论：不改口径，只加观测）：
             删除 min_r_points 后，R 不再有绝对点数地板 —— 这是刻意的：
             口径是「有分型才有买卖点 → 有买卖点才入场 → 入场时 A 恒 > 0」，
-            且 B（2×ATR）在正常行情下量级远大于旧地板，R 的地板是多余的。
+            且 B（atr_sl_multiple × ATR）在正常行情下量级远大于旧地板，R 的地板是多余的。
             因此本函数**不兜底、不钳下限**，只在结构性异常时打 WARNING。
             观测点（都**不改变** R 的取值）：
 
@@ -280,7 +280,7 @@ class LayeredExitPolicy:
         is_long = signal.side is Side.LONG
         # A：结构止损（分型极值）
         # fractal_low/fractal_high ≤ 0 表示信号未携带有效分型（哨兵值，价格为 0 不可能），
-        # 此时视为「无结构止损信息」，A 钳 0 交给 B（2×ATR）兜底；
+        # 此时视为「无结构止损信息」，A 钳 0 交给 B（atr_sl_multiple × ATR）兜底；
         # 否则会被误读成「分型最低点 = 0」→ A = entry_price → 止损打飞到 ~0，SL 永不触发。
         A = 0.0
         _fractal_missing = False
@@ -294,7 +294,7 @@ class LayeredExitPolicy:
                 A = max(signal.fractal_high - entry_price, 0.0)
             else:
                 _fractal_missing = True
-        # B：波动率止损（2×ATR）。atr 只取一次，供 B 与下面两条告警共用
+        # B：波动率止损（atr_sl_multiple × ATR）。atr 只取一次，供 B 与下面两条告警共用
         #   （评审修 · P3：原实现告警里又调了一次 self._atr()，
         #   同一次判定里重复计算）。
         B = 0.0

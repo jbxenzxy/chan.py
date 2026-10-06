@@ -19,13 +19,13 @@
       "2022-05-24",
       "2023-04-27"
      ],
-     "expectancy_r": -0.610075,
+     "expectancy_r": -0.41805,
      "filled": 4,
      "l": 3,
      "signals_filtered": 0,
      "signals_seen": 5,
      "still_open": 0,
-     "sum_r": -2.4403,
+     "sum_r": -1.6722,
      "w": 1,
      "win_rate": 0.25
     },
@@ -39,13 +39,13 @@
      "entries": [
       "2023-04-27"
      ],
-     "expectancy_r": 0.2464,
+     "expectancy_r": 1.0145,
      "filled": 1,
      "l": 0,
      "signals_filtered": 3,
      "signals_seen": 5,
      "still_open": 0,
-     "sum_r": 0.2464,
+     "sum_r": 1.0145,
      "w": 1,
      "win_rate": 1.0
     },
@@ -98,13 +98,13 @@
       "2025-07-17",
       "2025-08-18"
      ],
-     "expectancy_r": 1.4764,
+     "expectancy_r": 1.604417,
      "filled": 6,
      "l": 4,
      "signals_filtered": 0,
      "signals_seen": 11,
      "still_open": 0,
-     "sum_r": 8.8584,
+     "sum_r": 9.6265,
      "w": 2,
      "win_rate": 0.333333
     },
@@ -122,13 +122,13 @@
       "2025-07-17",
       "2025-08-18"
      ],
-     "expectancy_r": 3.848367,
+     "expectancy_r": 4.1044,
      "filled": 3,
      "l": 1,
      "signals_filtered": 3,
      "signals_seen": 11,
      "still_open": 0,
-     "sum_r": 11.5451,
+     "sum_r": 12.3132,
      "w": 2,
      "win_rate": 0.666667
     },

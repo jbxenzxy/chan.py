@@ -196,9 +196,10 @@ def part_labels():
     check("② 空表 / None 都按「未指定」→ 回落 STOCK_EXIT_PARAMS",
           resolved_exit_params({}) == resolved_exit_params(None) == resolved_exit_params(),
           "none=%r empty=%r" % (resolved_exit_params(None), resolved_exit_params({})))
-    check("② resolved_exit_params 四项 R 口径齐全且与默认一致",
-          resolved_exit_params() == {"win_loss_ratio": 3.0, "trailing_trigger_r": 1.0,
-                                     "breakeven_trigger_r": 1.0, "breakeven_buffer_r": 0.5},
+    check("② resolved_exit_params 五项 R 口径齐全且与默认一致",
+          resolved_exit_params() == {"win_loss_ratio": 2.0, "trailing_trigger_r": 1.0,
+                                     "breakeven_trigger_r": 1.0, "breakeven_buffer_r": 0.5,
+                                     "atr_sl_multiple": 1.0},
           "got=%r" % resolved_exit_params())
 
     # ③ 图例：非空、与标签同源取参、无 Markdown 强调符
@@ -289,14 +290,19 @@ def part_trades(lab):
 
     # ⑪ 口径行印的是**本轮实际用的**参数（`RunResult.exit_params`），不是常量
     check("⑪ RunResult.exit_params 记录了本轮实际使用的出场参数",
-          res.exit_params == {"atr_sl_multiple": 1.0, "win_loss_ratio": 3.0,
+          res.exit_params == {"atr_sl_multiple": 1.0, "win_loss_ratio": 2.0,
                               "trailing_trigger_r": 1.0},
           "exit_params=%r" % res.exit_params)
     from Backtest.Report import caliber_lines
     ep_line = caliber_lines(res)[1]
-    check("⑪ 口径行「出场参数」两支与 exit_params 一致",
-          "win_loss_ratio=3.0" in ep_line and "trailing_trigger_r=1.0" in ep_line,
+    check("⑪ 口径行「出场参数」三支与 exit_params 一致",
+          "win_loss_ratio=2.0" in ep_line and "trailing_trigger_r=1.0" in ep_line,
           "line=%r" % ep_line)
+    # ⑪b 1R 的**宽窄来源**必须在口径行里看得见（2026-10-06 用户裁定补印）：
+    #     只印 win_loss_ratio / trailing_trigger_r 时，改 atr_sl_multiple（1R 本身
+    #     变宽变窄）这一行逐字不变 ⇒ 报告上看不出止损宽度是从哪来的。
+    check("⑪b 口径行印出 atr_sl_multiple（1R 宽窄的来源）",
+          "atr_sl_multiple=1.0" in ep_line, "line=%r" % ep_line)
     return res, met
 
 
