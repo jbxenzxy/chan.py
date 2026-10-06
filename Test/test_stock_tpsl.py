@@ -5,7 +5,7 @@
 钉住 App/AppTPSL.compute_stock_tpsl 的推演契约（纯计算、不联网、不依赖凭据）：
 
   ① 入场价 = 买卖点 K 线收盘价（需求⑴）；bsp.price 与收盘不一致 → 400；
-  ② R = max(A, 2×ATR)（ATR 就绪时 b=2×atr）；
+  ② R = max(A, 1×ATR)（ATR 就绪时 b=1×atr；2026-10-06 由 2×ATR 收紧）；
   ③ 保本落点 = 入场 ± 0.5R；跟踪缓冲与盈亏比走股票侧覆盖口径
      （AppTPSL._STOCK_EXIT_OVERRIDES，2026-09-27 拍板，只影响股票推演）；
   ④ 边界一律严格不等（达标 / 触发恰好等于阈值都不算）；
@@ -83,18 +83,17 @@ def main():
     check("入场价 = 该根收盘价 10.0（需求⑴）", r["entry"]["price"] == 10.0)
     check("入场方向序列化 = long", r["entry"]["side"] == "long")
 
-    print("══ ② R = max(A, 2×ATR)（ATR 就绪）══")
+    print("══ ② R = max(A, 1×ATR)（ATR 就绪）══")
     warm = [_kl(i, 5 + i, 10.0, 10.5, 9.5, 10.0) for i in range(60)]  # 恒 TR=1
     entry2 = _kl(60, 65, 10.0, 10.5, 9.5, 10.0)
     bsp2 = _bsp(entry2, fractal_low=9.0)  # A = 1.0
     r2 = compute_stock_tpsl("sh600519", _payload(warm + [entry2], bsp2))
     check("atr = 1.0（恒 TR=1）", r2["atr"] == 1.0, r2["atr"])
-    check("b = 2×ATR = 2.0", r2["b"] == 2.0, r2["b"])
-    check("R = max(A=1, B=2) = 2.0", r2["r"] == 2.0, r2["r"])
-    check("股票侧覆盖生效：params 与 _STOCK_EXIT_OVERRIDES 一致（⑴）",
-          r2["params"]["win_loss_ratio"] == _STOCK_EXIT_OVERRIDES["win_loss_ratio"]
-          and r2["params"]["trailing_trigger_r"] == _STOCK_EXIT_OVERRIDES["trailing_trigger_r"],
-          r2["params"])
+    check("b = 1×ATR = 1.0", r2["b"] == 1.0, r2["b"])
+    check("R = max(A=1, B=1) = 1.0", r2["r"] == 1.0, r2["r"])
+    check("股票侧覆盖生效：params 与 _STOCK_EXIT_OVERRIDES 逐键一致（⑴）",
+          all(r2["params"][k] == v for k, v in _STOCK_EXIT_OVERRIDES.items()),
+          {k: (r2["params"].get(k), v) for k, v in _STOCK_EXIT_OVERRIDES.items()})
 
     print("══ ③④⑤⑥ 三种终态（§3.8 T1/T2/T3）+ 严格不等 ══")
     # T1 已止损：有利极值仅 +0.2R，收盘 8.9 < 止损 9.0
@@ -200,13 +199,13 @@ def main():
 
     print("══ ⑨ 跨日 ATR 连续（P2-4，Q5：移除 Exit.on_bar 跨日清空）══")
     # 25 根 bar 各自独立日期（每根都"跨日"）：若跨日清空回潮，入场时缓冲只剩 1 根
-    # → ATR 未就绪 → R 退化到 A=0.01；连续口径下 ATR=1.0 → R = 2×ATR = 2.0。
+    # → ATR 未就绪 → R 退化到 A=0.01；连续口径下 ATR=1.0 → R = 1×ATR = 1.0。
     seq = [_kl(i, 5 + i, 10.0, 10.5, 9.5, 10.0) for i in range(25)]
     entry3 = seq[-1]
     bsp3 = _bsp(entry3, fractal_low=9.99)  # A = 0.01（刻意极小，逼 R 只能来自 B）
     r9 = compute_stock_tpsl("sh600519", _payload(seq, bsp3))
     check("跨日连续：ATR = 1.0（未被跨日清空打断）", r9["atr"] == 1.0, r9["atr"])
-    check("跨日连续：R = 2×ATR = 2.0（而非退化为 A=0.01）", r9["r"] == 2.0, r9["r"])
+    check("跨日连续：R = 1×ATR = 1.0（而非退化为 A=0.01）", r9["r"] == 1.0, r9["r"])
 
     print("══ ⑩ 前端分段标签口径（node 抽真函数 tpslSegLabel；node 不在位则 SKIP）══")
     import io as _io

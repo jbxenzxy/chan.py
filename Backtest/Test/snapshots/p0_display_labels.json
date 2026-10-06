@@ -1,8 +1,8 @@
 {
  "d": {
   "by_reason": {
-   "breakeven": 3,
-   "sl": 2,
+   "breakeven": 2,
+   "sl": 3,
    "trailing": 1
   },
   "fixture": "sz002190_d.json",
@@ -11,14 +11,14 @@
    "保本",
    "止损",
    "保本",
-   "保本",
+   "止损",
    "跟踪止盈"
   ],
   "n": 6,
   "open": 0,
   "summary_last_lines": [
-   "分类型 0:n=3 avgR=1.802, 3:n=3 avgR=-0.651",
-   "分原因 止损:n=2, 保本:n=3, 跟踪止盈:n=1"
+   "分类型 0:n=3 avgR=3.848, 3:n=3 avgR=-0.896",
+   "分原因 止损:n=3, 保本:n=2, 跟踪止盈:n=1"
   ]
  },
  "exit_reason_order": [
@@ -44,12 +44,12 @@
   "open": 1,
   "open_trade": {
    "entry_price": 24.33,
-   "r_distance": 0.411429,
+   "r_distance": 0.4,
    "side": "short",
    "trade_id": 8,
    "unrealized_net_return": 0.0564332531,
    "unrealized_price": 22.94,
-   "unrealized_r": 3.3785
+   "unrealized_r": 3.475
   }
  },
  "note": "出场原因显示文案（三选一）与未平仓浮动估值的冻结基线。改 Backtest/Report.py 的文案或 Runner._mark_open_positions 的估值口径时，先看 diff 是不是你**故意**改的那件事，再跑 --freeze。",

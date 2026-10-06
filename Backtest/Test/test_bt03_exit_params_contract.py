@@ -36,6 +36,9 @@
      `NOMINAL_COST_RATE == 2k + s`、`TARGET_AMOUNT == m / k`。
      费率是**会变的**（券商改佣金、政策改印花税）⇒ 改的时候改两处并在交付说明里写明，
      不许"数字悄悄漂了但没人知道"。
+  ⑤ 股票侧 `atr_sl_multiple`（2026-10-06 由 2.0 收紧到 1.0）：显式在表里 + 值冻结 +
+     与全局模型默认（实盘期货用）**刻意分叉**。防止「删掉键 ⇒ 静默回到 2.0」与
+     「顺手把全局默认也改掉 ⇒ 期货止损被一起收紧」两种无声失效。
 
 跑法：`python Backtest/Test/test_bt03_exit_params_contract.py`（退出码 0/1 即判决）
 """
@@ -122,7 +125,7 @@ def main():
               % (PAGE_MODULE, PAGE_SYMBOL), not d, "\n".join(d))
 
     # ── ② 可构造（键名拼错会当场报错）────────────────────────────
-    from Trading.Strategy.Exit import LayeredExitPolicy
+    from Trading.Strategy.Exit import ExitPolicyParams, LayeredExitPolicy
     pol = None
     try:
         pol = LayeredExitPolicy(ssot)
@@ -177,6 +180,28 @@ def main():
         if got != want:
             d.append("%s: %r ≠ %r" % (code, got, want))
     check("④c lot_rule 板块最小申报单位（主板/科创/北交所）", not d, "\n".join(d))
+
+    # ── ⑤ 股票侧 ATR 止损倍数：显式冻结 + 与全局默认刻意分叉（2026-10-06）──
+    # 为什么单独钉这一个键：它**必须显式列在 STOCK_EXIT_PARAMS 里**，不能靠
+    # 「未列出 ⇒ 吃模型默认」这条捷径。模型默认 `ExitPolicyParams.atr_sl_multiple`
+    # 同时供 **实盘期货**（`Trading/Config.py` → `resolved_exit_params`）使用，
+    # 而股票侧 2026-10-06 被单独收紧到 1.0。两个失效方式都无声：
+    #   · 有人把键从 dict 里删掉 ⇒ 股票口径**静默回到 2.0**（R 变宽 2 倍）；
+    #   · 有人"顺手统一"把全局默认也改成 1.0 ⇒ 实盘期货止损被一起收紧。
+    # ⑤a/⑤b 钉住股票侧的显式值与值本身；⑤c 把"与全局默认不同"这件事
+    # 显式化 —— 将来真要统一两侧口径时，这条会变红提醒你一并改这里，
+    # 而不是让分叉在某次重构里悄悄消失。
+    _model = ExitPolicyParams()
+    check("⑤a atr_sl_multiple 显式存在于 STOCK_EXIT_PARAMS（不靠模型默认兜底）",
+          "atr_sl_multiple" in ssot, "keys=%s" % sorted(ssot))
+    check("⑤b 股票侧 atr_sl_multiple == 1.0（2026-10-06 用户拍板，R = max(A, 1×ATR)）",
+          ssot.get("atr_sl_multiple") == 1.0, "got=%r" % ssot.get("atr_sl_multiple"))
+    check("⑤c 股票侧与全局模型默认**刻意不同**（实盘期货仍走 %r）"
+          % float(_model.atr_sl_multiple),
+          ssot.get("atr_sl_multiple") != float(_model.atr_sl_multiple)
+          and float(ExitPolicyParams(**ssot).atr_sl_multiple) == 1.0,
+          "股票=%r 全局默认=%r" % (ssot.get("atr_sl_multiple"),
+                                   float(_model.atr_sl_multiple)))
 
     print("-" * 68)
     print("合计 %d 项，通过 %d，失败 %d，跳过 %d" % (PASS + FAIL + SKIP, PASS, FAIL, SKIP))

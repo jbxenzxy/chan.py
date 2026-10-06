@@ -38,15 +38,27 @@ from typing import Dict, Tuple
 # ════════════════════════════════════════════════════════════════════
 # ① 股票侧出场参数（设计文档 §3.2；2026-09-27 用户拍板的口径）
 # ════════════════════════════════════════════════════════════════════
-# 与 `App/AppTPSL.py:45` 的 `_STOCK_EXIT_OVERRIDES` **逐键相等**
+# 与 `App/AppTPSL.py::_STOCK_EXIT_OVERRIDES` **逐键相等**
 # （由 Test/test_bt03_exit_params_contract.py 钉住）。
 #
-# 为什么只有两个键：`LayeredExitPolicy(dict)` 构造时经
+# 为什么只有三个键：`LayeredExitPolicy(dict)` 构造时经
 # `ExitPolicyParams(**params)` 校验（`extra="forbid"`），未列出的键走模型默认
 # （breakeven_trigger_r=1.0 / breakeven_buffer_r=0.5 / atr_period=14 /
-#  atr_sl_multiple=2.0 / use_atr=True）。多写一个拼错的键会**当场报错**，
-# 这是刻意的（比静默用默认安全）。
+#  use_atr=True）。多写一个拼错的键会**当场报错**，这是刻意的（比静默用默认安全）。
+#
+# `atr_sl_multiple` 为什么从"吃模型默认 2.0"改成显式列出（2026-10-06 用户拍板）：
+#   R 是两条腿取大 —— `R = max(A, atr_sl_multiple × ATR)`（A = 分型极值距离）。
+#   中高波动个股上 ATR 腿经常压过结构腿，2.0 会让 1R 宽到入场价的 16%
+#   （实测 688146 一笔：R = 2×ATR = 16.08%，止损线被推到 +16% 才触发）。
+#   收紧到 1.0 后同一笔 R 由 16.08% → 8.04%。**保留 ATR 这条腿而不是关掉它**
+#   （`use_atr=False`）是刻意的：A ≤ 0 的哨兵场景下 ATR 是唯一兜底，关掉会让
+#   R 归零 ⇒ L3（保本/跟踪）整层失效并把止损压到入场价外 1 tick。
+#   显式写在**这里**、而不是去改 `Trading/Config.py` 的全局默认，也是刻意的：
+#   全局默认同时供**实盘期货**（`resolved_exit_params` 路径）使用，改它会静默
+#   改变 IF/PTA 实盘止损宽度；股票侧口径只在 Backtest/ExitParams.py 与
+#   App/AppTPSL.py 两处收敛，期货不受影响。
 STOCK_EXIT_PARAMS: Dict[str, float] = {
+    "atr_sl_multiple": 1.0,     # 波动率止损倍数（R = max(A, 1×ATR)）
     "win_loss_ratio": 3.0,      # L3 启动阈值（= 名义止盈倍数）
     "trailing_trigger_r": 1.0,  # L3 跟踪缓冲距离（R 倍数）
 }

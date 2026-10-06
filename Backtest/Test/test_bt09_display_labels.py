@@ -289,7 +289,8 @@ def part_trades(lab):
 
     # ⑪ 口径行印的是**本轮实际用的**参数（`RunResult.exit_params`），不是常量
     check("⑪ RunResult.exit_params 记录了本轮实际使用的出场参数",
-          res.exit_params == {"win_loss_ratio": 3.0, "trailing_trigger_r": 1.0},
+          res.exit_params == {"atr_sl_multiple": 1.0, "win_loss_ratio": 3.0,
+                              "trailing_trigger_r": 1.0},
           "exit_params=%r" % res.exit_params)
     from Backtest.Report import caliber_lines
     ep_line = caliber_lines(res)[1]

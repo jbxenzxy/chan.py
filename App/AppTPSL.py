@@ -42,8 +42,12 @@ _OUTCOME_MAP = {"sl": "sl_exit", "breakeven": "be_exit", "trailing": "trail_exit
 
 # 股票侧出场参数显式覆盖（2026-09-27 用户拍板的股票口径 —— 只影响股票推演；
 #   期货路径经 resolved_exit_params（品种档案）与全局默认，不经过本模块）。
-#   数值即下方 dict 字面量；改口径 = 改此 dict + 同步 Test/test_stock_tpsl.py ⑩ 节。
-_STOCK_EXIT_OVERRIDES = {"win_loss_ratio": 3.0, "trailing_trigger_r": 1.0}
+#   数值即下方 dict 字面量；改口径 = 改此 dict + 同步 Test/test_stock_tpsl.py ②/⑨ 节。
+#   `atr_sl_multiple` 2026-10-06 由模型默认 2.0 收紧到 1.0（R = max(A, 1×ATR)）；
+#   与 `Backtest/ExitParams.py::STOCK_EXIT_PARAMS` 逐键相等，由
+#   Backtest/Test/test_bt03_exit_params_contract.py 钉住。
+_STOCK_EXIT_OVERRIDES = {"atr_sl_multiple": 1.0, "win_loss_ratio": 3.0,
+                         "trailing_trigger_r": 1.0}
 
 
 def _exit_policy_cls():
