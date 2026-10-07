@@ -239,7 +239,7 @@ def compute_stock_backtest(code: str, body: Dict[str, Any]) -> Dict[str, Any]:
                      bsp_filter=filt, is_index=is_index)
     met = compute_metrics(res)
 
-    # ── 仓位口径（实际成交额 / 放大倍数披露）──
+    # ── 仓位口径（最大成交额 / 放大倍数披露）──
     #    "借道" = 该笔股数由 `min_lot` 兜底（而非 target_amount/price）决定。
     #    判据直接照 `shares_for` 的式子：`target_amount / price <= min_lot`
     #    ⇒ 内层 max 取了 min_lot。高价股（茅台）典型。

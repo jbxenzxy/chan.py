@@ -5480,7 +5480,7 @@
             return v.toFixed(nd === undefined ? 3 : nd);
         }
         // 金额 → 万元（保留 2 位、去尾零：50000 → "5 万元"，53396 → "5.34 万元"）。
-        //   面板上的金额只有两处（目标成交额 / 实际成交额），量级都在 5 万上下 ——
+        //   面板上的金额只有两处（目标成交额 / 最大成交额），量级都在 5 万上下 ——
         //   用「元」得数位数、用「亿元」又全变成 0.0x，万元是唯一读得顺的档。
         //   不复用 `_btNum`：金额与倍数/R 是两种量纲，格式各写各的。
         function _btWan(x) {
@@ -5601,16 +5601,17 @@
                 + statsEsc((tgt.date_from || "") + " ~ " + (tgt.date_to || "")) + '（' + tgt.bars + ' 根）</span></div>';
             // 仓位口径两项（§5.4d-quater：报告必须披露放大倍数）
             //   2026-10-06 用户裁定：金额一律用**万元** —— `50000 元` 要数位数，
-            //   `5 万元` 一眼读出来。行序 = 目标成交额 → 实际成交额。
+            //   `5 万元` 一眼读出来。行序 = 目标成交额 → 最大成交额。
             //   同日补充裁定：①「最小申报 / 借道笔数」行删除（`min_lot` /
             //   `min_lot_derived_trades` 照常下发，CLI 摘要照印）；②「最大单笔放大」
-            //   改名「实际成交额」—— 值格式不变（倍数（万元）），名字说人话。
+            //   10-06 改名「实际成交额」、10-07 再改「最大成交额」—— 值格式不变
+            //   （倍数（万元））；语义 = N 笔里实际成交额最大的那一笔（各用各的入场价）。
             //   v2.2（指数当个股）：指数不再「不适用」，照常显示（上证 3842 点的
             //   放大倍数 ≈ 7.7 倍，如实披露 —— 假设本身由口径行说明）。
             html += '<div class="stats-row"><span class="stats-label">目标成交额</span><span class="stats-value">'
                 + (cal.target_amount === undefined || cal.target_amount === null
                     ? "—" : _btWan(cal.target_amount)) + '</span></div>';
-            html += '<div class="stats-row"><span class="stats-label">实际成交额</span><span class="stats-value">'
+            html += '<div class="stats-row"><span class="stats-label">最大成交额</span><span class="stats-value">'
                 + ((cal.max_notional_multiple === null || cal.max_notional_multiple === undefined
                     ? "—" : Number(cal.max_notional_multiple).toFixed(2) + " 倍")
                    + '（' + _btWan(cal.max_notional) + '）') + '</span></div>';

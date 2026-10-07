@@ -577,13 +577,15 @@ def part8_9_10_11(d_idx, d_stock, d30=None, d1=None):
         " oldBadge: BT_HTML.indexOf('指数标的（不可交易）') >= 0,"
         " calRow: BT_HTML.indexOf('目标成交额') >= 0,"
         " seen: BT_HTML.indexOf('首见信号') >= 0,"
-        # ⑼⑽⑾ 仓位两行必须紧跟「区间 / K线」，且内部序 = 目标成交额 → 实际成交额
+        # ⑼⑽⑾ 仓位两行必须紧跟「区间 / K线」，且内部序 = 目标成交额 → 最大成交额
         #   （用字符串下标比先后 —— 不比排版，只比文档顺序）
         " order: (_i('区间 / K线') >= 0 && _i('区间 / K线') < _i('目标成交额'))"
-        " && (_i('目标成交额') < _i('实际成交额')),"
+        " && (_i('目标成交额') < _i('最大成交额')),"
         # 同日补充：最小申报行已删（旧新文案都不许出现）；逐笔最新在上
         " minLotGone: BT_HTML.indexOf('最小申报') < 0 && BT_HTML.indexOf('借道') < 0,"
         " amplGone: BT_HTML.indexOf('最大单笔放大') < 0,"
+        # 10-07 再改名：「实际成交额」→「最大成交额」（旧文案零残留，防回潮）
+        " oldLabelGone: BT_HTML.indexOf('实际成交额') < 0,"
         # ⑽⑾ 金额一律万元：不许再出现「数字 + 空格 + 元」这种裸元写法
         " wan: !/\\d+ 元/.test(BT_HTML) && /万元/.test(BT_HTML),"
         # 同日补充：正值不带 + 号（正负由颜色表达）；`+` 紧贴数字即回潮。
@@ -719,10 +721,12 @@ def part8_9_10_11(d_idx, d_stock, d30=None, d1=None):
           and "期望值(R)" not in kv["H2"], kv["H2"])
     check("⑹ 「首见信号 / 拒收 / 过滤」行已从面板移除（后端 run.* 字段照常下发）",
           r1["seen"] is False and r2["seen"] is False, kv["R1"] + " / " + kv["R2"])
-    check("⑼⑽⑾ 仓位两行紧跟「区间 / K线」，序 = 目标成交额 → 实际成交额",
+    check("⑼⑽⑾ 仓位两行紧跟「区间 / K线」，序 = 目标成交额 → 最大成交额",
           r2["order"] is True, kv["R2"])
     check("⑼补充 「最小申报 / 借道笔数」行已删、「最大单笔放大」已改名（旧文案零残留）",
           r2["minLotGone"] is True and r2["amplGone"] is True, kv["R2"])
+    check("⑼再补充 「实际成交额」行名已改「最大成交额」（旧文案零残留，2026-10-07）",
+          r2["oldLabelGone"] is True, kv["R2"])
     check("补充 逐笔明细最新在上、首行序号=1（编号下标随 N 严格递增）",
           r2["tDesc"] is True, kv["R2"])
     check("补充 正值不带 + 号（`+数字` 零出现；负数 `-` 号不受影响）",
