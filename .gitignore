@@ -45,3 +45,15 @@ Trading/State/
 # SQLite WAL/SHM 附加文件（与上方 *.db 配套；*.db 已 ignore 但 WAL/SHM 需单独忽略）
 *.db-wal
 *.db-shm
+# ===== 回测实验（Backtest/Exp）中间产物 =====
+# 每次重跑覆写的逐笔明细与逐轮扫描（合计约 10MB），入库会让每次回归都产生无意义 diff。
+# 留档在 Backtest/Exp/参照日志/*.txt 与 Backtest/Exp/参照结果/*.json —— 那两处**是入库的**
+# 「当前数据口径的跑分快照」，口径一改（换源 / 改窗口 / 改股票池）必须整套刷新，
+# 详见 Backtest/Exp/README.md 的「交付边界」。
+Backtest/Exp/entry/sq_*.json
+Backtest/Exp/exit/fate_*.json
+Backtest/Exp/entry/sweep_regret.json
+Backtest/Exp/entry/layer_activation.json
+Backtest/Exp/exit/be_ab.json
+Backtest/Exp/exit/atr_scale.json
+Backtest/Exp/exit/ab_atr.json

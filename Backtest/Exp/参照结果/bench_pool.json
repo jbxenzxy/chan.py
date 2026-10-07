@@ -1,0 +1,1 @@
+{"meta": {"freq": "w", "n": 3, "limit": 3, "threads": 1, "procs": 1, "repeat": 1}, "cfg": {"PCT_BE_TRIGGER": 0.1, "PCT_BE_BUFFER": 0.0, "PCT_TRAIL_TRIGGER": 0.2, "PCT_TRAIL_DIST": 0.1}, "runs": {"0": {"threads": 0.25388288497924805, "procs": 1.6180353164672852, "same": true, "n_trades": 2}}}

@@ -7,8 +7,8 @@
 
 | 目录 | 回答什么问题 | 文档 |
 |---|---|---|
-| `entry/` | **入场**：缠论买卖点信号本身有没有优势？（哪个周期、哪类信号） | `Docs/止盈止损/入出场回测/入场信号质量回测.md` |
-| `exit/` | **出场**：给定信号，止盈止损参数怎么设？ | `Docs/止盈止损/入出场回测/出场策略回测.md` |
+| `entry/` | **入场**：缠论买卖点信号本身有没有优势？（哪个周期、哪类信号） | `Docs/回测方案/入场信号回测.md` |
+| `exit/` | **出场**：给定信号，止盈止损参数怎么设？ | `Docs/回测方案/出场策略回测.md` |
 | `common/` | 两条流水线共用的**取数层**与护栏 | — |
 
 > 为什么要分开：出场参数（保本/跟踪门槛）是个**无底洞**，把它和入场验证搅在一起，
@@ -32,7 +32,26 @@ CTdxAPI.fetch_main_level(market, code, freq)          ← DataAPI/TdxAPI.py
 
 本目录**唯一允许**的取数入口是 `common/tdx_source.py`（它直接调同一个
 `CTdxAPI.fetch_main_level`）。`CChan` 的构造参数（`autype=AUTYPE.NONE` +
-`CChanConfig()` 全默认）由 `Test/test_bt02_config_contract.py` 钉住，与页面逐字段相等。
+`CChanConfig()` 全默认）由 `Backtest/Test/test_bt02_config_contract.py` 钉住，与页面逐字段相等。
+
+**但"调同一个函数"还不够 —— 还有第二刀：页面加载窗口。**
+页面喂给 `CChan` 的不是 vipdoc 全量：`AppEngine._analyze_stock_internal` 会
+① 优先按 `App/double_click_dt.csv` 的**双击选点**截左边界（截了就不再按根数限），
+否则 ② 按 `AppConfig.STOCKS_LOOKBACK_CONFIG` 取**末尾 N 根**
+（本机：`w` 不限制 / `d` **500** / `30m` **800** / `15m` **960** / `5m` **960**）。
+`tdx_source.page_window()` 复刻这一刀，**上限与选点都现读 App 层**（不抄数字）。
+
+| 周期 | 页面（= 回测） | vipdoc 全量 |
+|---|---|---|
+| 周K | 294 | 294 |
+| 日K | **500** | 1 393 |
+| 30分 | **800** | 1 936 |
+| 15分 | **960** | 3 872 |
+| 5分 | **960** | 11 616 |
+
+> 忘了这一刀＝笔/段起点错位＝整条结构全变，和"换数据源"是同等级的错。
+> 只想拿全量做敏感性对照时用 `EXP_FULL_DATA=1`（或 `set_page_window(False)`），
+> **不得**用它出结论。详见 `Docs/回测方案/入场信号回测.md` §1.2。
 
 **不用它会发生什么**（实测，见 `common/data_parity.py` 与 `参照日志/log_data_parity.txt`）：
 
@@ -58,8 +77,16 @@ CTdxAPI.fetch_main_level(market, code, freq)          ← DataAPI/TdxAPI.py
 python Backtest/Exp/common/tdx_source.py --xdxr 900     # 断点续跑，已抓的跳过
 ```
 
-语义 = 与冻结的 vipdoc K 线（末日 2026-09-30）配对的一份**数据快照**，
-等价于"页面此刻去问 eltdx"，差异仅在抓取之后再发生的新除权事件。
+语义 = 把 eltdx 当时返回的 `DataFrame` **原样 pickle 下来**，之后所有进程读本地文件
+（替换点是 `DataAPI.TdxAPI` 的**模块属性** `get_xdxr_data` ——
+`TdxAPI.py` 用 `from DataAPI.ElTdxAPI import get_xdxr_data` 绑定成了模块属性，
+改 `ElTdxAPI` 侧无效）。等价于"页面此刻去问 eltdx"，
+差异只在抓取之后再发生的新除权事件 —— 而那类事件比窗口内所有 K 线都新，
+是一张**统一的正仿射映射**，保大小关系 ⇒ **笔/段/买卖点不变**。
+
+**实测证据**（`common/xdxr_parity.py`，现场再问一次 eltdx 与快照逐项对拍）：
+800/800 有文件（0 缺）、791 只有除权记录、9 只真空；抽 6 只 **内容全列相等**、
+且两条 xdxr 各做一遍前复权后 **笔数与各类型买卖点数逐类相同**。
 
 > ⚠ **快照为空 ⇒ 前复权被静默跳过** —— 根数、日期范围看起来都对，但长期高分红股的
 > 价格序列整个变样。`install_xdxr()` 现在会在快照为空时往 **stderr** 打一条醒目告警
@@ -73,14 +100,16 @@ python Backtest/Exp/common/tdx_source.py --xdxr 900     # 断点续跑，已抓�
 Backtest/Exp/
 ├── README.md                ← 本文件
 ├── common/                  ← 两条流水线共用
-│   ├── tdx_source.py        ★ 页面同源取数（唯一允许的入口）
+│   ├── tdx_source.py        ★ 页面同源取数（唯一允许的入口；含 page_window 第二刀）
+│   │                          取值入口的唯一事实源：`records()` / `recs_src()` / `ext_records()`
 │   ├── page_kline.py          旧 fetch_kline 接口的页同源薄壳（签名兼容）
 │   ├── data_parity.py         数据同源核验（给"到底差多少"出证据）
+│   ├── xdxr_parity.py         xdxr 快照 ⟷ 现场 eltdx 对拍（内容 + 结构）
 │   ├── exp_policy.py          出场策略覆盖层（只被 exit/ 的 A/B 用）
 │   ├── bench_pool.py          并行基准（线程池 vs 进程池）
 │   ├── verify_equiv.py        exp_policy 与真实策略的等价性护栏
-│   ├── fetch_kline.py         旧外部链路（腾讯）——**仅 data_parity 用**
-│   ├── fetch_min.py           旧外部链路（新浪，不复权）——**仅 data_parity 用**
+│   ├── fetch_kline.py         旧外部链路（腾讯）—— 只被 `tdx_source.ext_records()` 调
+│   ├── fetch_min.py           旧外部链路（新浪，不复权）—— 同上
 │   ├── fetch_fut.py           期货取数（Phase 2 用，暂不参与股票回测）
 │   └── .kcache/_universe.json 股票池快照（固定种子打散，复现凭据）
 ├── entry/                   ← 入场信号质量
@@ -130,7 +159,25 @@ chan.py 的 `step_load` 是**纯 Python CPU 活** ⇒ **必须用进程池**，�
 | 线程 12 个 | 22.1s | **0.93×（更慢）** |
 | 进程 8 个 | **6.8s** | **3.05×** |
 
-本机 20 逻辑核，**甜点 8~10 个进程**（16 个反而变慢）。取数（I/O）才用线程池。
+本机 20 逻辑核，**甜点 8~10 个进程**（16 个反而变慢）。
+
+> ⚠ **取数也一样，它也不是 I/O。** `tdx_source.records()` 是「读本地文件 + 前复权 +
+> 周期重采样」的**纯 Python CPU** 活（30m/15m 还要先把整条 5m 读进来再重采样），
+> 所以**同样**只能靠进程池：
+>
+> | 场景 | 线程池 | 进程池 |
+> |---|---|---|
+> | 30m × 60 只（质量门） | `--workers 1` **12s** / `--workers 12` **14s**（零收益） | **6s** |
+> | 30m × 800 只（质量门） | 单只 ~0.20s 线性累加 ⇒ ~160s | **48s** |
+>
+> 单只成本随规模**线性**（300 只 59.7s；末 50 只 / 前 50 只 = **1.04×**），
+> 所以「跑得越久越慢」不是内存问题，纯粹是没用上多核。
+> 本轮已把 `entry/signal_quality.py`、`exit/exit_fate.py` 的质量门、
+> `exit/atr_scale.py` 的取数循环、`tdx_source.prefetch()` 全部改成进程池，
+> 并删掉了那两个误导性的 `--workers` 参数。
+>
+> 也别指望"质量门预热"能加速随后的扫描 —— 扫描跑在**另一个**进程池里
+> （`spawn` 的子进程各自持有独立的 `tdx_source._MEMO`），预热只是**预筛可用标的**。
 
 > ⚠ `exp_policy.install()` 改的是**父进程**的模块属性，`spawn` 的子进程**不继承**
 > ⇒ 子进程会静默跑**原始策略**（结果看起来像基线，还不报错）。
@@ -138,13 +185,16 @@ chan.py 的 `step_load` 是**纯 Python CPU 活** ⇒ **必须用进程池**，�
 
 ### 取数内存（硬规则）
 
-**单进程脚本扫全池时，一律用 `tdx_source.records(code, freq, use_cache=False)`。**
+**扫全池时一律用 `tdx_source.records(code, freq, use_cache=False)` 取数。**
 
-`records()` 默认会把结果 memo 起来，等于把**每只标的的整段 K 线**留在内存里
-（日K 800 只 ≈ 1.1M 个 dict）。实测 `exit/atr_scale.py` 跑到日K 时 RSS 涨到 **1.8GB**、
-输出停滞 15 分钟以上，5m（300 × 11 616 根）更糟。改用 `use_cache=False` 后整表约 6 分钟跑完。
+`records()` 默认会把结果 memo 起来，等于把**每只标的的整段 K 线**留在内存里。
+实测 `exit/atr_scale.py` 跑到日K 时 RSS 涨到 **1.8GB**、输出停滞 15 分钟以上，
+5m 更糟。改用 `use_cache=False` 后整表约 6 分钟跑完。
+（`raw_records()` 是"绕过页面窗口取全量"，只给对照用。）
 
-**进进程池的脚本不受影响**（每个子进程只装自己那一份），它们沿用自己的取法即可。
+> 本轮补记：`atr_scale.py` 的串行 `for` 循环已改**进程池** —— 每个子进程只装
+> 自己那一小段 code 的 K 线，memo 累积不起来，所以 `use_cache=False` 照旧保留；
+> 五个周期合计从 ~10 分钟降到 ~2 分钟。
 
 ---
 
@@ -153,5 +203,35 @@ chan.py 的 `step_load` 是**纯 Python CPU 活** ⇒ **必须用进程池**，�
 - 本目录脚本只做**实验**，不进 `Trading/`、不改生产默认值。
 - `exp_policy.ExpExitPolicy` 只在实验进程内 monkey-patch，且默认**全部开关关闭**，
   与真实 `LayeredExitPolicy` 的等价性由 `verify_equiv.py` 钉住。
-- `.kcache*`、`参照结果/*.json` 里的大文件不入库；入库的是脚本、`参照日志/*.txt`
-  与 `common/.kcache/_universe.json`（53KB，复现同一股票池的唯一凭据）。
+- `.kcache*/`（K 线缓存 + xdxr 快照，约 60MB）**不入库**，唯一例外是
+  `common/.kcache/_universe.json`（53KB，复现同一股票池的唯一凭据，`.gitignore` 里有取反规则）。
+- **入库的产物**：脚本、`参照日志/*.txt`（各脚本的 stdout 原文）、`参照结果/*.json`（聚合结果）。
+  两者都是"**当前这一版数据口径**"的跑分留档 —— **数据口径一改（换源 / 改窗口 / 改股票池）
+  就必须同步刷新**，否则它们会和两份文档的数字打架。
+- ⚠ **本轮留档另有一个"代码口径"前提**：`参照日志/` `参照结果/` 与两份文档都测于提交
+  `a790959`，而该提交下 `BuySellPoint/BSPointList.py` 的 `_cal_bs0point_4th` /
+  `_cal_bs0point_nth` 各有一处裸 `return`（`27a83bf` 引入）⇒ **0 类两支生成器被短接**。
+  当前 HEAD `98d0284` 已删除这两行、**生成器恢复** ⇒ 两份文档里受影响的行都打了 **⚠ 待重测**，
+  `_rerun.sh` 整套重跑排下一轮。机制、影响面与安全边界见两文档的顶部警示块与 §9/§10 勘误。
+- 仓库根 `_rerun.sh`：一键把全部跑分重算一遍（stdout 直接落到本目录 `参照日志/`，
+  聚合 json 归档到 `参照结果/`）。默认跳过两个联网段，加 `WITH_NET=1` 才跑
+  `data_parity.py` + `xdxr_parity.py`。
+- **`.gitignore` 的中间产物规则已随交付提供**（仓库根 `.gitignore` 里，
+  文件末尾「===== 回测实验（Backtest/Exp）中间产物 =====」那一段，7 条规则 + 5 行注释）——
+  `_rerun.sh` 会在 `entry/` `exit/` 留下中间产物，否则每次重跑都脏 `git status`；
+  同时那一段把「`参照日志/` `参照结果/` 才是入库快照」写进了注释，免得下次又有人把两者搞混：
+
+  ```gitignore
+  # ===== 回测实验（Backtest/Exp）中间产物 =====
+  # 每次重跑覆写的逐笔明细与逐轮扫描（合计约 10MB），入库会让每次回归都产生无意义 diff。
+  # 留档在 Backtest/Exp/参照日志/*.txt 与 Backtest/Exp/参照结果/*.json —— 那两处**是入库的**
+  # 「当前数据口径的跑分快照」，口径一改（换源 / 改窗口 / 改股票池）必须整套刷新，
+  # 详见 Backtest/Exp/README.md 的「交付边界」。
+  Backtest/Exp/entry/sq_*.json
+  Backtest/Exp/exit/fate_*.json
+  Backtest/Exp/entry/sweep_regret.json
+  Backtest/Exp/entry/layer_activation.json
+  Backtest/Exp/exit/be_ab.json
+  Backtest/Exp/exit/atr_scale.json
+  Backtest/Exp/exit/ab_atr.json
+  ```

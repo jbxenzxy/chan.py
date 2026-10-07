@@ -75,8 +75,9 @@
     python signal_quality.py --freq 30m --limit 300 --horizon 30 \\
         --procs 5 --out sq_30m.json
 
-`--n` 已废弃（根数由 vipdoc 决定，不做截断）；`--workers` 已改名 `--procs`，
-因为这一步是纯 CPU 活，线程池会被 GIL 串行化（见 `common/bench_pool.py`）。
+`--n` 已废弃（根数由 vipdoc 决定，不做截断）；`--workers` 已**移除** —— 质量门与扫描
+**都**走 `--procs`，因为两段都是纯 CPU 活，线程池会被 GIL 串行化
+（实测见 `common/bench_pool.py`，以及下文质量门处的计时注释）。
 """
 from __future__ import annotations
 
@@ -85,7 +86,7 @@ import os
 import random
 import sys
 import time
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -108,26 +109,8 @@ sys.path.insert(0, os.path.join(EXP, "common"))     # 共享层（tdx_source / e
 sys.path.insert(0, HERE)
 os.chdir(REPO)
 
-from tdx_source import records as _page_records, stock_list   # noqa: E402
+from tdx_source import recs_src, stock_list                    # noqa: E402
 from Backtest.Runner import default_chan_config, date_fmt_of, kl_type_of  # noqa: E402
-
-
-def recs_src(code: str, freq: str, n: int = None, src: str = "tdx") -> list:
-    """**页面同源** K 线（`tdx_source` → 通达信 vipdoc + 自实现前复权）。
-
-    `src` / `n` 仅为兼容旧签名保留：`src="ext"` 走旧的腾讯/新浪链路（**非页面口径**，
-    只用于 `data_parity.py` 对照），默认 `"tdx"` 才是页面口径。
-    """
-    if src in ("tencent", "sina", "ext"):
-        from datetime import datetime
-        if src == "sina":
-            from fetch_min import fetch as fmin
-            return [dict(r, dt=datetime.strptime(r["dt"], "%Y-%m-%d %H:%M:%S"))
-                    for r in fmin(code, freq, n or 2000)]
-        from fetch_kline import fetch as fk
-        return [dict(r, dt=datetime.strptime(r["dt"], "%Y-%m-%d %H:%M:%S"))
-                for r in fk(code, freq, n or 800)]
-    return _page_records(code, freq)
 
 
 @dataclass
@@ -384,18 +367,22 @@ def main():
                     help="数据源：tdx=页面同源（默认）。ext/tencent/sina=旧外部链路，**非页面口径**")
     ap.add_argument("--limit", type=int, default=400)
     ap.add_argument("--horizon", type=int, default=30)
-    ap.add_argument("--workers", type=int, default=12,
-                    help="预热用线程数（I/O 密集）")
     ap.add_argument("--procs", type=int, default=8,
-                    help="扫描用进程数（纯 CPU；线程池会被 GIL 串行化）")
+                    help="进程数：质量门与扫描都用它（两段都是纯 CPU，线程池会被 GIL 串行化）")
     ap.add_argument("--out", default="sq.json")
     a = ap.parse_args()
 
     codes = stock_list(a.limit)
     t0 = time.time()
-    with ThreadPoolExecutor(max_workers=a.workers) as ex:
-        list(ex.map(_warm, [(c, a.freq, a.n, a.src) for c in codes]))
-    codes = [c for c in codes if recs_src(c, a.freq, a.n, a.src)]
+    # ⚠ 质量门（剔掉取不到数的标的）也必须用**进程池**：取数不是 I/O，而是纯 Python 的
+    #   vipdoc 解析 + 前复权 + 周期重采样（30m/15m 还要先把整条 5m 读进来再重采样），
+    #   线程池会被 GIL 串行化 —— 实测同一批 60 只：--workers 1 = 12s / --workers 12 = 14s，
+    #   零收益（单只 ~0.2s，与规模线性：300 只 59.7s、末 50 只/前 50 只 = 1.04×）。
+    #   ⚠ 也别指望这一步能加速后面的扫描：扫描跑在**另一个**进程池里（Windows 是 spawn，
+    #   每个子进程各自持有 `tdx_source._MEMO`），所以这里只是"预筛可用标的"。
+    with ProcessPoolExecutor(max_workers=a.procs) as ex:
+        ok = list(ex.map(_warm, [(c, a.freq, a.n, a.src) for c in codes], chunksize=4))
+    codes = [c for c, k in zip(codes, ok) if k]
     print("周期={} 源={} 有效标的 {} 只（{} 只被质量门/接口剔除）预热 {:.0f}s".format(
         a.freq, a.src, len(codes), a.limit - len(codes), time.time() - t0), flush=True)
 
@@ -543,7 +530,8 @@ def _by_code(rows):
 
 # ── 进程池用的顶层函数（lambda 不能被 pickle ⇒ 必须写在模块级） ──────────
 def _warm(args):
-    """预热取数（I/O 密集 ⇒ 用线程池即可）。"""
+    """质量门：该 (code, freq) 是否取得到数。**不是 I/O 而是纯 CPU**（vipdoc 解析 +
+    前复权 + 重采样），所以调用方传的是**进程池** —— 见 `main()` 里的注释。"""
     return bool(recs_src(*args))
 
 

@@ -85,28 +85,43 @@ def stats(recs):
             "sd": st.pstdev(rets) if len(rets) > 1 else 0.0}
 
 
-def load_stocks(freq, n=None, limit=800):
+def _stat_one(args):
+    """`load_stocks` 的并行单元 —— 必须是**模块级函数**（进程池要能 pickle 它）。"""
+    code, freq = args
+    import tdx_source
+    try:
+        recs = tdx_source.records(code, freq, use_cache=False)
+    except Exception:                                        # noqa: BLE001
+        recs = []
+    return stats(recs) if recs else None
+
+
+def load_stocks(freq, n=None, limit=800, procs=None):
     """**页面同源** K 线（通达信 vipdoc + 自实现前复权）——五个周期同一个函数。
 
     用 `use_cache=False` 直取：`tdx_source.records()` 的 memo 会把**每只标的的整段
     K 线**留在内存里（日K 800 只 ≈ 1.1M 个 dict，已实测涨到 1.8GB 且被 GC 拖死，
     5m 会更糟）。本脚本每只标的只留统计量，不需要 memo。
+
+    ⚠ 用**进程池**：读数 + 统计是纯 Python CPU，串行跑「800 只 × 5 周期」要约 10
+      分钟（线程池在这里会被 GIL 串行化，见 `common/bench_pool.py`）。`use_cache=False`
+      在子进程里一样保留 —— 每个子进程只分到一段 code，memo 累积不起来。
     """
-    import tdx_source
-    out = []
-    for c in stock_list(limit):
-        try:
-            recs = tdx_source.records(c, freq, use_cache=False)
-        except Exception:                                    # noqa: BLE001
-            recs = []
-        s = stats(recs) if recs else None
-        if s:
-            out.append(s)
-    return out
+    from concurrent.futures import ProcessPoolExecutor
+    codes = stock_list(limit)
+    if procs is None:
+        procs = max(1, min(8, os.cpu_count() or 4))
+    with ProcessPoolExecutor(max_workers=procs) as ex:
+        rows = list(ex.map(_stat_one, [(c, freq) for c in codes], chunksize=8))
+    return [s for s in rows if s]
 
 
-def load_stocks_min(freq, n=None, limit=300):
-    """分钟周期（5m/15m/30m）—— 与 `load_stocks` 同源（页面也是前复权）。"""
+def load_stocks_min(freq, n=None, limit=800):
+    """分钟周期（5m/15m/30m）—— 与 `load_stocks` 同源（页面也是前复权）。
+
+    股票池**与入场/出场两条流水线一致（800 只）**：这张表要跨周期比"同一个 5% 等于几个 ATR"，
+    若这里还用 300 只，读者会以为分母口径不同。窗口化后分钟周期便宜了 12~24 倍，成本可接受。
+    """
     return load_stocks(freq, n, limit)
 
 

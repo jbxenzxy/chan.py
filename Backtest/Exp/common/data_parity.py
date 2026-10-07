@@ -56,6 +56,7 @@ from DataAPI.TdxAPI import CTdxAPI, set_tdx_config, tdx_data_context  # noqa: E4
 from Chan import CChan                                                 # noqa: E402
 from Common.CEnum import AUTYPE                                        # noqa: E402
 from Backtest.Runner import default_chan_config, kl_type_of            # noqa: E402
+from tdx_source import ext_records                                     # noqa: E402
 
 TDX_INSTALL = os.environ.get("TDX_INSTALL_DIR", r"D:\new_tdx_hd_test")
 set_tdx_config(vipdoc_dir=os.path.join(TDX_INSTALL, "vipdoc"),
@@ -81,8 +82,14 @@ def tdx_recs(code, freq):
 
 
 def ext_recs(code, freq, n, src):
-    import signal_quality as sq
-    return sq.recs_src(code, freq, n, src)
+    """旧外部链路（腾讯/新浪）——**只为本脚本的"到底差多少"出证据**。
+
+    实现已收敛到 `tdx_source.ext_records`（此前这段在 `signal_quality`、
+    `exit_fate`、本脚本各抄了一份）。**不再** `import signal_quality` ——
+    `Exp` 拆成 `common/entry/exit` 之后，`common/` 反向 import `entry/` 会断
+    （`ModuleNotFoundError`），且违反"entry/exit → common"的单向依赖。
+    """
+    return ext_records(code, freq, n, "sina" if src == "sina" else "tencent")
 
 
 def chan_stats(recs, code, freq):

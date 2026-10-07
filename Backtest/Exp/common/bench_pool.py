@@ -45,6 +45,11 @@ REPO = (os.environ.get("CHAN_REPO") or _find_repo(HERE)
         or os.path.join(os.path.dirname(os.path.dirname(EXP)), "wt_latest"))
 sys.path.insert(0, REPO)
 sys.path.insert(0, os.path.join(EXP, "common"))     # 共享层（tdx_source / exp_policy …）
+sys.path.insert(0, os.path.join(EXP, "exit"))       # ← 唯一一处"common import exit"：
+                                                    #    本脚本是 exit/ab_run 的并行基准
+                                                    #    （见 docstring §"ab_run.py::run_plan"），
+                                                    #    Exp 拆目录后必须显式加上，否则
+                                                    #    `import ab_run` 直接 ModuleNotFoundError。
 sys.path.insert(0, HERE)
 os.chdir(REPO)
 

@@ -56,7 +56,7 @@ import os
 import random
 import sys
 import time
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 def _find_repo(_p):
@@ -78,8 +78,7 @@ sys.path.insert(0, os.path.join(EXP, "common"))     # 共享层（tdx_source / e
 sys.path.insert(0, HERE)
 os.chdir(REPO)
 
-from ab_run import recs_cached                                     # noqa: E402
-from tdx_source import stock_list                                  # noqa: E402
+from tdx_source import recs_src, stock_list                          # noqa: E402
 from Backtest.ExitParams import (STOCK_EXIT_PARAMS, TARGET_AMOUNT,  # noqa: E402
                                  round_trip_cost, shares_for)
 from Backtest.Runner import (bar_from_klu, bsp_to_dict,             # noqa: E402
@@ -88,23 +87,6 @@ from Backtest.State import State, next_state                       # noqa: E402
 from Trading.Infra.Instrument import Instrument                    # noqa: E402
 from Trading.Infra.Records import Position, Signal                 # noqa: E402
 from Trading.Strategy.Exit import LayeredExitPolicy                # noqa: E402
-
-
-def recs_src(code: str, freq: str, n: int = None, src: str = "tdx") -> list:
-    """**页面同源** K 线（与 `signal_quality.recs_src` 同一个取数函数）。
-
-    `src` / `n` 仅为兼容旧签名保留；`src="ext"` 才是旧的腾讯/新浪链路。
-    """
-    if src in ("tencent", "sina", "ext"):
-        from datetime import datetime
-        if src == "sina":
-            from fetch_min import fetch as fmin
-            return [dict(r, dt=datetime.strptime(r["dt"], "%Y-%m-%d %H:%M:%S"))
-                    for r in fmin(code, freq, n or 2000)]
-        from fetch_kline import fetch as fk
-        return [dict(r, dt=datetime.strptime(r["dt"], "%Y-%m-%d %H:%M:%S"))
-                for r in fk(code, freq, n or 800)]
-    return recs_cached(code, freq, n)
 
 
 def _bi_anchor(chan):
@@ -448,17 +430,19 @@ def main():
                     help="已废弃：根数由 vipdoc 决定（保留仅为兼容旧命令行）")
     ap.add_argument("--src", default="tdx", help="tdx=页面同源（默认）；ext=旧外部链路")
     ap.add_argument("--limit", type=int, default=800)
-    ap.add_argument("--workers", type=int, default=12)
-    ap.add_argument("--procs", type=int, default=8)
+    ap.add_argument("--procs", type=int, default=8,
+                    help="进程数：质量门与逐根回放都用它（两段都是纯 CPU，线程池会被 GIL 串行化）")
     ap.add_argument("--verify", type=int, default=0)
     ap.add_argument("--out", default="fate.json")
     a = ap.parse_args()
 
     codes = stock_list(a.limit)
     t0 = time.time()
-    with ThreadPoolExecutor(max_workers=a.workers) as ex:
-        list(ex.map(_warm, [(c, a.freq, a.n, a.src) for c in codes]))
-    codes = [c for c in codes if recs_src(c, a.freq, a.n, a.src)]
+    # ⚠ 质量门用**进程池**（理由同 `entry/signal_quality.py`）：取数是纯 Python CPU，
+    #   线程池会被 GIL 串行化；预筛结果不影响扫描（扫描在另一个进程池、各自冷的 `_MEMO`）。
+    with ProcessPoolExecutor(max_workers=a.procs) as ex:
+        ok = list(ex.map(_warm, [(c, a.freq, a.n, a.src) for c in codes], chunksize=4))
+    codes = [c for c, k in zip(codes, ok) if k]
     print("周期={} 源={} 有效标的 {} 只，预热 {:.0f}s".format(
         a.freq, a.src, len(codes), time.time() - t0), flush=True)
 
