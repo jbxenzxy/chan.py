@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>chan.py · 入场信号质量 与 跨周期止盈止损 回测报告</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#ffffff; --ink:#1a1d21; --ink2:#4a5058; --ink3:#79818c;
+    --line:#e3e6ea; --line2:#eef0f3;
+    --red:#c0392b; --redbg:#fdecea; --green:#1e8e5a; --greenbg:#e8f6ef;
+    --blue:#1f6feb; --bluebg:#eaf1fd; --amber:#b7791f; --amberbg:#fdf6e3;
+    --purple:#6b4fbb; --purplebg:#f0ecfb;
+    --mono:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.72 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:1180px;margin:0 auto;padding:36px 22px 90px}
+  header.hero{background:linear-gradient(135deg,#1a1d21 0%,#2c3440 100%);color:#fff;
+    border-radius:14px;padding:34px 34px 30px;margin-bottom:26px}
+  header.hero h1{margin:0 0 10px;font-size:27px;letter-spacing:.2px}
+  header.hero .sub{color:#b8c0cc;font-size:14px;line-height:1.9}
+  header.hero .tag{display:inline-block;background:rgba(255,255,255,.12);color:#e6ebf2;
+    border-radius:999px;padding:3px 12px;font-size:12px;margin:10px 8px 0 0}
+  h2{font-size:21px;margin:44px 0 14px;padding-bottom:9px;border-bottom:2px solid var(--line)}
+  h3{font-size:17px;margin:28px 0 10px;color:var(--ink)}
+  h4{font-size:15px;margin:20px 0 8px;color:var(--ink2)}
+  p{margin:10px 0}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:20px 22px;margin:16px 0}
+  .grid{display:grid;gap:14px}
+  .g2{grid-template-columns:repeat(2,1fr)}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  .g4{grid-template-columns:repeat(4,1fr)}
+  @media(max-width:880px){.g2,.g3,.g4{grid-template-columns:1fr}}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+  .kpi .lab{font-size:12.5px;color:var(--ink3);margin-bottom:6px}
+  .kpi .val{font-size:25px;font-weight:650;letter-spacing:-.4px}
+  .kpi .note{font-size:12.5px;color:var(--ink3);margin-top:5px;line-height:1.6}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:right}
+  th{background:#f0f2f5;font-weight:600;color:var(--ink2);text-align:center;font-size:12.5px}
+  td:first-child,th:first-child{text-align:left}
+  td.l{text-align:left}
+  tr:nth-child(even) td{background:#fbfbfc}
+  .pos{color:var(--red);font-weight:600}
+  .neg{color:var(--green);font-weight:600}
+  .dim{color:var(--ink3)}
+  .pill{display:inline-block;border-radius:5px;padding:1px 7px;font-size:12px;font-weight:600}
+  .p-ok{background:var(--redbg);color:var(--red)}
+  .p-bad{background:var(--greenbg);color:var(--green)}
+  .p-neutral{background:#eef0f3;color:var(--ink3)}
+  .p-warn{background:var(--amberbg);color:var(--amber)}
+  .p-info{background:var(--bluebg);color:var(--blue)}
+  .note{background:var(--bluebg);border-left:3px solid var(--blue);border-radius:0 8px 8px 0;
+    padding:12px 16px;margin:14px 0;font-size:13.5px;line-height:1.75}
+  .warn{background:var(--amberbg);border-left:3px solid var(--amber);border-radius:0 8px 8px 0;
+    padding:12px 16px;margin:14px 0;font-size:13.5px;line-height:1.75}
+  .danger{background:var(--redbg);border-left:3px solid var(--red);border-radius:0 8px 8px 0;
+    padding:12px 16px;margin:14px 0;font-size:13.5px;line-height:1.75}
+  .good{background:var(--greenbg);border-left:3px solid var(--green);border-radius:0 8px 8px 0;
+    padding:12px 16px;margin:14px 0;font-size:13.5px;line-height:1.75}
+  code{font-family:var(--mono);background:#f0f2f5;border-radius:4px;padding:1px 5px;font-size:12.8px}
+  pre{background:#1a1d21;color:#e6ebf2;border-radius:10px;padding:15px 17px;overflow:auto;
+    font-family:var(--mono);font-size:12.5px;line-height:1.65}
+  ul,ol{margin:10px 0 10px 4px;padding-left:22px}
+  li{margin:6px 0}
+  .bar{height:9px;border-radius:5px;background:#eef0f3;position:relative;overflow:hidden;min-width:60px}
+  .bar > i{position:absolute;left:0;top:0;bottom:0;border-radius:5px;background:var(--blue)}
+  .bar.red > i{background:var(--red)}
+  .bar.amber > i{background:var(--amber)}
+  .bar.purple > i{background:var(--purple)}
+  .barcell{display:flex;align-items:center;gap:9px;justify-content:flex-end}
+  .barcell span{font-variant-numeric:tabular-nums;min-width:46px;text-align:right}
+  footer{margin-top:52px;padding-top:18px;border-top:1px solid var(--line);
+    color:var(--ink3);font-size:12.5px;line-height:1.9}
+  .toc{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 22px}
+  .toc ol{margin:6px 0;padding-left:20px}
+  .toc a{color:var(--blue);text-decoration:none}
+  .toc a:hover{text-decoration:underline}
+  .small{font-size:12.6px;color:var(--ink3);line-height:1.8}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>入场信号质量 × 跨周期止盈止损 —— 回测报告</h1>
+  <div class="sub">
+    仓库 <code style="background:rgba(255,255,255,.14);color:#dbe3ee">jbxenzxy/chan.py@custom-dev</code>
+    ｜ 5 个周期（周K / 日K / 30分 / 15分 / 5分）｜ 股票池 800 只（周/日）· 300 只（分钟）<br>
+    三个口径：① 结构（走出反向笔）② 事件研究（信号 vs 同标的随机入场）③ 确认后入场
+  </div>
+  <div>
+    <span class="tag">信号条数 30 331</span>
+    <span class="tag">配对 bootstrap · 10 000 次 · seed 7</span>
+    <span class="tag">全部结论可回查 sq_*.json</span>
+    <span class="tag">原始数据另包：chanpy_信号质量原始数据_五周期.zip</span>
+  </div>
+</header>
+
+<div class="toc">
+  <strong>目录</strong>
+  <ol>
+    <li><a href="#s0">结论速览（TL;DR）</a></li>
+    <li><a href="#s1">你的判定标准（口语一）成立吗 —— 能用，但<b>要拆成两族</b>（含勘误）</a></li>
+    <li><a href="#s2">入场信号到底有没有 alpha（口径二）</a></li>
+    <li><a href="#s3">周期 × 信号类型 交叉表（你要的那张表）</a></li>
+    <li><a href="#s4">百分比口径为什么周期相关（问题⑵）</a></li>
+    <li><a href="#s5">关键发现：止盈层在别的周期根本没被触发</a></li>
+    <li><a href="#s6">"控制严格容易被扫掉" 是真的吗 —— 量化它</a></li>
+    <li><a href="#s7">怎么才算一个好的出场策略（问题⑸）</a></li>
+    <li><a href="#s8">行动清单</a></li>
+  </ol>
+</div>
+
+<!-- ══════════════════════════════ 0 ══════════════════════════════ -->
+<h2 id="s0">1. 结论速览</h2>
+
+<div class="grid g4">
+  <div class="kpi">
+    <div class="lab">入场信号是否有 alpha</div>
+    <div class="val neg">没有</div>
+    <div class="note">周K Δ −1.91% (n.s.)｜日K Δ −1.36% (<b>p=0.009</b>)<br>30分 −0.22% (*)｜15分 +0.08% (n.s.)｜5分 −0.05% (n.s.)</div>
+  </div>
+  <div class="kpi">
+    <div class="lab">你的「走出反向笔」判定标准</div>
+    <div class="val" style="font-size:20px">能用，但要拆成两族</div>
+    <div class="note"><s>它与 L1 结构止损同义反复</s> <b>← 已勘误</b><br>
+      结构止损离场 = ①走出反向笔型 <b>12.5%</b> + ②原笔延伸型 28.1%</div>
+  </div>
+  <div class="kpi">
+    <div class="lab">百分比口径的周期依赖（你的直觉）</div>
+    <div class="val" style="font-size:20px">完全正确</div>
+    <div class="note">5% 在周K = <b>0.4×A</b><br>5% 在 5分 = <b>7.4×A</b>（差 18 倍）</div>
+  </div>
+  <div class="kpi">
+    <div class="lab">5 分/15 分周期值得做吗</div>
+    <div class="val neg">不值得</div>
+    <div class="note">信号无 alpha + 保本层触发率仅 6.4% / 14.6%<br>⇒ 参数形同虚设，纯结构止损</div>
+  </div>
+</div>
+
+<div class="card">
+<h4 style="margin-top:0">五句话</h4>
+<ol>
+  <li><b>入场信号本身不跑赢随机入场。</b>周K 不显著、日K 显著为负（p=0.009）、30分 显著为负（p=0.036）、15分/5分 约等于 0。所以「出场调优」的天花板是<b>把负期望修成零</b>，不可能变正 —— 这解释了上一轮 8 个方案样本外无一转正。</li>
+  <li><b>你的判定标准（买点后能否走出向上笔）是可以回测的，我按它实现了。</b><s>但它与「L1 结构止损是否被打穿」是同一件事的两种说法</s>——<b>这句是错的（已勘误，见第 2 节）</b>：保护价 = 入场价 ∓ max(A, ATR) ≤ 分型极值，所以「穿过分型极值」只是「跌破保护价」的必要不充分条件，且保护价可以在反向笔<b>早已走出之后</b>才被跌破。你的直觉是对的：<b>结构止损有两族</b>，其中「走出反向笔却仍止损」（常山北明型）占全部成交的 <b>12.5%</b>、均净 <b class="neg">−26.89%</b>，被旧口径整个漏掉。</li>
+  <li><b>跨周期唯一真正重要的是"1 类信号"。</b>日K 类型1 的超额是 <b class="pos">+6.55%（p=0.0018）</b>，周K 做多·类型1 的 30 根收益是 <b class="pos">+14.94%</b>（类型0/3 只有 +2.7~3.8%）。但样本很少（70 / 79 条），只能当线索不能当结论。</li>
+  <li><b>百分比阈值必须换成结构/波动归一化口径。</b>实测：<code>保本 = 0.4×A</code>、<code>跟踪 = 0.8×A</code>（A = 结构距离，即原 R 的主项）可以<b>自动复现周K 标定出的 5% / 10%</b>，并在其它周期自动缩放到合理量级；用 <code>0.5×ATR% / 1.0×ATR%</code> 结果几乎相同（差 &lt;20%）。</li>
+  <li><b>"控制严格容易被扫掉"在本数据上不严重</b>：在结构止损被打穿之前已经浮盈 ≥1×A 的信号只占 <b>3.9% ~ 7.0%</b>（5 个周期）。真正的问题是<b>信号触发后根本没走出行情</b>（24% 的信号连 0.5×A 都没到就被打止损）。所以别再去调"严格/宽松"，方向错了。</li>
+</ol>
+</div>
+
+<!-- ══════════════════════════════ 1 ══════════════════════════════ -->
+<h2 id="s1">2. 你的判定标准（口径一）成立吗</h2>
+
+<p>你的原话：<i>「买点入场后，能走出向上一笔 ⇒ 质量好；在走出向上笔之前，原向下笔被延伸了 ⇒ 质量差」</i>。这个口径我逐帧流式实现了（无未来函数），并且它<b>确实能跑出稳定数字</b>：</p>
+
+<table>
+  <tr>
+    <th>周期</th><th>信号数</th><th>走出反向笔</th><th>原笔延伸</th><th>超时未定</th>
+    <th>成功耗时(根)</th><th>均 A%</th>
+  </tr>
+  <tr><td>周K</td><td>1 477</td><td class="pos">63.4%</td><td>35.9%</td><td>0.7%</td><td>8.4</td><td>14.30</td></tr>
+  <tr><td>日K</td><td>2 481</td><td>57.1%</td><td>41.7%</td><td>1.2%</td><td>8.8</td><td>5.61</td></tr>
+  <tr><td>30分</td><td>8 430</td><td>58.1%</td><td>41.6%</td><td>0.3%</td><td>10.4</td><td>2.06</td></tr>
+  <tr><td>15分</td><td>8 058</td><td>60.4%</td><td>38.9%</td><td>0.7%</td><td>10.7</td><td>1.42</td></tr>
+  <tr><td>5分</td><td>9 885</td><td>54.9%</td><td>42.6%</td><td>2.5%</td><td>11.3</td><td>0.95</td></tr>
+</table>
+
+<div class="warn" style="opacity:.6">
+<b>【已作废 · 理由见下方勘误】但这个指标有个致命的性质：它和 L1 结构止损是同义反复。</b><br>
+「原笔延伸」的定义是<b>价格先打穿了信号所依据的分型极值</b>；而 L1 的结构止损本来就是按
+「分型极值被破就离场」定义的（<code>Exit._initial_r</code> 里的距离 A 就是入场价到该极点的距离）。<br>
+⇒ <b>「原笔延伸率 35.9%」只是「结构止损触发率 35.9%」的另一种说法</b>，它<b>不能</b>回答
+"买卖点本身有没有优势"，只能回答"结构有没有被打穿"。<br>
+⇒ 用它当"信号质量"会自欺：它一定会显示"信号质量不错"（因为止损定义决定了大概率的结局是"先走出反向笔"）。
+</div>
+
+<div class="warn" style="border-left:4px solid #b3261e;background:#fdf2f2">
+<b>⚠ 勘误（2026-10-07，用户指出后核实）：上面这段「同义反复」的论断是<b>错的</b>。</b>
+<ol style="margin:8px 0 8px 18px;padding:0">
+  <li style="margin-bottom:6px"><b>保护价 ≠ 分型极值。</b><code>Strategy/Exit.py:353</code> 的初始保护价
+      = 入场价 ∓ R；<code>Exit.py:321</code> 的 <code>R = max(A, atr_sl_multiple × ATR)</code>
+      （<code>atr_sl_multiple=1.0</code>），而 <code>A</code> 才是到分型极值的距离
+      ⇒ <b>保护价 ≤ 分型极值</b>。所以"穿过分型极值"只是"跌破保护价"的
+      <b>必要不充分</b>条件。<br>
+      实测反例：<code>sz000601 2014-06-13</code> A=0.160 &lt; R=0.239，分型被破却以
+      <b class="pos">+9.58%</b> 跟踪离场。</li>
+  <li><b>反向更常见、也更致命</b>：保护价可以在<b>反向笔早已走出之后</b>才被跌破
+      （<code>Backtest/Runner.py:423</code> 每根闭合 bar 都调 <code>check()</code>，持仓未平就一直判）。
+      此时原笔并没有延伸，本口径<b>记不到 <code>FAIL</code></b> —— 这一族被口径一整个漏掉了。</li>
+</ol>
+⇒ <b>结构止损其实有两族</b>：<b>① 走出反向笔型</b>（浮盈没够到保本触发，最终回到初始保护价）
++ <b>② 原笔延伸型</b>（反向笔没走出，入场前提当场破裂）。<br>
+周K 实测：原笔延伸 <b>35.2%</b>、结构止损离场 <b>40.6%</b>、其中<b>常山北明型占 12.5%</b>
+（135 笔，均净 <b class="neg">−26.89%</b>、均持仓 20.9 根）。<br>
+完整分解见 <code>报告_结构止损两族分解与回测并行化.html</code> 与脚本 <code>exit_fate.py</code>。
+口径一本身仍有用（它把"入场前提当场破裂"这一子集摘出来），但<b>不能用它论证买卖点优劣</b>。
+</div>
+
+<p>要回答"信号好不好"，必须引入<b>对照组</b>（口径二）。</p>
+
+<!-- ══════════════════════════════ 2 ══════════════════════════════ -->
+<h2 id="s2">3. 入场信号到底有没有 alpha（口径二）</h2>
+
+<p>做法：对每只标的，<b>在它自己内部</b>比较两组同样的 H 根前瞻收益 —— ① 全部买卖点入场；② 该标的<b>随便哪一根</b>入场（= 随机入场的期望）。两组相减，天然消掉标的自身的涨跌，剩下的就是"信号是不是挑得准"。</p>
+
+<div class="note">
+卖点的对照必须是"随机做空"= −基准，而不是拿卖点收益去减做多基准。第一版脚本就犯了这个错（把 −8.38% 去减 +7.77% 得到 −16.14%），已修正并留痕。
+</div>
+
+<table>
+  <tr>
+    <th>周期</th><th>H 根</th><th>信号 ret_H</th><th>随机对照</th><th>超额 Δ</th><th>配对 p</th><th>判决</th>
+  </tr>
+  <tr><td>周K</td><td>30</td><td>−0.67%</td><td>+1.25%</td><td class="dim">−1.91%</td><td>0.1606</td><td><span class="pill p-neutral">不显著</span></td></tr>
+  <tr><td>日K</td><td>30</td><td>−1.02%</td><td>+0.34%</td><td class="neg">−1.36%</td><td><b>0.0090</b></td><td><span class="pill p-bad">显著为负</span></td></tr>
+  <tr><td>30分</td><td>30</td><td>−0.23%</td><td>−0.01%</td><td class="neg">−0.22%</td><td><b>0.0358</b></td><td><span class="pill p-bad">显著为负</span></td></tr>
+  <tr><td>15分</td><td>30</td><td>+0.10%</td><td>+0.01%</td><td class="dim">+0.08%</td><td>0.2328</td><td><span class="pill p-neutral">不显著</span></td></tr>
+  <tr><td>5分</td><td>30</td><td>−0.05%</td><td>−0.00%</td><td class="dim">−0.05%</td><td>0.2712</td><td><span class="pill p-neutral">不显著</span></td></tr>
+</table>
+
+<div class="danger">
+<b>5 个周期里，没有一个周期的"全部信号"跑赢随机入场。</b>周K/15分/5分 不显著，日K/30分 <b>显著为负</b>。
+<br>⇒ 这不是"参数没调好"，是<b>入场信号本身没有 edge</b>。所以上一轮"8 个方案样本外无一转正"不是调参失败，是<b>上限就在那里</b>。
+</div>
+
+<h3>拆开看方向与类型</h3>
+<table>
+  <tr><th>周期</th><th>做多（买点）Δ</th><th>做空（卖点）Δ</th><th>类型 0 Δ</th><th>类型 1 Δ</th><th>类型 3 Δ</th></tr>
+  <tr><td>周K</td><td class="neg">−2.23% n.s.</td><td>−0.61% n.s.</td><td>−2.58% n.s.</td><td>−1.68% n.s.</td><td>−2.15% n.s.</td></tr>
+  <tr><td>日K</td><td class="neg"><b>−2.56% ***</b></td><td>−0.11% n.s.</td><td>−0.50% n.s.</td><td class="pos"><b>+6.55% **</b></td><td class="neg">−1.59% **</td></tr>
+  <tr><td>30分</td><td class="neg">−0.41% *</td><td>+0.01% n.s.</td><td>−0.24% n.s.</td><td>+0.24% n.s.</td><td class="neg">−0.37% **</td></tr>
+  <tr><td>15分</td><td>+0.01% n.s.</td><td>+0.16% n.s.</td><td>−0.09% n.s.</td><td>+0.16% n.s.</td><td>+0.12% n.s.</td></tr>
+  <tr><td>5分</td><td class="neg">−0.13% n.s.</td><td>+0.04% n.s.</td><td>+0.08% n.s.</td><td>−0.13% n.s.</td><td>−0.04% n.s.</td></tr>
+</table>
+
+<div class="good">
+<b>唯一的亮点：1 类信号。</b>
+日K 类型1 超额 <b class="pos">+6.55%</b>（p=0.0018，n=79）；周K 做多·类型1 的 30 根收益 <b class="pos">+14.94%</b>，而类型0/3 只有 +2.67% / +3.82%。
+<br>⚠ 但 1 类信号很少（周K 70 条、日K 79 条，占全部不到 5%），<b>样本小 + 多重比较 ⇒ 极可能是噪声</b>，必须单独做样本外验证才能采信。
+</div>
+
+<!-- ══════════════════════════════ 3 ══════════════════════════════ -->
+<h2 id="s3">4. 周期 × 信号类型 交叉表</h2>
+
+<h3>4.1 结构成功率（口径一）</h3>
+<table>
+  <tr><th>周期</th><th>全部</th><th>0 类</th><th>1 类</th><th>2 类</th><th>3 类</th></tr>
+  <tr><td>周K</td><td>63.4%</td><td>63.1%</td><td class="pos"><b>77.1%</b></td><td class="dim">—</td><td>62.4%</td></tr>
+  <tr><td>日K</td><td>57.1%</td><td>58.8%</td><td class="pos"><b>62.0%</b></td><td class="dim">—</td><td>55.7%</td></tr>
+  <tr><td>30分</td><td>58.1%</td><td>60.8%</td><td class="pos"><b>71.9%</b></td><td class="dim">25.0%</td><td>55.3%</td></tr>
+  <tr><td>15分</td><td>60.4%</td><td>61.8%</td><td class="pos"><b>73.5%</b></td><td class="dim">66.7%</td><td>57.8%</td></tr>
+  <tr><td>5分</td><td>54.9%</td><td>59.2%</td><td>57.1%</td><td>59.3%</td><td>53.2%</td></tr>
+</table>
+<p class="small">
+<b>能读出来的：</b>① 1 类信号的"走出反向笔"率在周K/日K/30分/15分 四个周期上都<b>明显高于同周期其他类型</b>（+5 ~ +15pp），
+只有 5分 上优势消失 —— 5 分钟级别的"1 类背驰"很可能只是噪声。
+<br>② 类型 3 在所有周期都<b>低于</b>同周期平均，是最差的类型。
+<br>③ <b>类型 2 在周/日线上是 0 条</b>。查 <code>Common/CEnum.py</code>：<code>T2 = '2'  # 2类买卖点（待实现）</code>；
+只有 <code>BuySellPoint/BSPointList.py:1612</code> 一处会产出它，分钟周期上偶发几条（30分 4、15分 6、5分 27），<b>样本量不足以评价</b>。
+</p>
+
+<h3>4.2 样本量与结构距离 A%</h3>
+<table>
+  <tr><th>周期</th><th>信号数</th><th>均 A%</th><th>0 类 n / A%</th><th>1 类 n / A%</th><th>3 类 n / A%</th></tr>
+  <tr><td>周K</td><td>1 477</td><td>14.30</td><td>545 / 14.69</td><td>70 / 14.82</td><td>862 / 14.01</td></tr>
+  <tr><td>日K</td><td>2 481</td><td>5.61</td><td>906 / 5.92</td><td>79 / 6.60</td><td>1 496 / 5.37</td></tr>
+  <tr><td>30分</td><td>8 430</td><td>2.06</td><td>1 966 / 2.30</td><td>764 / 2.77</td><td>5 696 / 1.88</td></tr>
+  <tr><td>15分</td><td>8 058</td><td>1.42</td><td>1 812 / 1.47</td><td>880 / 1.85</td><td>5 360 / 1.33</td></tr>
+  <tr><td>5分</td><td>9 885</td><td>0.95</td><td>1 703 / 0.98</td><td>1 621 / 1.41</td><td>6 534 / 0.83</td></tr>
+</table>
+<p class="small">
+A 越小 ⇒ 结构越近 ⇒ 后续的 30 根对"走出反向笔"越难也越易（周期越短，噪声占比越高）。这张表还有一个副产品：
+<b>1 类信号的 A 在所有周期上都比同周期平均大 20~50%</b>（它的止损天然更远），这就是它"结构成功率高"的部分原因 ——
+止损远 ⇒ 不容易被触到。所以 §4.1 的成功率优势里，有一部分是<b>定义造成的</b>，不全是"质量好"。
+</p>
+
+<h3>4.3 有没有"高成功率 + 正超额"的组合</h3>
+<div class="warn">
+自动筛选条件：<b>结构成功率 ≥ 65% 且 超额 Δ 显著为正（p&lt;0.05）且 n ≥ 30</b>。<br>
+结果：<b>空集</b>。5 个周期 × 4 个类型 × 2 个方向 = 40 个格子（其中"2 类"因样本不足被 n≥30 挡掉），
+<b>没有一个</b>同时做到"结构达标 + 跑赢随机入场"。<br>
+⇒ 用"结构成功率"挑周期和信号类型，会挑到一组<b>被止损定义保护、但实际没有优势</b>的样本。这就是把口径一当质量指标会掉进去的坑。
+</div>
+
+<!-- ══════════════════════════════ 4 ══════════════════════════════ -->
+<h2 id="s4">5. 百分比口径为什么周期相关（问题⑵）</h2>
+
+<p>你的表述完全清楚，也完全正确：<i>「股票日K 5% 进入保本、10% 进入跟踪 OK；但在期货 IF 1 分钟图，0.3% 就相当于股票 10%」</i>。下面是量化。</p>
+
+<h3>5.1 各周期的波动量级</h3>
+<table>
+  <tr><th>标的 / 周期</th><th>ATR%</th><th>均幅%<br>(H−L)</th><th>单根σ%</th><th>5% = 几个 ATR</th><th>10% = 几个 ATR</th></tr>
+  <tr><td><b>股票 周K（标定基准）</b></td><td>9.893</td><td>8.572</td><td>7.689</td><td class="pos"><b>0.51</b></td><td class="pos"><b>1.01</b></td></tr>
+  <tr><td>股票 日K</td><td>3.931</td><td>3.309</td><td>3.085</td><td>1.27</td><td>2.54</td></tr>
+  <tr><td>股票 30分</td><td>1.113</td><td>0.894</td><td>1.069</td><td>4.49</td><td>8.98</td></tr>
+  <tr><td>股票 15分</td><td>0.746</td><td>0.594</td><td>0.739</td><td>6.70</td><td>13.40</td></tr>
+  <tr><td>股票 5分</td><td>0.501</td><td>0.411</td><td>0.478</td><td class="neg"><b>9.98</b></td><td class="neg"><b>19.95</b></td></tr>
+  <tr><td>IF0 1分</td><td>0.065</td><td>0.061</td><td>0.058</td><td class="neg">76.51</td><td class="neg">153.02</td></tr>
+  <tr><td>IF0 日K</td><td>1.529</td><td>1.308</td><td>1.263</td><td>3.27</td><td>6.54</td></tr>
+</table>
+
+<div class="card">
+<b>你的例子被精确验证了：</b>5% 在 <b>股票周K</b> 上是 <b>0.51 个 ATR</b>；在 <b>IF 1 分钟</b>上是 <b>76.5 个 ATR</b>。
+同一句"浮盈 5% 触发保本"，在周K 上是"涨了一小段"，在 IF 1分 上是"根本不可能发生的事"。
+<b>量级差 150 倍。</b>
+</div>
+
+<h3>5.2 换成"周期无关"的口径：两条等价路线</h3>
+<p>把阈值写成 <code>k × 归一化量</code>。可选归一化量有两个，实测两者换算结果相差 &lt; 20%：</p>
+<table>
+  <tr>
+    <th>周期</th><th>均 A%<br>(结构距离)</th><th>ATR%</th>
+    <th>路线 A<br>0.4×A</th><th>路线 B<br>0.5×ATR%</th>
+    <th>路线 A<br>0.8×A</th><th>路线 B<br>1.0×ATR%</th>
+  </tr>
+  <tr><td>周K（标定）</td><td>11.90</td><td>9.893</td><td class="pos">4.76%</td><td class="pos">4.95%</td><td class="pos">9.52%</td><td class="pos">9.89%</td></tr>
+  <tr><td>日K</td><td>4.67</td><td>3.931</td><td>1.87%</td><td>1.97%</td><td>3.74%</td><td>3.93%</td></tr>
+  <tr><td>30分</td><td>1.55</td><td>1.113</td><td>0.62%</td><td>0.56%</td><td>1.24%</td><td>1.11%</td></tr>
+  <tr><td>15分</td><td>1.02</td><td>0.746</td><td>0.41%</td><td>0.37%</td><td>0.82%</td><td>0.75%</td></tr>
+  <tr><td>5分</td><td>0.68</td><td>0.501</td><td>0.27%</td><td>0.25%</td><td>0.54%</td><td>0.50%</td></tr>
+</table>
+
+<div class="good">
+<b>关键观察：<code>0.4×A</code> 和 <code>0.5×ATR%</code> 在 5 个周期上给出的阈值几乎相同（差 &lt; 20%）。</b><br>
+⇒ 想保留周K 已经验证过的最优行为（5% / 10%），只要把参数写成 <b><code>保本 = 0.4×A</code>、<code>跟踪 = 0.8×A</code></b>
+（A = 结构距离，也就是原 R 口径的主项），它就会<b>自动</b>在所有周期缩放到合理量级。<br>
+⇒ 路线 A 的好处：<b>不需要新增 ATR 计算</b>，直接复用已有的 <code>Exit._initial_r</code>，改动最小。
+路线 B 的好处：ATR 更平滑、抗单笔跳空噪声。<b>两条都可以，但都必须逐周期回测确认</b>（见 5.3 的诚实交代）。
+</div>
+
+<h3>5.3 诚实交代：跨周期同号 <span class="pill p-warn">未通过</span></h3>
+<p><code>ab_atr.py</code> 用真实回测引擎（含"出场变早 ⇒ 持仓期拒收信号变化"的二阶效应）做的 A/B，配对 bootstrap 结果：</p>
+<table>
+  <tr><th>周期</th><th>方案</th><th>全样本净%</th><th>样本外净%</th><th>样本外 Δ vs 基线</th><th>p</th></tr>
+  <tr><td rowspan="2">周K<br>(711 只)</td><td><b>固定% 5/2 / 10/8</b></td><td class="pos">+0.68</td><td>−0.12</td><td class="pos">+2.63pp</td><td><b>0.0100 *</b></td></tr>
+  <tr><td>ATR k=1.5/0.6/3.0/2.0</td><td class="pos">+0.67</td><td>−1.32</td><td class="pos">+1.82pp</td><td><b>0.0186 *</b></td></tr>
+  <tr><td rowspan="2">日K<br>(755 只)</td><td>固定% 5/2 / 10/8</td><td>−0.15</td><td>−0.30</td><td>+0.47pp</td><td>0.0846 n.s.</td></tr>
+  <tr><td>ATR k=1.5/0.6/3.0/2.0</td><td>−0.23</td><td>−0.60</td><td>+0.14pp</td><td>0.5836 n.s.</td></tr>
+</table>
+<p class="small">
+读出两件事：① <b>周K 上固定% 最好</b>（+2.63pp，显著）；② <b>日K 上所有方案都不显著</b>，Δ ≤ +0.47pp ——
+日K 上没有任何出场方案能挣回成本。<br>
+所以"k×ATR 是跨周期通解"这句话<b>目前只有周K 一个周期的实测支持</b>，其余周期的 k 值必须自己重标定。
+本报告不声称"跨周期同号已验证"。
+</p>
+
+<!-- ══════════════════════════════ 5 ══════════════════════════════ -->
+<h2 id="s5">6. 关键发现：止盈层在别的周期根本没被触发</h2>
+
+<p>这是本次最有操作价值的一张表。它直接算：<b>入场后，在窗口内浮盈有没有达到过该百分比</b>。达不到 ⇒ 那一层参数是死的。</p>
+
+<table>
+  <tr>
+    <th>周期</th><th>信号数</th><th>均 A%</th><th>5% 相当于</th>
+    <th>保本层 5% 触发率</th><th>跟踪层 10% 触发率</th>
+  </tr>
+  <tr><td>周K</td><td>1 477</td><td>11.90</td><td>0.4×A</td>
+      <td><div class="barcell"><div class="bar red"><i style="width:88.4%"></i></div><span class="pos">88.4%</span></div></td>
+      <td><div class="barcell"><div class="bar red"><i style="width:77.7%"></i></div><span class="pos">77.7%</span></div></td></tr>
+  <tr><td>日K</td><td>2 481</td><td>4.67</td><td>1.1×A</td>
+      <td><div class="barcell"><div class="bar"><i style="width:67.1%"></i></div>67.1%</div></td>
+      <td><div class="barcell"><div class="bar"><i style="width:43.9%"></i></div>43.9%</div></td></tr>
+  <tr><td>30分</td><td>8 430</td><td>1.55</td><td>3.2×A</td>
+      <td><div class="barcell"><div class="bar amber"><i style="width:27.2%"></i></div>27.2%</div></td>
+      <td><div class="barcell"><div class="bar amber"><i style="width:8.0%"></i></div>8.0%</div></td></tr>
+  <tr><td>15分</td><td>8 058</td><td>1.02</td><td>4.9×A</td>
+      <td><div class="barcell"><div class="bar amber"><i style="width:14.6%"></i></div>14.6%</div></td>
+      <td><div class="barcell"><div class="bar amber"><i style="width:3.0%"></i></div>3.0%</div></td></tr>
+  <tr><td>5分</td><td>9 885</td><td>0.68</td><td>7.4×A</td>
+      <td><div class="barcell"><div class="bar purple"><i style="width:6.4%"></i></div>6.4%</div></td>
+      <td><div class="barcell"><div class="bar purple"><i style="width:0.7%"></i></div>0.7%</div></td></tr>
+</table>
+
+<div class="danger">
+<b>5 分周期上：保本层触发率 6.4%，跟踪层 0.7%。</b>
+换句话说，5% / 10% 这两个数在 5 分钟图上<b>基本从未生效</b> —— 交易实际上是被<b>结构止损</b>平掉的。
+同一套参数，在周K 上"保本层主导离场"，在 5分 上"完全不存在"。<br>
+<b>这就是你担心的那件事的精确名字：百分比参数是"周期专属的"，不是"策略的"。</b>
+</div>
+
+<table>
+  <tr><th>周期</th><th>保本层触发率</th><th>结构止损触发率</th><th>比值</th><th>含义</th></tr>
+  <tr><td>周K</td><td>88.4%</td><td>35.9%</td><td>2.46</td><td><span class="pill p-bad">止盈层主导离场</span></td></tr>
+  <tr><td>日K</td><td>67.1%</td><td>41.7%</td><td>1.61</td><td><span class="pill p-bad">止盈层主导离场</span></td></tr>
+  <tr><td>30分</td><td>27.2%</td><td>41.6%</td><td>0.65</td><td><span class="pill p-warn">部分生效</span></td></tr>
+  <tr><td>15分</td><td>14.6%</td><td>38.9%</td><td>0.38</td><td><span class="pill p-warn">部分生效</span></td></tr>
+  <tr><td>5分</td><td>6.4%</td><td>42.6%</td><td>0.15</td><td><span class="pill p-neutral">基本不生效</span></td></tr>
+</table>
+
+<!-- ══════════════════════════════ 6 ══════════════════════════════ -->
+<h2 id="s6">7. "控制严格容易被扫掉" 是真的吗 —— 量化它</h2>
+
+<p>这句话必须被量化，否则"严格 / 宽松"永远只是感觉。定义：</p>
+<pre>被扫率(k) = 在结构止损被打穿【之前】已经浮盈 ≥ k×A 的信号占比      （A = |入场价 − 分型极值|）</pre>
+<p><code>mfe_fail_A</code> 在"打止损那一帧<b>之前</b>"冻结（不含该帧自身最高价），所以它是<b>真·事前已经拿到的浮盈</b>，不是事后诸葛。</p>
+
+<table>
+  <tr><th>周期</th><th>浮盈 ≥0.5×A 后被打止损</th><th>浮盈 ≥1.0×A 后被打止损</th><th>浮盈 ≥2.0×A 后被打止损</th><th>打止损前均浮盈</th></tr>
+  <tr><td>周K</td><td>11.6%<span class="dim">（占失败 32.3%）</span></td><td><b>3.9%</b><span class="dim">（10.8%）</span></td><td>0.5%<span class="dim">（1.5%）</span></td><td>1.60×A</td></tr>
+  <tr><td>日K</td><td>12.5%<span class="dim">（30.0%）</span></td><td><b>5.0%</b><span class="dim">（12.1%）</span></td><td>0.7%<span class="dim">（1.6%）</span></td><td>1.58×A</td></tr>
+  <tr><td>30分</td><td>12.8%<span class="dim">（30.7%）</span></td><td><b>5.1%</b><span class="dim">（12.4%）</span></td><td>1.1%<span class="dim">（2.7%）</span></td><td>1.72×A</td></tr>
+  <tr><td>15分</td><td>12.4%<span class="dim">（31.7%）</span></td><td><b>6.0%</b><span class="dim">（15.3%）</span></td><td>1.8%<span class="dim">（4.6%）</span></td><td>1.85×A</td></tr>
+  <tr><td>5分</td><td>13.4%<span class="dim">（31.4%）</span></td><td><b>5.9%</b><span class="dim">（13.8%）</span></td><td>1.8%<span class="dim">（4.1%）</span></td><td>1.93×A</td></tr>
+</table>
+
+<div class="warn">
+<b>结论：被扫率在 5 个周期上都是 3.9% ~ 7.0%，很稳定，也不高。</b>
+<br>⇒ 「回撤控制严格容易被扫掉」<b>在本数据规模上不是主要矛盾</b>。结构止损放在 1×A 处是合理的。
+<br>⇒ 这类样本还有一个<b>不是上界、而是确定</b>的反事实：L1 保本层若在浮盈 1×A 时把保护价抬到 <code>入场价 + 0.4A</code>，
+那么价格后来既然一路走到了 −1A（结构止损），<b>就一定穿过了 +0.4A</b> ⇒ 该笔离场价确定从 −1A 变成 +0.4A，
+即 <b>+1.4×A / 笔</b> 的改善（唯一失效条件是跳空直接跳过保护价）。
+</div>
+
+<h3>那真正的痛点是什么</h3>
+<table>
+  <tr><th>周期</th><th>连 0.5×A 都没浮盈过就被止损</th><th>占比</th></tr>
+  <tr><td>周K</td><td>530 − 171 = <b>359</b> 条</td><td class="neg"><b>24.3%</b> of 全部信号</td></tr>
+  <tr><td>日K</td><td>1 035 − 310 = <b>725</b> 条</td><td class="neg"><b>29.2%</b></td></tr>
+  <tr><td>30分</td><td>3 510 − 1 078 = <b>2 432</b> 条</td><td class="neg"><b>28.8%</b></td></tr>
+  <tr><td>15分</td><td>3 138 − 996 = <b>2 142</b> 条</td><td class="neg"><b>26.6%</b></td></tr>
+  <tr><td>5分</td><td>4 209 − 1 321 = <b>2 888</b> 条</td><td class="neg"><b>29.2%</b></td></tr>
+</table>
+<p>近 <b>四分之一的信号，入场后连半个结构距离的浮盈都没出现过</b>就被打掉了 —— <b>5 个周期惊人地一致（24.3% ~ 29.2%）</b>。这不是出场问题，<b>这是入场问题</b>。它和 §3 的"信号不跑赢随机入场"是同一件事的两个侧面。</p>
+
+<!-- ══════════════════════════════ 7 ══════════════════════════════ -->
+<h2 id="s7">8. 怎么才算一个好的出场策略（问题⑸）</h2>
+
+<h3>8.1 先破一个幻想：出场策略不能凭空造 alpha</h3>
+<p>设入场信号的 H 根收益期望为 <code>μ</code>，任何出场规则产出的期望都形如：</p>
+<pre>E[出场收益] = μ − E[被提前终止的机会成本] − E[成本]</pre>
+<p>出场规则只决定"在哪一根离场"，它<b>重新分配</b>同一个信号集的收益分布，<b>不改变分布的方向</b>。<code>μ ≤ 0</code> 时，出场规则唯一的作用是<b>截尾降方差</b>。我们已经用 8 个方案样本外无一转正证明了这一点。<br>
+⇒ <b>"出场策略好不好"必须在"给定入场信号"的前提下评价</b>，判据是"它把风险调整后收益改善了多少"。</p>
+
+<h3>8.2 业界有标准做法，但没有标准参数</h3>
+<table>
+  <tr><th>机制</th><th>出处</th><th>规则</th><th>目的</th><th>本项目落点</th></tr>
+  <tr><td class="l">固定分数风险<br>Fixed-Fractional</td><td class="l">Van Tharp；Turtle Rules</td><td class="l">单笔风险 = f%×权益；仓位 = f%×权益 /（入场−止损）</td><td class="l">把"亏多少"从价格波动里解放出来</td><td class="l">仓位预算<span class="dim">（当前未接）</span></td></tr>
+  <tr><td class="l"><b>风险单位 R</b></td><td class="l">Tharp《Trade Your Way to Financial Freedom》</td><td class="l">R = 初始止损距离；每笔盈亏以 R 计价</td><td class="l">跨标的/跨周期可比；<b>期望 R 是统一判据</b></td><td class="l"><code>Exit._initial_r</code><span class="dim">（正在退役）</span></td></tr>
+  <tr><td class="l">保本止损<br>Breakeven</td><td class="l">通用</td><td class="l">浮盈达 X 后把保护价抬到入场价附近</td><td class="l">把"赢单变亏单"的概率压向 0</td><td class="l">L1<span class="dim">（5% → 入场×1.02）</span></td></tr>
+  <tr><td class="l"><b>Chandelier Exit</b></td><td class="l">Chuck LeBeau</td><td class="l">保护价 = 最高价 − k×ATR（k 常取 2~3）</td><td class="l">让利润奔跑又给波动留空间</td><td class="l">L2<span class="dim">（最高价×(1−5%)）</span></td></tr>
+  <tr><td class="l">Parabolic SAR</td><td class="l">Wilder</td><td class="l">加速因子 0.02→0.2 自适应</td><td class="l">同 Chandelier（时间自适应）</td><td class="l">无</td></tr>
+  <tr><td class="l">时间止损<br>Time Stop</td><td class="l">Linda Raschke 等</td><td class="l">持仓 N 根仍未抬价 ⇒ 离场</td><td class="l">释放被占用的资金</td><td class="l"><code>TIME_STOP_BARS</code><span class="dim">（回测侧静默失效）</span></td></tr>
+  <tr><td class="l">分批止盈<br>Scaling Out</td><td class="l">Turtle / 通用</td><td class="l">到第一个目标减半仓，余仓让利润奔跑</td><td class="l">压低方差、提高落袋概率</td><td class="l">无<span class="dim">（建议下一步做）</span></td></tr>
+</table>
+<p class="small"><b>没有任何一条出处给出"标准参数值"</b> —— 业界只有标准<b>做法</b>，参数必须自己标定。你问"业界有无标准"，准确回答是：<b>有标准框架，没有标准数字</b>。</p>
+
+<h3>8.3 决定"严格 vs 宽松"的那个学术结论</h3>
+<div class="card" style="border-left:3px solid var(--purple)">
+<b>Kaminski &amp; Lo (2014)，《When Do Stop-Loss Rules Stop Losses?》，Journal of Financial Markets</b><br>
+结论：<b>止损只在收益呈正自相关（趋势/动量）的序列上提高期望；在随机游走或均值回复的序列上，止损系统性地降低期望</b>
+—— 因为它把噪声当成信息，反复被扫。
+<div style="margin-top:10px">
+⇒ 你说的"控制严格容易被扫掉"，<b>不是感觉，是被证明的机制</b>。<br>
+⇒ <b>最重要的推论</b>：既然止损在无自相关市场降低期望，那出场策略的正确目标就<b>不是提高期望</b>，
+而是 <b>"在不显著损害期望的前提下压缩尾部/方差"</b>。这把问题从"哪个参数赚得多"变成一个有解的约束优化：
+<pre style="margin-top:8px">在 { 方案 : Δ(对基线期望差) 不显著为负 } 中，选 方差 / 最大回撤 / 被扫率 最小的那个</pre>
+</div>
+</div>
+
+<h3>8.4 本项目的可执行判据（七条，按优先级）</h3>
+<table>
+  <tr><th>#</th><th>判据</th><th>通过条件</th><th>为什么</th></tr>
+  <tr><td>1</td><td class="l"><b><code>avg_net</code>（已扣双边手续费+印花税）</b></td><td class="l">样本外<b>不显著为负</b>，且符号与全样本一致</td><td class="l">唯一主判据。<b>禁止只看胜率或盈亏比</b> —— 两者可以此消彼长而期望不变</td></tr>
+  <tr><td>2</td><td class="l"><b>期望 R</b><br><code>E[R] = 胜率×均赢R − 败率×均亏R</code></td><td class="l">跨方案单调可比</td><td class="l">R 口径天然跨标的/跨周期可比（Tharp 框架）</td></tr>
+  <tr><td>3</td><td class="l"><b>显著性</b>：按标的配对 bootstrap</td><td class="l">Δ 的 <code>p &lt; 0.05</code></td><td class="l">挡住"某方案平均收益高一点"这种噪声</td></tr>
+  <tr><td>4</td><td class="l"><b>稳健性：高原而非尖峰</b></td><td class="l">参数邻域（±20% k）内表现平滑</td><td class="l">单点最优 = 过拟合，直接弃</td></tr>
+  <tr><td>5</td><td class="l"><b>口径无关性</b>：写成 <code>k×A</code> 或 <code>k×ATR%</code> 后多周期同号</td><td class="l">≥2 个不同波动量级的周期上同号</td><td class="l"><span class="pill p-warn">本项目当前未通过</span>（只有周K 显著）</td></tr>
+  <tr><td>6</td><td class="l">成本敏感性</td><td class="l">让离场变快的方案，收益增幅 &gt; 增加的成本</td><td class="l">已内含在判据 1（metrics 已扣成本）</td></tr>
+  <tr><td>7</td><td class="l"><b>风险侧指标</b>：<code>worst</code>、<code>sl_pct/be_pct/tr_pct</code>、被扫率</td><td class="l">同期望下，方差更低者为优</td><td class="l">Kelly 准则：<code>g ≈ μ − σ²/2</code> ⇒ <b>方差压缩本身就有价值</b></td></tr>
+</table>
+
+<div class="good">
+<b>判据 7 是"保本层"存在的全部理论依据。</b>保本层不提高期望（甚至略降，因为提前离场），
+但它把"赢单变亏单"那一段分布切掉了 ⇒ <code>σ²</code> 下降 ⇒ 复利增长率上升。
+<b>所以别用"期望有没有变高"来否决保本层，那不成立。</b>
+</div>
+
+<h3>8.5 "好出场策略"的完整定义（可直接当验收单）</h3>
+<p>在<b>给定入场信号 + 给定成本模型</b>下，一个出场方案要算"好"，必须<b>同时</b>满足：</p>
+<ol>
+  <li><b>期望约束</b>：<code>avg_net</code> 在样本外<b>不显著为负</b>；</li>
+  <li><b>无害化约束</b>：对基线的 Δ 配对检验 <code>p &lt; 0.05</code> 为正，<b>或至少不显著为负</b>；</li>
+  <li><b>方差压缩目标</b>：在满足 1+2 的候选集里，<code>sl_pct</code> / 被扫率 / <code>worst</code> 最低者胜；</li>
+  <li><b>稳健性约束</b>：参数落在高原上，且写成 <code>k×A</code> 后在 ≥2 个周期同号。</li>
+</ol>
+<ul>
+  <li>不满足 1 的方案，<b>无论胜率多高都不算好</b> —— 我们 8 个方案全部止步于此；</li>
+  <li>满足 1 但<b>方差没降</b>的方案，也不比基线好，不值得上（判据 7 的价值来源就是方差）。</li>
+</ul>
+
+<!-- ══════════════════════════════ 8 ══════════════════════════════ -->
+<h2 id="s8">9. 行动清单</h2>
+
+<table>
+  <tr><th>#</th><th>动作</th><th>依据</th><th>优先级</th></tr>
+  <tr>
+    <td>1</td>
+    <td class="l"><b>把止盈触发阈值从固定% 改成 <code>0.4×A</code> / <code>0.8×A</code></b>（或等价的 <code>0.5×ATR%</code> / <code>1.0×ATR%</code>）<br>
+        同步三处：<code>Trading/Config.py::ExitConfig</code>、<code>Backtest/ExitParams.py</code>、<code>App/AppTPSL.py</code></td>
+    <td class="l">§5.2：两条路线在 5 个周期上换算结果差 &lt;20%，且自动复现周K 已验证的 5%/10%；<br>§6：固定% 在 5分 上触发率仅 6.4%，等于参数失效</td>
+    <td><span class="pill p-bad">高</span></td>
+  </tr>
+  <tr>
+    <td>2</td>
+    <td class="l"><b>只做周K。分钟周期（尤其 5分/15分）不值得做。</b></td>
+    <td class="l">§3：5分/15分 信号超额 ≈ 0 且不显著；§6：止盈层在 5分 基本不触发；<br>分钟换手高，成本占比更大</td>
+    <td><span class="pill p-bad">高</span></td>
+  </tr>
+  <tr>
+    <td>3</td>
+    <td class="l"><b>把「1 类信号」单独拉出来做样本外验证</b>（周K 70 条 / 日K 79 条）</td>
+    <td class="l">§3：日K 类型1 Δ <b>+6.55%（p=0.0018）</b>；周K 做多·类型1 收益 <b>+14.94%</b> 远高于类型0/3（+2.7~3.8%）。<br>这是 40 个格子里<b>唯一</b>的正超额线索</td>
+    <td><span class="pill p-bad">高</span></td>
+  </tr>
+  <tr>
+    <td>4</td>
+    <td class="l"><b>不要再调"严格/宽松"</b>（保本触发门槛、跟踪回撤比例）</td>
+    <td class="l">§7：被扫率 5 个周期都是 3.9~7.0%，<b>不是主要矛盾</b>；<br>真痛点是 24~29% 的信号"连 0.5×A 浮盈都没出现过"</td>
+    <td><span class="pill p-warn">中</span></td>
+  </tr>
+  <tr>
+    <td>5</td>
+    <td class="l">做<b>分批止盈（Scaling Out）</b>：到 1×A 减半仓，余仓交给跟踪层</td>
+    <td class="l">§8.2 业界标准做法里唯一还没实现的；<br>判据 7（同期望降方差 ⇒ 复利增长更高）直接支持</td>
+    <td><span class="pill p-warn">中</span></td>
+  </tr>
+  <tr>
+    <td>6</td>
+    <td class="l"><b>修 <code>Backtest/Runner.py:424</code></b>：<code>pol.check(pos, bar, inst)</code> 漏传 <code>bars_held</code> ⇒ 时间止损在回测侧静默失效</td>
+    <td class="l"><code>Backtest/Test</code> 已记录（手册坑 #3）；不修则"时间止损"永远无法被回测验证</td>
+    <td><span class="pill p-warn">中</span></td>
+  </tr>
+  <tr>
+    <td>7</td>
+    <td class="l">分钟周期数据的两个口径缺陷要披露：<b>新浪分钟线不复权</b>、<b>5分最长仅 ~104 个交易日</b></td>
+    <td class="l"><code>fetch_min.py</code> docstring；跨越分红日的样本会有一处价格跳变</td>
+    <td><span class="pill p-info">低</span></td>
+  </tr>
+</table>
+
+<h3>复现命令</h3>
+<pre># 1) 五个周期的信号质量（进程池，否则被 GIL 串行化）
+python signal_quality.py --freq w  --n 800  --limit 800 --horizon 30 --procs 8 --out sq_w800.json
+python signal_quality.py --freq d  --n 800  --limit 800 --horizon 30 --procs 8 --out sq_d800.json
+python signal_quality.py --freq 30m --n 5000 --limit 300 --horizon 30 --procs 6 --out sq_30m.json
+python signal_quality.py --freq 15m --n 5000 --limit 300 --horizon 30 --procs 6 --out sq_15m.json
+python signal_quality.py --freq 5m  --n 5000 --limit 300 --horizon 30 --procs 6 --out sq_5m.json
+
+# 2) 交叉表 / 层级触发率 / 被扫率 / 波动标定
+python tab_cycle.py                 # 周期 × 类型 四张表
+python layer_activation.py          # 各周期止盈层触发率
+python sweep_regret.py              # 被扫率 + 浮盈回吐率
+python atr_scale.py                 # 5% 相当于几个 ATR、换周期该取多少</pre>
+
+<footer>
+数据口径：股票池 <code>fetch_kline.stock_list()</code>（固定种子 <code>shuffle_seed=7</code> 打散）；周/日线走腾讯<b>前复权</b>（800 根），
+分钟线走新浪<b>不复权</b>（上限 5 001 根，5分 覆盖约 104 个交易日 / 15分 约 156 / 30分 约 312）。<br>
+显著性：按标的配对 bootstrap，10 000 次，seed 7；<code>* p&lt;0.05 ** p&lt;0.01 *** p&lt;0.001</code>。
+灰色 <code class="dim">n.s.</code> = 不显著。<br>
+口径一/二/三 的完整定义见 <code>signal_quality.py</code> 模块 docstring；工程约束与踩坑记录见《出场参数回测手册》§7。
+</footer>
+
+</div>
+</body>
+</html>

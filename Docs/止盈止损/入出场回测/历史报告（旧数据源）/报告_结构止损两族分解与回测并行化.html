@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>chan.py · 结构止损两族分解 与 回测并行化</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#ffffff; --ink:#1a1d21; --ink2:#4a5058; --ink3:#79818c;
+    --line:#e3e6ea; --line2:#eef0f3;
+    --red:#c0392b; --redbg:#fdecea; --green:#1e8e5a; --greenbg:#e8f6ef;
+    --blue:#1f6feb; --bluebg:#eaf1fd; --amber:#b7791f; --amberbg:#fdf6e3;
+    --purple:#6b4fbb; --purplebg:#f0ecfb;
+    --mono:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.72 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:1180px;margin:0 auto;padding:36px 22px 90px}
+  header.hero{background:linear-gradient(135deg,#1a1d21 0%,#2c3440 100%);color:#fff;
+    border-radius:14px;padding:34px 34px 30px;margin-bottom:26px}
+  header.hero h1{margin:0 0 10px;font-size:27px;letter-spacing:.2px}
+  header.hero .sub{color:#b8c0cc;font-size:14px;line-height:1.9}
+  header.hero .tag{display:inline-block;background:rgba(255,255,255,.12);color:#e6ebf2;
+    border-radius:999px;padding:3px 12px;font-size:12px;margin:10px 8px 0 0}
+  h2{font-size:21px;margin:44px 0 14px;padding-bottom:9px;border-bottom:2px solid var(--line)}
+  h3{font-size:17px;margin:28px 0 10px}
+  h4{font-size:15px;margin:20px 0 8px;color:var(--ink2)}
+  p{margin:10px 0}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 22px;margin:16px 0}
+  .grid{display:grid;gap:14px}
+  .g2{grid-template-columns:repeat(2,1fr)}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  .g4{grid-template-columns:repeat(4,1fr)}
+  @media(max-width:880px){.g2,.g3,.g4{grid-template-columns:1fr}}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+  .kpi .lab{font-size:12.5px;color:var(--ink3);margin-bottom:6px}
+  .kpi .val{font-size:25px;font-weight:650;letter-spacing:-.4px}
+  .kpi .note{font-size:12.5px;color:var(--ink3);margin-top:5px;line-height:1.6}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:right}
+  th{background:#f0f2f5;font-weight:600;color:var(--ink2);text-align:center;font-size:12.5px}
+  td:first-child,th:first-child{text-align:left}
+  td.l{text-align:left}
+  tr:nth-child(even) td{background:#fbfbfc}
+  .pos{color:var(--red);font-weight:600}
+  .neg{color:var(--green);font-weight:600}
+  .dim{color:var(--ink3)}
+  .pill{display:inline-block;border-radius:5px;padding:1px 7px;font-size:12px;font-weight:600}
+  .p-ok{background:var(--redbg);color:var(--red)}
+  .p-bad{background:var(--greenbg);color:var(--green)}
+  .p-neutral{background:#eef0f3;color:var(--ink3)}
+  .p-warn{background:var(--amberbg);color:var(--amber)}
+  .p-info{background:var(--bluebg);color:var(--blue)}
+  .note{background:var(--bluebg);border-left:3px solid var(--blue);border-radius:0 8px 8px 0;
+    padding:12px 16px;margin:14px 0;font-size:13.5px;line-height:1.75}
+  .warn{background:var(--amberbg);border-left:3px solid var(--amber);border-radius:0 8px 8px 0;
+    padding:12px 16px;margin:14px 0;font-size:13.5px;line-height:1.75}
+  .danger{background:var(--redbg);border-left:3px solid var(--red);border-radius:0 8px 8px 0;
+    padding:12px 16px;margin:14px 0;font-size:13.5px;line-height:1.75}
+  .good{background:var(--greenbg);border-left:3px solid var(--green);border-radius:0 8px 8px 0;
+    padding:12px 16px;margin:14px 0;font-size:13.5px;line-height:1.75}
+  code{font-family:var(--mono);background:#f0f2f5;border-radius:4px;padding:1px 5px;font-size:12.8px}
+  pre{background:#1a1d21;color:#e6ebf2;border-radius:10px;padding:15px 17px;overflow:auto;
+    font-family:var(--mono);font-size:12.5px;line-height:1.65}
+  ul,ol{margin:10px 0 10px 4px;padding-left:22px}
+  li{margin:6px 0}
+  .bar{height:9px;border-radius:5px;background:#eef0f3;position:relative;overflow:hidden;min-width:60px}
+  .bar > i{position:absolute;left:0;top:0;bottom:0;border-radius:5px;background:var(--blue)}
+  .bar.red > i{background:var(--red)}
+  .bar.amber > i{background:var(--amber)}
+  .bar.purple > i{background:var(--purple)}
+  .barcell{display:flex;align-items:center;gap:9px;justify-content:flex-end}
+  .barcell span{font-variant-numeric:tabular-nums;min-width:46px;text-align:right}
+  footer{margin-top:52px;padding-top:18px;border-top:1px solid var(--line);
+    color:var(--ink3);font-size:12.5px;line-height:1.9}
+  .toc{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 22px}
+  .toc ol{margin:6px 0;padding-left:20px}
+  .toc a{color:var(--blue);text-decoration:none}
+  .toc a:hover{text-decoration:underline}
+  .small{font-size:12.6px;color:var(--ink3);line-height:1.8}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>结构止损其实有两族 —— 两族分解、门槛反事实、回测并行化</h1>
+  <div class="sub">
+    仓库 <code style="background:rgba(255,255,255,.14);color:#dbe3ee">jbxenzxy/chan.py@custom-dev</code>
+    ｜ 5 个周期（周K / 日K / 30分 / 15分 / 5分）｜ 股票池 800 只（周/日）· 300 只（分钟）<br>
+    判定口径：<b>真实 <code>LayeredExitPolicy</code> + <code>STOCK_EXIT_PARAMS</code> 逐根回放</b>，
+    复刻 <code>Backtest/Runner.run</code> 的开平仓时序（一帧一笔、持仓期拒收）
+  </div>
+  <div>
+    <span class="tag">成交 17 790 笔</span>
+    <span class="tag">与仓库 run() 逐笔对拍一致 ✔</span>
+    <span class="tag">配对 bootstrap · 10 000 次 · seed 7</span>
+    <span class="tag">原始记录：fate_*.json</span>
+  </div>
+</header>
+
+<div class="toc">
+  <strong>目录</strong>
+  <ol>
+    <li><a href="#s0">结论速览</a></li>
+    <li><a href="#s1">勘误：我错在哪 —— 两件事确实不等价</a></li>
+    <li><a href="#s2">活样本：常山北明 2025-04-30（差 0.13 点）</a></li>
+    <li><a href="#s3">两族分解（5 个周期）</a></li>
+    <li><a href="#s4">两族的收益画像：谁更贵</a></li>
+    <li><a href="#s5">把门槛降下来能救多少（端到端 A/B）</a></li>
+    <li><a href="#s6">回测能不能多进程 —— 能，实测 ×3.0</a></li>
+    <li><a href="#s7">可复现命令</a></li>
+  </ol>
+</div>
+
+<!-- ══════════════════ 0 ══════════════════ -->
+<h2 id="s0">1. 结论速览</h2>
+
+<div class="grid g4">
+  <div class="kpi">
+    <div class="lab">原笔延伸率 ≠ 结构止损率</div>
+    <div class="val" style="font-size:22px">35.2% vs 40.6%</div>
+    <div class="note">周K。前者是后者的<b>真子集</b><br>差的那 5.4pp 就是被旧口径漏掉的一族</div>
+  </div>
+  <div class="kpi">
+    <div class="lab">「走出反向笔却仍止损」占比</div>
+    <div class="val neg">12.5%</div>
+    <div class="note">周K 135 笔｜均净 <b>−26.89%</b><br>5 个周期稳定在 <b>11.5%~13.0%</b></div>
+  </div>
+  <div class="kpi">
+    <div class="lab">这一族的共同特征</div>
+    <div class="val">MFE 0.52~0.59R</div>
+    <div class="note">全部 &lt; 1.0R 保本触发线<br>⇒ 保本层<b>从未启动</b>，回到初始保护价</div>
+  </div>
+  <div class="kpi">
+    <div class="lab">保本门槛 1.0R → 0.5R（周K）</div>
+    <div class="val pos">−0.66% → +0.61%</div>
+    <div class="note">止损占比 40.6% → 25.5%，盈亏比 0.87 → 1.01<br>但<b>样本外仍为负（−1.10%），Δ 不显著</b></div>
+  </div>
+</div>
+
+<div class="card">
+<h4 style="margin-top:0">四句话</h4>
+<ol>
+  <li><b>你的纠正成立，我上一轮的「同义反复」论断是错的。</b>L1 保护价 = 入场价 ∓ R，而
+      <code>R = max(A, 1.0×ATR)</code> ⇒ <b>保护价 ≤ 分型极值</b>；而且保护价可以在
+      <b>反向笔早已走出之后</b>才被跌破。两个方向都不等价，各有一个数据反例。</li>
+  <li><b>结构止损分两族，且都能量化。</b>周K：<b>② 原笔延伸型</b> 380 笔（35.2%）、
+      <b>① 走出反向笔型</b> 135 笔（12.5%），合计 = 结构止损离场 438 笔（40.6%）。
+      注意 380 不等于 438 —— <b>多的 58 笔就是你指出的那一族</b>。</li>
+  <li><b>①族比②族更贵。</b>①族每笔均净 <b>−26.89%</b>、平均持仓 <b>20.9 根</b>；
+      ②族 −19.07%、持仓 6.0 根。①族<b>输得更深、占资金更久</b>，而它的成因不是入场，是<b>出场门槛太高</b>。</li>
+  <li><b>回测可以多进程，实测 ×3.0~3.2，逐笔结果完全一致。</b>旧代码用
+      <code>ThreadPoolExecutor</code> 跑 <code>Runner.run</code>（纯 Python CPU 活），
+      被 GIL 串行化 —— 实测 <b>12 个线程不比 1 个线程快</b>。已把进程池接进
+      <code>ab_run.run_plan</code>（一处改动，6 个脚本共用），并加了自检护栏。</li>
+</ol>
+</div>
+
+<!-- ══════════════════ 1 ══════════════════ -->
+<h2 id="s1">2. 勘误：我错在哪 —— 两件事确实不等价</h2>
+
+<p>上一轮我在 <code>signal_quality.py</code> 里写过一句
+<i>「<code>FAIL（原笔延伸）</code> ⟺ 结构止损被触碰 ⇒ 原笔延伸率不是独立指标」</i>，
+并据此说你的判定标准"跟止损定义是同义反复"。<b>这句话是错的</b>，你的反驳成立：它们是两族。</p>
+
+<h3>2.1 代码证据：保护价 ≠ 分型极值</h3>
+
+<pre>Strategy/Exit.py:289   A = max(entry_price − signal.fractal_low, 0.0)   # A = 到分型极值的距离
+Strategy/Exit.py:321   R = max(A, B)                                    # B = atr_sl_multiple × ATR
+Config.py:313          atr_sl_multiple: float = 1.0
+Strategy/Exit.py:353   raw_stop = base − R − stop_buffer_ticks × tick    # ← 保护价在这里</pre>
+
+<p>因为 <code>R = max(A, B) ≥ A</code>，所以 <b>保护价 ≤ 分型极值</b>（B 主导时严格更低）。<br>
+⇒ 「价格穿过分型极值」（= 口径一的 <code>FAIL</code>）只是「保护价被跌破」的
+<b>必要不充分</b>条件。两者不是同一件事。</p>
+
+<p>数据里的反例（<code>exit_fate.py</code> 逐笔记录）：</p>
+
+<table>
+  <tr><th>标的 / 日期</th><th>A</th><th>R</th><th>原笔延伸</th><th>离场层</th><th>净收益</th></tr>
+  <tr><td>sz000601 2014-06-13</td><td>0.160</td><td>0.239</td><td class="dim">第 2 根就延伸了</td><td>trailing</td><td class="pos">+9.58%</td></tr>
+</table>
+<p class="small">A &lt; R ⇒ 保护价在分型极值<b>下方</b>，价格破了分型却在中途反弹，最终以跟踪层离场。
+「原笔延伸」发生了，但<b>没有</b>止损。</p>
+
+<h3>2.2 更致命的是反方向：保护价可以在反向笔之后才被跌破</h3>
+
+<pre>Backtest/Runner.py:423   if state is State.IN_TRADE and pos is not None:
+Backtest/Runner.py:424       chk = pol.check(pos, bar, inst)   # ← 每根闭合 bar 都判，持仓未平就一直判</pre>
+
+<p>持仓期间每根 K 线都会重新判定保护价。<b>只要价格最终跌回保护价，就会止损离场 —— 哪怕中途反向笔已经走出来。</b>
+此时原笔并没有延伸，口径一<b>根本记不到 <code>FAIL</code></b>，这一族被整个漏掉。</p>
+
+<div class="danger">
+<b>所以「原笔延伸率」只是「结构止损率」的一个下界</b>，不是等价物：<br>
+周K 原笔延伸 <b>35.2%</b>（380 笔） vs 结构止损离场 <b>40.6%</b>（438 笔）——
+<b>差的 58 笔（5.4pp）就是「走出反向笔却仍止损」的那部分</b>。<br>
+旧口径把它们全部记成 <code>SUCC</code>（"质量好"），而它们实际平均亏 <b>−26.89%</b>。
+</div>
+
+<h3>2.3 你的判定标准仍然有价值，但要拆着用</h3>
+
+<table>
+  <tr><th>口径</th><th>回答的问题</th><th>能不能论证信号优劣</th></tr>
+  <tr><td class="l">口径一 · 原笔延伸（<code>FAIL</code>）</td><td class="l">"入场依据的那个分型，有没有<b>当场</b>被破"</td><td class="neg">不能（是止损事件的子集）</td></tr>
+  <tr><td class="l">口径二 · 事件研究（信号 − 同标的随机入场）</td><td class="l">"信号是不是挑得准"</td><td class="pos">能（这是唯一的裁判）</td></tr>
+  <tr><td class="l"><b>新增：两族分解</b></td><td class="l">"亏的钱该算在入场账上还是出场账上"</td><td class="pos">能（拆分亏损来源）</td></tr>
+</table>
+
+<!-- ══════════════════ 2 ══════════════════ -->
+<h2 id="s2">3. 活样本：常山北明 2025-04-30（差 0.13 点）</h2>
+
+<p>就是这一单，它就是 ①族。脚本复现交接包基线第 6 笔，逐字段吻合：</p>
+
+<table>
+  <tr><th>字段</th><th>值</th><th>说明</th></tr>
+  <tr><td class="l">入场日期 / 入场价</td><td>2025-04-30 / 22.533</td><td class="dim">0 类做多</td></tr>
+  <tr><td class="l">分型低点 <code>fractal_low</code></td><td>16.593</td><td class="dim">A = 22.533 − 16.593 = 5.940</td></tr>
+  <tr><td class="l">R</td><td>5.940</td><td class="dim">A 主导（B = 1.0×ATR 更小）</td></tr>
+  <tr><td class="l"><b>反向笔（向上笔）走出</b></td><td class="pos">第 9 根</td><td class="dim">⇒ <code>prim = succ</code>，旧口径记 SUCC</td></tr>
+  <tr><td class="l">离场前最大浮盈（MFE）</td><td><b>5.810 点 = 0.9781R</b></td><td class="dim">最高价口径</td></tr>
+  <tr><td class="l">保本触发线 <code>1.0×R</code></td><td>5.940 点</td><td class="dim">严格 &gt; 才触发</td></tr>
+  <tr><td class="l"><b>差多少</b></td><td class="neg">0.130 点（触发的 2.19%）</td><td class="dim">差一个 tick 的量级</td></tr>
+  <tr><td class="l">原笔延伸（分型被破）</td><td>第 54 根</td><td class="dim">与离场同根</td></tr>
+  <tr><td class="l">离场</td><td>close 15.423 · <code>sl</code> · 第 54 根</td><td class="dim">r 倍数 −1.197</td></tr>
+  <tr><td class="l"><b>净收益</b></td><td class="neg"><b>−31.61%</b></td><td class="dim">与交接包基线 #6（−31.6%）一致 ✔</td></tr>
+</table>
+
+<div class="warn">
+<b>这单的定性完全取决于口径：</b><br>
+· 旧口径（原笔延伸）：<b>"走出反向笔" ⇒ 信号质量好</b> —— 却亏了 31.61%。<br>
+· 新口径（两族）：<b>① 走出反向笔却仍止损</b> —— 症结是<b>保本触发线定得太高</b>：
+  最大浮盈 0.9781R，<b>差 0.13 点</b>没够到 1.0R。<br>
+<b>如果门槛是 0.5R，这一单在第 9~20 根附近就会被抬到保本，最差也是 +0.5R 离场而不是 −1.2R。</b>
+</div>
+
+<!-- ══════════════════ 3 ══════════════════ -->
+<h2 id="s3">4. 两族分解（5 个周期）</h2>
+
+<p>口径：用真实 <code>LayeredExitPolicy</code> 逐根回放每一笔，记录
+① 首个结构事件（<code>ext</code> 原笔延伸 / <code>succ</code> 走出反向笔），
+② 离场层（<code>sl</code> / <code>breakeven</code> / <code>trailing</code>）。</p>
+
+<table>
+  <tr>
+    <th>周期</th><th>成交笔</th>
+    <th>② 原笔延伸<br><span class="dim">信号前提破裂</span></th>
+    <th><span class="dim">其中走到止损</span></th>
+    <th>结构止损离场<br><span class="dim">exit_reason = sl</span></th>
+    <th><b>① 走出反向笔却止损</b><br><span class="dim">常山北明型</span></th>
+    <th>③ 走出反向笔 →<br>保本/跟踪离场</th>
+  </tr>
+  <tr><td>周K</td><td>1 080</td><td>380 (35.2%)</td><td class="dim">303 (28.1%)</td>
+      <td><b>438 (40.6%)</b></td><td class="neg"><b>135 (12.5%)</b></td><td class="pos">434 (40.2%)</td></tr>
+  <tr><td>日K</td><td>1 748</td><td>716 (41.0%)</td><td class="dim">567 (32.4%)</td>
+      <td><b>794 (45.4%)</b></td><td class="neg"><b>227 (13.0%)</b></td><td class="pos">632 (36.2%)</td></tr>
+  <tr><td>30分</td><td>4 926</td><td>1 980 (40.2%)</td><td class="dim">1 538 (31.2%)</td>
+      <td><b>2 116 (43.0%)</b></td><td class="neg"><b>578 (11.7%)</b></td><td class="pos">1 774 (36.0%)</td></tr>
+  <tr><td>15分</td><td>4 725</td><td>1 791 (37.9%)</td><td class="dim">1 313 (27.8%)</td>
+      <td><b>1 918 (40.6%)</b></td><td class="neg"><b>605 (12.8%)</b></td><td class="pos">1 729 (36.6%)</td></tr>
+  <tr><td>5分</td><td>5 311</td><td>2 125 (40.0%)</td><td class="dim">1 602 (30.2%)</td>
+      <td><b>2 212 (41.6%)</b></td><td class="neg"><b>610 (11.5%)</b></td><td class="pos">1 915 (36.1%)</td></tr>
+</table>
+
+<p class="small">校验：每行「其中走到止损」+「① 走出反向笔却止损」= 结构止损离场
+（周K 303+135=438 ✔ 日K 567+227=794 ✔ 30分 1538+578=2116 ✔ 15分 1313+605=1918 ✔ 5分 1602+610=2212 ✔）。</p>
+
+<div class="good">
+<b>最稳的一条：①族的占比在 5 个周期上几乎不动 —— 11.5% ~ 13.0%。</b>
+这是个<b>结构性常数</b>，不是某个周期的偶然。它说明「保本触发线设得太高」
+是一个<b>与周期无关</b>的系统性缺陷，不是参数没调好。
+</div>
+
+<h3>4.1 交叉表（首个结构事件 × 离场层）</h3>
+<table>
+  <tr><th>周期 · 首个结构事件</th><th>sl（止损）</th><th>breakeven</th><th>trailing</th></tr>
+  <tr><td class="l">周K · 原笔延伸</td><td>303 (28.1%)</td><td>45 (4.2%)</td><td>32 (3.0%)</td></tr>
+  <tr><td class="l">周K · 走出反向笔</td><td class="neg">135 (12.5%)</td><td>217 (20.1%)</td><td>217 (20.1%)</td></tr>
+  <tr><td class="l">周K · 都没发生</td><td>0</td><td>97 (9.0%)</td><td>34 (3.1%)</td></tr>
+  <tr><td class="l">日K · 原笔延伸</td><td>567 (32.4%)</td><td>87 (5.0%)</td><td>62 (3.5%)</td></tr>
+  <tr><td class="l">日K · 走出反向笔</td><td class="neg">227 (13.0%)</td><td>292 (16.7%)</td><td>340 (19.5%)</td></tr>
+  <tr><td class="l">日K · 都没发生</td><td>0</td><td>136 (7.8%)</td><td>37 (2.1%)</td></tr>
+  <tr><td class="l">30分 · 原笔延伸</td><td>1 538 (31.2%)</td><td>250 (5.1%)</td><td>192 (3.9%)</td></tr>
+  <tr><td class="l">30分 · 走出反向笔</td><td class="neg">578 (11.7%)</td><td>789 (16.0%)</td><td>985 (20.0%)</td></tr>
+</table>
+<p class="small">读法：「走出反向笔」一行里落在 <code>sl</code> 列的那些格子，就是①族 ——
+它们结构上是"成功"的（走出反向笔），却仍死在初始保护价上。
+「原笔延伸」一行落在 <code>be</code>/<code>tr</code> 列的格子（周K 45+32=77 笔）是另一个反例：
+分型被破了却没止损，反而赚钱离场 —— 再次说明两件事不等价。</p>
+
+<!-- ══════════════════ 4 ══════════════════ -->
+<h2 id="s4">5. 两族的收益画像：谁更贵</h2>
+
+<table>
+  <tr><th>周期</th><th>分组</th><th>笔数</th><th>均净收益</th><th>均 R 倍数</th>
+      <th>离场前均浮盈</th><th>均持仓(根)</th></tr>
+  <tr><td rowspan="3">周K</td><td class="l">② 原笔延伸 → 止损</td><td>303</td>
+      <td class="neg">−19.07%</td><td>−1.37</td><td>0.31R</td><td>6.0</td></tr>
+  <tr><td class="l"><b>① 走出反向笔 → 止损</b></td><td>135</td>
+      <td class="neg"><b>−26.89%</b></td><td>−1.40</td><td><b>0.59R</b></td><td><b>20.9</b></td></tr>
+  <tr><td class="l">③ 走出反向笔 → 保本/跟踪</td><td>434</td>
+      <td class="pos">+15.64%</td><td>+1.15</td><td>2.53R</td><td>16.7</td></tr>
+  <tr><td rowspan="3">日K</td><td class="l">② 原笔延伸 → 止损</td><td>567</td>
+      <td class="neg">−7.42%</td><td>−1.42</td><td>0.30R</td><td>5.3</td></tr>
+  <tr><td class="l"><b>① 走出反向笔 → 止损</b></td><td>227</td>
+      <td class="neg"><b>−10.05%</b></td><td>−1.32</td><td><b>0.58R</b></td><td><b>20.2</b></td></tr>
+  <tr><td class="l">③ 走出反向笔 → 保本/跟踪</td><td>632</td>
+      <td class="pos">+7.71%</td><td>+1.33</td><td>2.69R</td><td>16.0</td></tr>
+  <tr><td rowspan="3">30分</td><td class="l">② 原笔延伸 → 止损</td><td>1 538</td>
+      <td class="neg">−2.74%</td><td>−1.62</td><td>0.34R</td><td>6.1</td></tr>
+  <tr><td class="l">① 走出反向笔 → 止损</td><td>578</td>
+      <td class="neg">−4.15%</td><td>−1.40</td><td>0.55R</td><td>24.9</td></tr>
+  <tr><td class="l">③ 走出反向笔 → 保本/跟踪</td><td>1 774</td>
+      <td class="pos">+2.70%</td><td>+1.35</td><td>2.72R</td><td>25.0</td></tr>
+  <tr><td rowspan="3">15分</td><td class="l">② 原笔延伸 → 止损</td><td>1 313</td>
+      <td class="neg">−1.90%</td><td>−1.71</td><td>0.32R</td><td>6.4</td></tr>
+  <tr><td class="l">① 走出反向笔 → 止损</td><td>605</td>
+      <td class="neg">−3.05%</td><td>−1.48</td><td>0.52R</td><td>26.9</td></tr>
+  <tr><td class="l">③ 走出反向笔 → 保本/跟踪</td><td>1 729</td>
+      <td class="pos">+1.91%</td><td>+1.29</td><td>2.72R</td><td>26.3</td></tr>
+  <tr><td rowspan="3">5分</td><td class="l">② 原笔延伸 → 止损</td><td>1 602</td>
+      <td class="neg">−1.32%</td><td>−1.73</td><td>0.30R</td><td>7.5</td></tr>
+  <tr><td class="l">① 走出反向笔 → 止损</td><td>610</td>
+      <td class="neg">−2.31%</td><td>−1.59</td><td>0.56R</td><td>36.6</td></tr>
+  <tr><td class="l">③ 走出反向笔 → 保本/跟踪</td><td>1 915</td>
+      <td class="pos">+1.32%</td><td>+1.35</td><td>2.94R</td><td>32.3</td></tr>
+</table>
+
+<div class="warn">
+<b>读这张表要抓两列：</b><br>
+· <b>「离场前均浮盈」</b>：①族 = 0.52~0.59R，②族 = 0.30~0.34R，
+  ③族 = 2.53~2.94R。①族全部落在 <b>1.0R 保本触发线下方</b> ——
+  <b>不是"保本没保住"，而是"保本从来没资格启动"</b>。5 个周期结论一致。<br>
+· <b>「均持仓」</b>：①族 20.9~36.6 根，②族只有 5.3~7.5 根。
+  <b>①族既亏得更多、又占着资金更久</b>，是比②族更"贵"的失败 ——
+  而它的成因在出场端，不在入场端。
+</div>
+
+<p class="small">附：均 R 倍数 &lt; −1 是因为止损用 <b>收盘价</b>判定（<code>Exit.py:399-406</code> 的口径，
+不用 bar.low），跳空/长实体那根会穿透保护价才认亏。这是设计的代价，不是 bug。</p>
+
+<!-- ══════════════════ 5 ══════════════════ -->
+<h2 id="s5">6. 把门槛降下来能救多少</h2>
+
+<h3>6.1 结构上界（离线反事实）</h3>
+<p>在①族里，离场前浮盈曾经超过 0.5R 的占多少？（超过 1.0R 的自然为 0 —— 那就不叫①族了）</p>
+<table>
+  <tr><th>周期</th><th>①族笔数</th><th>MFE &gt; 0.5R</th><th>MFE &gt; 0.75R</th><th>MFE &gt; 1.0R</th></tr>
+  <tr><td>周K</td><td>135</td><td><b>64%</b></td><td>36%</td><td>0%</td></tr>
+  <tr><td>日K</td><td>227</td><td><b>57%</b></td><td>35%</td><td>0%</td></tr>
+  <tr><td>30分</td><td>578</td><td><b>58%</b></td><td>28%</td><td>0%</td></tr>
+  <tr><td>15分</td><td>605</td><td>51%</td><td>25%</td><td>0%</td></tr>
+  <tr><td>5分</td><td>610</td><td><b>58%</b></td><td>31%</td><td>0%</td></tr>
+</table>
+<p><b>门槛降到 0.5R，结构上能覆盖一半到三分之二的①族。</b>
+但这只是上界 —— 门槛降低也会把一部分本来能赚钱的单子提前赶出去，必须端到端重跑。</p>
+
+<h3>6.2 端到端 A/B（周K · 800 只 · 真实回测引擎）</h3>
+<p>含"出场变早 → 持仓期拒收信号变化"的二阶效应。样本内/外按<b>股票代码</b>前后各 400 只切分，
+配对 bootstrap 10 000 次（seed 7）按标的配对。</p>
+
+<table>
+  <tr><th>方案</th><th>笔数</th><th>全样本</th><th>样本内</th><th>样本外</th>
+      <th>均持仓</th><th>止损</th><th>保本</th><th>跟踪</th><th>胜率</th><th>盈亏比</th><th>样本外 Δ / p</th></tr>
+  <tr><td class="l">基线：保本触发 1.0R（现状）</td><td>1 080</td><td class="neg">−0.66%</td>
+      <td class="pos">+1.27%</td><td class="neg">−2.65%</td><td>12.2</td><td>40.6%</td><td>33.2%</td>
+      <td>26.2%</td><td>51.7%</td><td>0.87</td><td class="dim">—</td></tr>
+  <tr><td class="l">保本触发 0.75R</td><td>1 111</td><td class="pos">+0.37%</td>
+      <td class="pos">+2.26%</td><td class="neg">−1.58%</td><td>10.0</td><td>33.6%</td><td>45.1%</td>
+      <td>21.3%</td><td>58.0%</td><td>0.97</td><td class="dim">+0.93pp p=0.156 n.s.</td></tr>
+  <tr><td class="l"><b>保本触发 0.5R</b></td><td>1 170</td><td class="pos"><b>+0.61%</b></td>
+      <td class="pos">+2.29%</td><td class="neg"><b>−1.10%</b></td><td><b>6.2</b></td><td><b>25.5%</b></td>
+      <td>60.9%</td><td>13.7%</td><td><b>63.7%</b></td><td><b>1.01</b></td>
+      <td class="dim">+1.31pp p=0.140 n.s.</td></tr>
+  <tr><td class="l">保本 0.5R + 落点 0.25R</td><td>1 136</td><td class="pos">+0.50%</td>
+      <td class="pos">+2.43%</td><td class="neg">−1.50%</td><td>8.9</td><td>25.8%</td><td>53.6%</td>
+      <td>20.6%</td><td>51.2%</td><td>0.94</td><td class="dim">+1.11pp p=0.238 n.s.</td></tr>
+  <tr><td class="l"><b>保本 0.5R + 跟踪距离 0.5R</b></td><td>1 171</td><td class="pos"><b>+0.77%</b></td>
+      <td class="pos">+2.60%</td><td class="neg">−1.12%</td><td>5.9</td><td>25.5%</td><td>60.8%</td>
+      <td>13.7%</td><td>63.7%</td><td><b>1.02</b></td><td class="dim">+1.29pp p=0.149 n.s.</td></tr>
+</table>
+
+<div class="good">
+<b>方向是明确的</b>：门槛 1.0R → 0.5R，止损占比 40.6% → <b>25.5%</b>，
+盈亏比 0.87 → <b>1.01</b>，胜率 51.7% → <b>63.7%</b>，全样本 −0.66% → <b>+0.61%</b>。
+<b>这正好印证了两族分解</b>：被救回来的那批，就是①族里 MFE 在 0.5~1.0R 之间的单子。
+</div>
+
+<div class="warn">
+<b>但不要当成"找到 alpha"：</b><br>
+· <b>样本外仍是负的（−1.10%）</b> —— 与上一轮「8 个方案样本外无一转正」不矛盾，
+  只是把 −2.65% 修到 −1.10%。<br>
+· 配对检验 <b>p = 0.140，不显著</b>（样本内 +0.97pp p=0.244 也不显著）。<br>
+· 出场端的天花板还是那句话：<b>信号本身没有 alpha（日K 超额 −1.36% p=0.009），
+  出场改造只能把负期望拉向零，拉不成正。</b>要赚必须回信号端。
+</div>
+
+<!-- ══════════════════ 6 ══════════════════ -->
+<h2 id="s6">7. 回测能不能多进程 —— 能，实测 ×3.0</h2>
+
+<p>你问的这一点，之前的代码是<b>错的（慢的那个意思）</b>：
+<code>ab_run.py::run_plan</code> 把 <code>Runner.run</code> 放进了
+<code>ThreadPoolExecutor</code>。而 <code>Runner.run</code> 是<b>纯 Python CPU 活</b>
+（缠论递归 + 逐帧状态机），CPython 的 GIL 让多线程在这类活上退化成串行。</p>
+
+<h3>7.1 实测：12 个线程不比 1 个线程快</h3>
+<table>
+  <tr><th>并发方式</th><th>墙钟时间（3 次实测）</th><th>相对 1 线程</th><th>逐笔结果</th></tr>
+  <tr><td class="l">线程 1 个（串行基线）</td><td>20.6s / 21.6s</td><td>1.00×</td><td class="dim">—</td></tr>
+  <tr><td class="l">线程 12 个（旧默认）</td><td>22.1s / 24.0s / 25.2s</td><td class="neg"><b>1.07~1.17×（更慢）</b></td><td class="dim">—</td></tr>
+  <tr><td class="l">进程 8 个</td><td><b>6.8s / 7.3s / 7.6s</b></td><td class="pos"><b>2.84~3.05×</b></td><td class="pos">完全一致 ✔</td></tr>
+  <tr><td class="l">进程 16 个</td><td>7.9s / 8.0s</td><td class="pos">2.70~2.99×</td><td class="pos">完全一致 ✔</td></tr>
+</table>
+<p class="small">工作量：160 只 × 周K 800 根 × 1 个方案；本机 20 逻辑核。
+16 进程比 8 进程慢 ⇒ 甜点在 <b>8~10 个进程</b>（超线程 + 内存带宽的通常形态）。
+原始日志：<code>Backtest/Exp/参照日志/log_bench_pool.txt</code>。</p>
+
+<h3>7.2 端到端对照（真实脚本 ab_pct.py）</h3>
+<table>
+  <tr><th>路径</th><th>墙钟</th><th>输出 JSON</th></tr>
+  <tr><td class="l"><code>--procs 0</code>（线程 12）</td><td>1m23.4s</td><td class="dim" rowspan="2">逐字节相同 ✔</td></tr>
+  <tr><td class="l"><code>--procs 6</code>（进程 6）</td><td class="pos"><b>27.0s</b>（3.09×）</td></tr>
+</table>
+
+<h3>7.3 改法：一处改动，6 个脚本受益</h3>
+<p><code>run_plan</code> 是唯一的收口点（被 <code>ab_pct</code> / <code>ab_atr</code> /
+<code>ab_final</code> / <code>ab_run</code> / <code>ab_run2</code> / <code>signif</code> 共用），
+所以只改它一个函数：</p>
+
+<pre>def run_plan(codes, freq, n, cfg, workers=10, procs=None):
+    if procs is None:
+        procs = int(os.environ.get("EXP_PROCS", "0") or 0)
+    pool = get_pool(procs)                    # 常驻池，跨方案复用（省 spawn 开销）
+    if pool is not None:
+        if not _CHK["done"]:                  # ← 首次走进程路径时实地对拍线程版
+            _CHK["done"] = True
+            _selfcheck_once(codes, freq, n, cfg, workers, procs)
+        res = list(pool.map(_proc_one, [(c, freq, n, cfg) for c in codes], chunksize=4))
+        return [r for sub in res for r in sub]
+    ...原线程路径...</pre>
+
+<div class="danger">
+<b>⚠ 进程池有一个会静默出错的坑，必须靠护栏而不是自觉：</b><br>
+<code>exp_policy.install()</code> 改的是<b>父进程内存里的模块属性</b>，
+spawn 出来的子进程<b>不继承</b>。漏了这一步，子进程跑的是<b>原始策略</b> ——
+症状是"结果静默变成基线值，而且看起来更快"，<b>没有任何报错</b>。<br>
+<b>两道防线</b>：① <code>ProcessPoolExecutor(initializer=_proc_init)</code> 在每个子进程里重新
+<code>install()</code>；② <code>_selfcheck_once()</code> 在第一次走进程路径时，
+用前 3 只标的<b>实地对拍线程版逐笔结果</b>，不一致直接打印红灯。
+</div>
+
+<div class="note">
+<b>正确用法：</b><code>python ab_pct.py --procs 8 ...</code>（或设环境变量 <code>EXP_PROCS=8</code>）。
+<b>默认是 0（线程）</b>，不改变既有行为 —— 需要显式打开。<br>
+<b>同一原则已用在</b>：<code>exit_fate.py</code>（5 个周期 17 790 笔，7m12s）、
+<code>signal_quality.py</code>（5000 根 × 300 只，18 分钟 → 2 分钟）、
+<code>be_ab.py</code>（5 个方案 × 800 只，1m58s）。<br>
+<b>不用改的</b>：取数（I/O 密集）继续用线程池 —— 那里线程是对的。
+</div>
+
+<!-- ══════════════════ 7 ══════════════════ -->
+<h2 id="s7">8. 可复现命令</h2>
+
+<pre># ① 两族分解（5 个周期，与仓库 run() 自检对拍）
+python exit_fate.py --freq w   --n 800  --limit 800 --procs 8 --out fate_w.json
+python exit_fate.py --freq w   --n 800  --limit 40  --procs 4 --verify 40   # 自检
+python exit_fate.py --freq d   --n 800  --limit 800 --procs 8 --out fate_d.json
+python exit_fate.py --freq 30m --n 5000 --limit 300 --procs 6 --out fate_30m.json
+
+# ② 保本门槛端到端 A/B（含样本内/外 + 配对显著性）
+python be_ab.py --freq w --n 800 --limit 800 --procs 8
+
+# ③ 并行化基准（线程 vs 进程，含逐笔一致性断言）
+python bench_pool.py --freq w --n 800 --limit 160 --threads 12 --procs 8
+
+# ④ 顺带：A/B 主脚本现在支持 --procs
+python ab_pct.py --freq w --n 800 --n-in 400 --oos 400 --procs 8</pre>
+
+<footer>
+  <b>数据溯源</b>：<code>fate_w.json</code> / <code>fate_d.json</code> / <code>fate_30m.json</code> /
+  <code>fate_15m.json</code> / <code>fate_5m.json</code>（每笔一行，含 <code>prim</code> /
+  <code>exit_reason</code> / <code>mfe_R</code> / <code>r_multiple</code> / <code>net</code>）；
+  逐笔一致性由 <code>exit_fate.py --verify</code> 与 <code>bench_pool.py</code> 的指纹断言保证。<br>
+  <b>参数口径</b>：<code>STOCK_EXIT_PARAMS</code> 直接从 <code>Backtest/ExitParams.py</code> import，
+  本报告不复制任何出场参数。<br>
+  <b>口径披露</b>：周/日线为腾讯<b>前复权</b>，分钟线为新浪<b>不复权</b>（跨分红日会有一次跳空）；
+  分钟样本 300 只 / 周·日 800 只，股票池按固定种子 <code>shuffle_seed=7</code> 打散。<br>
+  <b>勘误留痕</b>：本报告更正了上一轮「原笔延伸 ⟺ 结构止损」的论断；
+  原文保留在《入场信号质量与跨周期止盈止损报告》第 2 节，并已就地标注"已作废"。
+</footer>
+
+</div>
+</body>
+</html>

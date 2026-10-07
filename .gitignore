@@ -20,10 +20,17 @@ Script/.sync_tdx_config
 # 运行时缓存（stock_names / stock_pettm_index / stock_float_mc / last_code_freq
 # 等联网刷新产生的易变 json，不入库，避免无意义 diff 与合并冲突）
 App/*.json
-# 回测实验的 K 线缓存（Backtest/Exp/.kcache，约 60MB / 800 只；删掉会自动重抓）。
+# 回测实验的 K 线缓存（Backtest/Exp/*/.kcache，约 60MB / 800 只；删掉会自动重抓）。
 # 与上方同属「易变产物不入库」，避免无意义 diff 与合并冲突；
-# 只入库 Backtest/Exp/_universe.json —— 那是复现同一股票池的凭据。
+# 只入库 Backtest/Exp/*/.kcache/_universe.json —— 那是复现同一股票池的凭据（见下方取反规则）。
 Backtest/Exp/.kcache/
+# 2026-10-07 重构：Exp 拆成 common/entry/exit，缓存随之下沉一层；
+# 并新增页面同源的 xdxr 快照目录（900 只，约 3MB，可一键重抓）。
+# 注意用 `*/.kcache/*` 而不是 `*/.kcache/` —— 后者会把目录本身排除掉，
+# git 不再下降进去，下面的取反规则就失效了。
+Backtest/Exp/*/.kcache/*
+!Backtest/Exp/*/.kcache/_universe.json
+Backtest/Exp/*/.kcache_tdx/
 # 门禁运行时产物：Test/run_all.py 每次跑完覆写 Test/report.json（组件结果汇总），
 # 与上方同属「易变 json 不入库」——入库会让每次回归都产生无意义 diff 与合并冲突。
 # 注意：该文件**已被跟踪**，新增本条目不会自动生效，须先执行
