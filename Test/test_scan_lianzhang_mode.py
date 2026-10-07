@@ -9,8 +9,12 @@
      画白色十字线，既非红也非绿 ⇒ 不算）。见 `Frontend/app.js` 的 `drawCandles()`。
      ⚠️ 它**不是**通达信 `UPNDAY`（连涨 = 逐根高于**前一根收盘**）—— 两者会选出
      不同的票（跳空低开仍可能收红），这条是本次需求澄清的结论，写成断言防回潮。
-     同处钉住：只看**最后** N 根 / K 线不足 N 根不算 / 区间涨幅 = 首根开盘 →
-     末根收盘（**可为负**：三根连红但整体跳空下跌是可能的）。
+     同处钉住：只看**最后** N 根 / K 线不足 N 根不算。
+  ①+ 涨幅口径 = K 线图底部**十字白框**（悬停窗口首根时的读数「N 根 +涨跌(涨幅%)」）：
+     基期 = 窗口首根的**前一根收盘**（无前根时回落该根开盘，同白框的 `centerIdx > 0 ?
+     prev.close : k.open`），终点 = 末根收盘 ⇒ `(末根收盘 − 首根前收) / 首根前收`，
+     **不是**首根开盘；代数上 = N 根单根涨幅（同为「收盘/前收」）的复利连乘。
+     **可为负**：三根连红但整体跳空下跌是可能的。
   ② 真实冻结切片：具体窗口的日期与涨幅期望 + 120 组截断点×N 的一致性不变量
      （证明模块判定 == 同口径朴素复算，且该批次非空转）。
   ③ 前端真函数层（node 抽 app.js 真代码）：置灰契约（连涨用「最近N根」⇒ 可编辑，
@@ -82,7 +86,10 @@ def part1():
     print("══ ① 后端判据：最近 N 根逐根收红（口径 = K 线红色 close > open）══")
 
     # A 三根全红 ⇒ 命中，字段齐全
-    row = _run(_series([("2026/09/01", 10.0, 10.2),
+    #   前置一根阴线（前收 9.50），使两种涨幅基期给出**不同**的数：
+    #     白框口径 (11.0-9.50)/9.50 = 15.79%  vs  首根开盘口径 (11.0-10.0)/10.0 = 10.00%
+    row = _run(_series([("2026/08/31", 9.60, 9.50),
+                        ("2026/09/01", 10.0, 10.2),
                         ("2026/09/02", 10.1, 10.5),
                         ("2026/09/03", 10.4, 11.0)]), recent="3")
     check("① 三根全红 ⇒ 命中", row.get("is_lianzhang") is True, row)
@@ -91,8 +98,16 @@ def part1():
           and row.get("freq") == "d" and "error" not in row, row)
     check("① recent_days 回显为 3（前端据此渲染「N连涨」标签）",
           row.get("recent_days") == 3, row.get("recent_days"))
-    check("① 区间涨幅 = 首根开盘 → 末根收盘（(11.0-10.0)/10.0 = 10.0%）",
-          row.get("gain_pct") == 10.0, row.get("gain_pct"))
+    check("① 涨幅 = 首根**前收** → 末根收盘（(11.0-9.50)/9.50 = 15.79%）"
+          "—— 与 K 线图十字白框同口径",
+          row.get("gain_pct") == 15.79, row.get("gain_pct"))
+    check("① 判别力：涨幅**不是**旧口径「首根开盘 → 末根收盘」的 10.0%",
+          row.get("gain_pct") != 10.0, row.get("gain_pct"))
+    check("① 涨幅恒等于三根单根涨幅（各以前收为基）的复利连乘 "
+          "1.0737*1.0294*1.0476 - 1 = 15.79%",
+          row.get("gain_pct") == round(
+              ((10.2 / 9.50) * (10.5 / 10.2) * (11.0 / 10.5) - 1) * 100, 2),
+          row.get("gain_pct"))
     check("① 区间日期透传（首根 / 末根的 date）",
           row.get("date_from") == "2026/09/01"
           and row.get("date_to") == "2026/09/03",
@@ -121,6 +136,12 @@ def part1():
           _run(_series([("d1", 10.0, 10.2)]), recent="1").get("is_lianzhang") is True)
     check("① N=1 单根收阴 ⇒ 未命中",
           _run(_series([("d1", 10.2, 10.0)]), recent="1").get("is_lianzhang") is False)
+    check("① N=1 且**无前根** ⇒ 基期回落该根开盘（白框同款兜底），涨幅 = 2.0%",
+          _run(_series([("d1", 10.0, 10.2)]), recent="1").get("gain_pct") == 2.0)
+    r_e3 = _run(_series([("d0", 9.0, 10.0), ("d1", 10.5, 11.0)]), recent="1")
+    check("① N=1 且**有前根** ⇒ 基期 = 前收（(11.0-10.0)/10.0 = 10.0%）；"
+          "对照：首根开盘口径只会给 4.76%，两者不同 ⇒ 该断言有判别力",
+          r_e3.get("gain_pct") == 10.0, r_e3.get("gain_pct"))
 
     # F 只看最后 N 根
     r_f = _run(_series([("d0", 20.0, 19.0), ("d1", 10.0, 10.2),
@@ -129,16 +150,19 @@ def part1():
           r_f.get("is_lianzhang") is True, r_f)
 
     # G 判别力：三根连红但整体跳空下跌 ⇒ 仍命中，且涨幅为负
-    r_g = _run(_series([("d1", 10.00, 10.10), ("d2", 9.50, 9.60),
+    #   前置阳线（前收 10.50）⇒ 白框口径 -11.43%（若误用首根开盘只会得 -7.0%）
+    r_g = _run(_series([("d0", 10.20, 10.50),
+                        ("d1", 10.00, 10.10), ("d2", 9.50, 9.60),
                         ("d3", 9.20, 9.30)]), recent="3")
     check("① 三根连红但整体跳空下跌 ⇒ **仍命中**，涨幅为负"
           "（连涨 ≠ 区间上涨；证明判据不是「涨幅 > 0」的子集）",
-          r_g.get("is_lianzhang") is True and r_g.get("gain_pct") == -7.0, r_g)
+          r_g.get("is_lianzhang") is True and r_g.get("gain_pct") == -11.43, r_g)
 
-    # H 零价保护
-    r_h = _run(_series([("d1", 0, 10.0), ("d2", 10.1, 10.5),
-                        ("d3", 10.4, 11.0)]), recent="3")
-    check("① 首根 open=0（脏数据）⇒ 收红判定照常，涨幅回落 0.0、不抛异常",
+    # H 零价保护：基期（前收）= 0 ⇒ 涨幅回落 0.0，不抛 ZeroDivisionError
+    #   （与白框的 `startPrice !== 0 ? ... : "0.00"` 同款保护）
+    r_h = _run(_series([("d0", 1.0, 0.0), ("d1", 10.0, 10.2),
+                        ("d2", 10.1, 10.5), ("d3", 10.4, 11.0)]), recent="3")
+    check("① 基期前收 = 0（脏数据）⇒ 收红判定照常，涨幅回落 0.0、不抛异常",
           r_h.get("is_lianzhang") is True and r_h.get("gain_pct") == 0.0
           and "error" not in r_h, r_h)
 
@@ -168,11 +192,14 @@ def part2():
           row.get("is_lianzhang") is True
           and row.get("date_from") == "2026/09/07"
           and row.get("date_to") == "2026/09/09", row)
-    check("② 该窗口区间涨幅 = 2.16%", row.get("gain_pct") == 2.16, row.get("gain_pct"))
+    check("② 该窗口涨幅 = 2.68%（首根前收 25.77 = 2026/09/04 收盘 → 末根收盘 26.46）；"
+          "对照：首根开盘口径给 2.16%，两者不同 ⇒ 判别力自证",
+          row.get("gain_pct") == 2.68, row.get("gain_pct"))
 
     row5 = _run(kl[:1347], recent="5")
-    check("② L=1347 / N=5 ⇒ 命中，涨幅 11.19%",
-          row5.get("is_lianzhang") is True and row5.get("gain_pct") == 11.19, row5)
+    check("② L=1347 / N=5 ⇒ 命中，涨幅 10.08%（首根前收 21.13 = 2026/07/20 收盘 "
+          "→ 末根收盘 23.26）；对照：首根开盘口径给 11.19%",
+          row5.get("is_lianzhang") is True and row5.get("gain_pct") == 10.08, row5)
 
     r_miss = _run(kl, recent="3")
     check("② L=1393 / N=3（末 3 根非全红）⇒ 未命中",
@@ -180,20 +207,31 @@ def part2():
 
     # 不变量：任意截断点 × 任意 N，模块判定 == 独立复算（同口径朴素实现）
     bad = []
+    bad_gain = []
     hits = 0
     probes = 0
     for L in range(1370, 1394):
         for N in range(1, 6):
             probes += 1
-            got = _run(kl[:L], recent=str(N)).get("is_lianzhang")
+            row_l = _run(kl[:L], recent=str(N))
+            got = row_l.get("is_lianzhang")
             seg = kl[L - N:L]
             want = len(seg) == N and all(k["close"] > k["open"] for k in seg)
             if got is not want:
                 bad.append((L, N, got, want))
             if got:
                 hits += 1
+                # 涨幅：按「白框口径」独立复算（基期 = 窗口首根的前收；无前根时回落
+                #   首根开盘）逐组比对 —— 只对命中项有意义。
+                i0 = L - N
+                base = kl[i0 - 1]["close"] if i0 >= 1 else kl[i0]["open"]
+                exp = round((seg[-1]["close"] - base) / base * 100, 2) if base else 0.0
+                if row_l.get("gain_pct") != exp:
+                    bad_gain.append((L, N, row_l.get("gain_pct"), exp))
     check("② %d 组（24 截断点 × N=1..5）判定与独立复算**逐组一致**"
           % probes, not bad, bad[:5])
+    check("② 同批 %d 个命中项的**涨幅**也与白框口径独立复算逐组一致" % hits,
+          not bad_gain, bad_gain[:5])
     check("② 该批次非空转（命中 > 0，判别力自证）", hits > 0, hits)
 
 
@@ -307,7 +345,11 @@ def part3():
         "  cnt: F.indexOf('\u8fde\u6da8 <b>4</b> \u53ea') >= 0,\n"
         "  skip: F.indexOf('\u8df3\u8fc7 <b>7</b> \u53ea') >= 0,\n"
         "  cal: F.indexOf('\u9010\u6839\u6536\u7ea2\uff08\u6536\u76d8 > \u5f00\u76d8\uff0c\u5e73\u76d8\u4e0d\u7b97\uff09') >= 0,\n"
-        "  gain: F.indexOf('\u6da8\u5e45 = \u9996\u6839\u5f00\u76d8 \u2192 \u672b\u6839\u6536\u76d8') >= 0,\n"
+        "  gain: F.indexOf('\u6da8\u5e45 = \u9996\u6839\u7684\u524d\u4e00\u6839\u6536\u76d8"
+        " \u2192 \u672b\u6839\u6536\u76d8\uff08\u540c K \u7ebf\u56fe\u5e95\u90e8\u767d\u6846"
+        "\u8bfb\u6570\uff0c\u975e\u9996\u6839\u5f00\u76d8\uff09') >= 0,\n"
+        "  gainOld: F.indexOf('\u9996\u6839\u5f00\u76d8 \u2192 \u672b\u6839\u6536\u76d8') < 0\n"
+        "           && F.indexOf('\u6da8\u5e45 = \u9996\u6839\u524d\u6536 ') < 0,\n"
         "  rev: F.indexOf('\u6700\u8fd1 3 \u6839') >= 0 }));\n"
         "document.getElementById('scan-body').innerHTML = '';\n"
         "renderLianzhangScanResults([], 100, 100, false);\n"
@@ -370,8 +412,9 @@ def part3():
     check("③b 命中即默认勾选（本模式每行都满足判据）", chk["all"], chk)
     fin = json.loads(kv["FIN"])
     check("③c 终态摘要含 连涨 N 只 / 跳过 N 只", fin["cnt"] and fin["skip"], fin)
-    check("③c 口径披露：判据与涨幅基期都写在脸上（防「图上明明是红的却没扫到」）",
-          fin["cal"] and fin["gain"] and fin["rev"], fin)
+    check("③c 口径披露：判据与涨幅基期都写在脸上 —— 基期写明「首根的前一根收盘」"
+          "并显式否定「首根开盘」（防「图上明明是红的却没扫到」或「涨幅跟白框对不上」）",
+          fin["cal"] and fin["gain"] and fin["gainOld"] and fin["rev"], fin)
     empty = json.loads(kv["EMPTY"])
     check("③c 空结果态给出可读提示（而非空白面板）", empty["msg"], empty)
 
@@ -393,8 +436,9 @@ def part4():
     n_opts = len(re.findall(r'name="scan-mode"\s+value="', html))
     check("④ 扫描模式选项总数为 7（标注/均线/放量/连涨/底分型/买-卖点/回测）",
           n_opts == 7, n_opts)
-    check("④ 资源版本号已抬到 v=69（防浏览器吃旧缓存），且 v=68 零残留",
-          'app.js?v=69' in html and 'app.js?v=68' not in html, "版本号未同步")
+    check("④ 资源版本号已抬到 v=71（防浏览器吃旧缓存），且 v=70 / v=69 / v=68 零残留",
+          'app.js?v=71' in html and 'app.js?v=70' not in html
+          and 'app.js?v=69' not in html and 'app.js?v=68' not in html, "版本号未同步")
 
     appjs = io.open(APPJS, encoding="utf-8").read()
     check("④ localStorage 白名单收 lianzhang（否则重开弹窗回落到标注模式）",
@@ -414,6 +458,25 @@ def part4():
           "判据未找到或已被改宽")
     check("④ 后端与前端同源锚点：两处注释都写明「口径 = K 线图红色」",
           "口径 = K 线图红色" in src or "**红色 K 线**同源" in src, "后端缺同源说明")
+
+    # 涨幅基期的新口径同样要钉死 —— 指回 K 线图白框，防再被改回「首根开盘」
+    check("④ 后端涨幅基期写死为窗口首根的**前收**（与白框同源）",
+          'prev_close = (klines[i_first - 1].get("close", 0) or 0) if i_first >= 1' in src,
+          "涨幅基期未找到")
+    check("④ 后端零 `first_open` 残留（旧口径必须清干净，不许留双轨）",
+          "first_open" not in src, "first_open 仍有残留")
+    check("④ 涨幅零价保护与白框同款（`prev_close != 0`，不是 `> 0`）",
+          "if prev_close != 0 else 0.0" in src, "零价保护口径与白框不一致")
+    check("④ 同源锚点：K 线图白框的基期表达式仍在（改了它必须回来重核本模式）",
+          bool(re.search(r"prevKLine \? prevKLine\.close : ", appjs))
+          and appjs.count("rightVisibleK.close - startPrice") >= 1, "白框基期锚点丢失")
+
+    # 披露行本身也是契约：面板上把基期写错，比数字算错更难自查
+    #   （用户正是照这句话去对白框的）。措辞要求：写明基期 + 显式否定旧口径。
+    check("④ 面板口径披露行写明基期 = 首根的前一根收盘，且显式否定「首根开盘」",
+          '涨幅 = 首根的前一根收盘 → 末根收盘' in appjs
+          and '非首根开盘' in appjs
+          and '涨幅 = 首根开盘' not in appjs, "披露行措辞未同步")
 
 
 def main():

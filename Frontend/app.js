@@ -7070,6 +7070,8 @@
 
         // 连涨结果行渲染（进度期与终态共用同一份，避免两处漂移）
         //   列：股票名 · 代码 ·「N连涨」标签 · 区间涨幅（降序，涨红跌绿）
+        //   涨幅口径 = K 线图底部**十字白框**：悬停窗口首根时的读数（基期 = 首根
+        //   前收，终点 = 末根收盘）—— 与后端 gain_pct 同一口径，**不是**首根开盘。
         //   勾选：命中即勾 —— 本模式的每一行都已满足判据，不存在「命中但有强弱之分」。
         function _renderLianzhangRows(results) {
             var html = _scanMarketSummaryHtml(results);
@@ -7095,11 +7097,13 @@
             var label = interrupted ? "（已中断）" : "";
             var sourceLabel = _scanSourceLabel();
             var html = '<div class="scan-summary">' + sourceLabel + ' <b>' + total + '</b> 只，跳过 <b>' + skipped + '</b> 只，扫描 <b>' + (total - skipped) + '</b> 只，连涨 <b>' + results.length + '</b> 只' + label + '</div>';
-            // 口径披露：判据与 K 线红色同源（收盘 > 开盘，平盘白线不算），
-            //   涨幅 = 首根开盘 → 末根收盘；不写清楚必被当成「图上明明是红的却没扫到」来查。
+            // 口径披露：判据与 K 线红色同源（收盘 > 开盘，平盘白线不算）；
+            //   涨幅与 K 线图底部**十字白框**同源 —— 悬停窗口首根时的读数
+            //   （基期 = 首根的前一根收盘，终点 = 末根收盘），**不是**首根开盘。
+            //   不写清楚必被当成「图上明明是红的却没扫到」或「涨幅跟白框对不上」来查。
             html += '<div class="scan-summary" style="font-size:10px;color:#7a8399;">'
                 + '最近 ' + _scanRecentDays + ' 根 · 判据：逐根收红（收盘 > 开盘，平盘不算）'
-                + ' · 涨幅 = 首根开盘 → 末根收盘</div>';
+                + ' · 涨幅 = 首根的前一根收盘 → 末根收盘（同 K 线图底部白框读数，非首根开盘）</div>';
             if (results.length === 0) {
                 html += '<div class="scan-no-result">当前周期下未发现连涨标的</div>';
             } else {

@@ -559,13 +559,13 @@ def part6():
           bool(re.search(r'value="backtest"[^>]*onchange="updateScanRecentDisabled\(\)"',
                          html)),
           "缺 onchange")
-    check("⑥ 静态资源版本号已 bump（v=68，防浏览器吃旧缓存；10-07 行名轮同步）",
-          'app.js?v=68' in html, "仍指向旧版本号")
+    check("⑥ 静态资源版本号已 bump（v=71，防浏览器吃旧缓存；10-07 连涨披露行措辞轮同步）",
+          'app.js?v=71' in html, "仍指向旧版本号")
 
     appjs = io.open(APPJS, encoding="utf-8").read()
     check("⑥ localStorage 白名单收 backtest（否则重开弹窗回落到标注模式）",
           bool(re.search(r'savedMode === "fx_d" \|\| savedMode === "fangliang" '
-                         r'\|\| savedMode === "backtest"', appjs)),
+                         r'\|\| savedMode === "lianzhang" \|\| savedMode === "backtest"', appjs)),
           "白名单未含 backtest")
     check("⑥ 结果面板标题分支存在（日K 回测）",
           'freqLabel + " 回测"' in appjs, "缺标题分支")
