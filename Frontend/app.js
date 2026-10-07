@@ -212,7 +212,7 @@
 
         let _scanTaskId = null; // 当前批量扫描 task_id（中止时立即经 /api/stocks/scan/{task_id}/cancel 传播）
 
-        let _scanMode = "ann"; // "ann" = 标注扫描, "ma" = 均线分类扫描, "fangliang" = 放量扫描, "fx_d" = 底分型扫描, "bsp" = 买卖点扫描, "backtest" = 回测扫描
+        let _scanMode = "ann"; // "ann" = 标注扫描, "ma" = 均线分类扫描, "fangliang" = 放量扫描, "lianzhang" = 连涨扫描, "fx_d" = 底分型扫描, "bsp" = 买卖点扫描, "backtest" = 回测扫描
 
         let _scanRecentDays = 1; // 最近N根K线，默认1
 
@@ -5980,7 +5980,7 @@
         // 均线分类扫描：按最新收盘价分类，与日期无关，输入框置灰；扫描来源可用
         // 回测扫描：整条加载序列参与回测，与"最近N根"无关，输入框置灰；
         //           扫描来源与扫描周期**都可用**（回测必须知道扫谁、按什么周期扫）
-        // 买卖点/放量扫描：需要按最近N根K线过滤，输入框可用
+        // 买卖点/放量/连涨扫描：需要按最近N根K线过滤，输入框可用
         function updateScanRecentDisabled() {
             var row = document.getElementById("scan-recent-row");
             var input = document.getElementById("scan-recent-days");
@@ -5990,6 +5990,7 @@
             var isMa = selected && selected.value === "ma";
             var isFxD = selected && selected.value === "fx_d";
             var isBacktest = selected && selected.value === "backtest";
+            var isLianzhang = selected && selected.value === "lianzhang";
             if (row && input) {
                 if (isAnn || isMa || isFxD || isBacktest) {
                     row.style.opacity = "0.35";
@@ -5999,6 +6000,11 @@
                     row.style.opacity = "1";
                     row.style.pointerEvents = "";
                     input.disabled = false;
+                    // 连涨：「最近N根」是核心参数，N=1（单根收红）几乎无意义
+                    //   ⇒ 进入本模式时若当前值 < 2 自动填 3（用户仍可改）。
+                    if (isLianzhang && (parseInt(input.value, 10) || 0) < 2) {
+                        input.value = 3;
+                    }
                 }
             }
             if (freqRow) {
@@ -6152,6 +6158,8 @@
                 document.getElementById("scan-title").textContent = freqLabel + " 底分型";
             } else if (_scanMode === "backtest") {
                 document.getElementById("scan-title").textContent = freqLabel + " 回测";
+            } else if (_scanMode === "lianzhang") {
+                document.getElementById("scan-title").textContent = freqLabel + " " + _scanRecentDays + "连涨";
             } else {
                 // 标注扫描：显示全周期，不再显示当前周期
                 document.getElementById("scan-title").textContent = "全周期 标注";
@@ -6177,7 +6185,7 @@
             // 从 localStorage 恢复上次的选择
             try {
                 var savedMode = localStorage.getItem("scan_mode");
-                if (savedMode === "bsp" || savedMode === "ann" || savedMode === "ma" || savedMode === "fx_d" || savedMode === "fangliang" || savedMode === "backtest") {
+                if (savedMode === "bsp" || savedMode === "ann" || savedMode === "ma" || savedMode === "fx_d" || savedMode === "fangliang" || savedMode === "lianzhang" || savedMode === "backtest") {
                     _scanMode = savedMode;
                     var radio = document.querySelector('input[name="scan-mode"][value="' + savedMode + '"]');
                     if (radio) radio.checked = true;
@@ -6786,6 +6794,28 @@
                 return;
             }
 
+            // lianzhang：连涨扫描（最近 N 根 K 线逐根收红；口径 = K 线图红色，见后端
+            //   AppScan.scan_one 的 lianzhang 分支，两处判据必须同一句话）
+            if (_scanMode === "lianzhang") {
+                runScan({
+                    mode: "lianzhang",
+                    recent: _scanRecentDays,
+                    errLabel: "连涨扫描",
+                    initialSummary: function(preSkipped, total) {
+                        return '<div class="scan-loading"><div class="spinner"></div><br>正在扫描 0/' + total + '，跳过 ' + preSkipped + ' 只，连涨 0 只</div>';
+                    },
+                    progressLine: function(completed, total, preSkipped, skipped, results) {
+                        return '<div class="scan-loading"><div class="spinner"></div><br>正在扫描 ' + (completed + "/" + total) + '，跳过 ' + (preSkipped + skipped) + ' 只，连涨 ' + results.length + ' 只</div>';
+                    },
+                    classify: function(data) { return !!data.is_lianzhang; },
+                    renderRows: function(results) { return _renderLianzhangRows(results); },
+                    renderFinal: function(results, total, skipped, interrupted) {
+                        renderLianzhangScanResults(results, total, skipped, interrupted);
+                    }
+                });
+                return;
+            }
+
             // 买卖点扫描模式（默认）：按最新买卖点类型排序，先买点后卖点
             runScan({
                 mode: "",
@@ -7027,6 +7057,53 @@
                     html += '<span class="scan-col-tags">' + buildFangliangTagHtml(r) + '</span>';
                     html += '</div>';
                 }
+            }
+            body.innerHTML = html;
+            updateScanSaveBtn();
+        }
+
+        // 连涨标签HTML：口径 = K 线红色（close > open），与 K 线图红柱同色
+        function buildLianzhangTagHtml(data) {
+            var n = data.recent_days || 0;
+            return '<span class="scan-bsp-tag fl-rise">' + n + '连涨</span>';
+        }
+
+        // 连涨结果行渲染（进度期与终态共用同一份，避免两处漂移）
+        //   列：股票名 · 代码 ·「N连涨」标签 · 区间涨幅（降序，涨红跌绿）
+        //   勾选：命中即勾 —— 本模式的每一行都已满足判据，不存在「命中但有强弱之分」。
+        function _renderLianzhangRows(results) {
+            var html = _scanMarketSummaryHtml(results);
+            // 按区间累计涨幅降序：涨幅最大的排最前
+            results.sort(function(a, b) { return (b.gain_pct || 0) - (a.gain_pct || 0); });
+            for (var i = 0; i < results.length; i++) {
+                var r = results[i];
+                var g = Number(r.gain_pct || 0);
+                html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\', \'' + _scanFreq + '\')" title="点击查看K线图">';
+                html += chkBox(r.code, true);
+                html += '<span class="scan-col-name">' + r.name + '</span>';
+                html += '<span class="scan-col-code">' + r.code + '</span>';
+                html += '<span class="scan-col-tags">' + buildLianzhangTagHtml(r) + '</span>';
+                html += '<span class="scan-col-expect" style="color:' + _btCol(g) + '">' + _btPct(g) + '</span>';
+                html += '</div>';
+            }
+            return html;
+        }
+
+        // 连涨扫描结果渲染（终态）
+        function renderLianzhangScanResults(results, total, skipped, interrupted) {
+            var body = document.getElementById("scan-body");
+            var label = interrupted ? "（已中断）" : "";
+            var sourceLabel = _scanSourceLabel();
+            var html = '<div class="scan-summary">' + sourceLabel + ' <b>' + total + '</b> 只，跳过 <b>' + skipped + '</b> 只，扫描 <b>' + (total - skipped) + '</b> 只，连涨 <b>' + results.length + '</b> 只' + label + '</div>';
+            // 口径披露：判据与 K 线红色同源（收盘 > 开盘，平盘白线不算），
+            //   涨幅 = 首根开盘 → 末根收盘；不写清楚必被当成「图上明明是红的却没扫到」来查。
+            html += '<div class="scan-summary" style="font-size:10px;color:#7a8399;">'
+                + '最近 ' + _scanRecentDays + ' 根 · 判据：逐根收红（收盘 > 开盘，平盘不算）'
+                + ' · 涨幅 = 首根开盘 → 末根收盘</div>';
+            if (results.length === 0) {
+                html += '<div class="scan-no-result">当前周期下未发现连涨标的</div>';
+            } else {
+                html += _renderLianzhangRows(results);
             }
             body.innerHTML = html;
             updateScanSaveBtn();

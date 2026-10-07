@@ -261,6 +261,8 @@
                 <label style="cursor:pointer;"><input type="radio" name="scan-mode" value="ann" checked="" onchange="updateScanRecentDisabled()" style="accent-color:#e94560;margin-right:4px;">标注</label>
                 <label style="cursor:pointer;"><input type="radio" name="scan-mode" value="ma" onchange="updateScanRecentDisabled()" style="accent-color:#e94560;margin-right:4px;">均线</label>
                 <label style="cursor:pointer;"><input type="radio" name="scan-mode" value="fangliang" onchange="updateScanRecentDisabled()" style="accent-color:#e94560;margin-right:4px;">放量</label>
+                <!-- 连涨：最近N根K线逐根收红（口径 = K线图红色：close>open，平盘白线不算），需「最近N根」 -->
+                <label style="cursor:pointer;"><input type="radio" name="scan-mode" value="lianzhang" onchange="updateScanRecentDisabled()" style="accent-color:#e94560;margin-right:4px;">连涨</label>
                 <label style="cursor:pointer;"><input type="radio" name="scan-mode" value="fx_d" onchange="updateScanRecentDisabled()" style="accent-color:#e94560;margin-right:4px;">底分型</label>
                 <label style="cursor:pointer;"><input type="radio" name="scan-mode" value="bsp" onchange="updateScanRecentDisabled()" style="accent-color:#e94560;margin-right:4px;">买/卖点</label>
                 <!-- 回测扫描：对来源内每票跑一遍与页面「回测」按钮同一套内核，
@@ -361,6 +363,6 @@
             </div>
         </div>
     </aside>
-    <script src="app.js?v=68"></script>
+    <script src="app.js?v=69"></script>
 
 </body></html>
