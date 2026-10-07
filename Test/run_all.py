@@ -760,6 +760,18 @@ COMPONENTS = [
     #      标注模式全灰作判别力对照）+ bsp_types 全链签名与派发位置。
     ("scan_backtest",
      [sys.executable, os.path.join("Test", "test_scan_backtest_mode.py")]),
+    # 连涨扫描（扫描模式 "lianzhang"）：最近 N 根 K 线**逐根收红**（口径 = K 线图
+    # 红色 `close > open`，平盘白线不算）—— 不是通达信 UPNDAY（逐根高于前收），
+    # 两者会选出不同的票。四段守护 ——
+    #   ① 后端判据（合成样本 9 组：全红 / 平盘 / 阴线 / 数据不足 / N=1 / 只看最后
+    #      N 根 / 跳空下跌仍命中且涨幅为负 / 零价保护）；② 真实冻结切片（具体窗口
+    #      的日期与涨幅期望 + 24 截断点 × N=1..5 与独立复算逐组一致 + 非空转自证）；
+    #   ③ 前端真函数（node 抽段）：置灰契约（连涨「最近N根」可用）、切模式自动填 3
+    #      （附买卖点模式对照证非恒真）、涨幅降序 /「N连涨」标签 / 涨红跌绿 /
+    #      终态口径披露；④ 静态契约（HTML 位置紧跟「放量」、选项数 =7、版本号
+    #      v=69、localStorage 白名单、后端判据严格 `>`）。
+    ("scan_lianzhang",
+     [sys.executable, os.path.join("Test", "test_scan_lianzhang_mode.py")]),
     # ── 暂不注册（注册即恒红 / 无拦截力，注册了门禁形同虚设）──────────
     #   Test/repro_n4_cleanup_race.py          N4 未修，且脚本只有 return 0
     #                                          （恒通过、无拦截力，须先改成

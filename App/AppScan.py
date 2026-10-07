@@ -898,6 +898,43 @@ class Scanner:
                     "a_is_rise": a_is_rise,
                 }
 
+            # ── 连涨扫描模式 ──
+            # 判据与 K 线图上的**红色 K 线**同源（Frontend/app.js::drawCandles）：
+            #   红色 ⟺ close > open（**严格**不等；close == open 画白色十字线，
+            #   既非红也非绿 ⇒ 不算）。即「最近 N 根逐根收红」= EVERY(C>O, N)。
+            #   注意它与通达信 `UPNDAY`（连涨 = 逐根高于**前一根收盘**）**不是**
+            #   同一判据 —— 本模式比的是本根开/收盘，跳空低开仍可能收红。
+            # 边界：K 线不足 N 根、或任一根非红 ⇒ 未命中，静默跳过（不打印日志）。
+            if mode == "lianzhang":
+                need_bars = recent_days
+                seg = klines[-need_bars:] if len(klines) >= need_bars else []
+                is_lianzhang = bool(seg) and all(
+                    (k.get("close", 0) or 0) > (k.get("open", 0) or 0) for k in seg)
+                if not is_lianzhang:
+                    mkt, cd = _m._get_market_code(qualified_code)
+                    if mkt and cd:
+                        app_data.cache_remove(make_live_key(mkt, cd, freq))
+                    return {"code": code, "is_lianzhang": False}
+
+                first_open = seg[0].get("open", 0) or 0
+                last_close = seg[-1].get("close", 0) or 0
+                gain_pct = (round((last_close - first_open) / first_open * 100.0, 2)
+                            if first_open > 0 else 0.0)
+                t_filter = time.time() - t0
+                t_total = time.time() - t_scan_start
+                log.info(f"[耗时-扫描-连涨] {code} 总{t_total:.3f}s(分析{t_analyze:.3f}s "
+                         f"过滤{t_filter:.3f}s) {need_bars}连涨 涨幅={gain_pct:g}%")
+                return {
+                    "code": market + code, "name": stock_name,
+                    "is_lianzhang": True,
+                    "last_close": last_close,
+                    "freq": freq,
+                    "recent_days": need_bars,
+                    "gain_pct": gain_pct,
+                    "date_from": seg[0].get("date", ""),
+                    "date_to": seg[-1].get("date", ""),
+                }
+
             # ── 回测扫描模式 ──
             # 对每票跑一遍与页面「回测」按钮**同一套内核**（App/AppBacktest），
             # 把页面那次请求的输入整体搬到 worker 里：K 线直接复用本函数上面
