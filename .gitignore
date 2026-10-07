@@ -2,6 +2,8 @@
 __pycache__
 *-checkpoint.ipynb
 *.vscode
+# JetBrains IDEA 本地工程文件（.idea/ 下全是本机路径与窗口状态，不入库）。
+.idea/
 *.log
 *.db
 config.yaml
