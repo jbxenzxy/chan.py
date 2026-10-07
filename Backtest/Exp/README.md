@@ -213,9 +213,11 @@ chan.py 的 `step_load` 是**纯 Python CPU 活** ⇒ **必须用进程池**，�
   `_cal_bs0point_nth` 各有一处裸 `return`（`27a83bf` 引入）⇒ **0 类两支生成器被短接**。
   当前 HEAD `98d0284` 已删除这两行、**生成器恢复** ⇒ 两份文档里受影响的行都打了 **⚠ 待重测**，
   `_rerun.sh` 整套重跑排下一轮。机制、影响面与安全边界见两文档的顶部警示块与 §9/§10 勘误。
-- 仓库根 `_rerun.sh`：一键把全部跑分重算一遍（stdout 直接落到本目录 `参照日志/`，
-  聚合 json 归档到 `参照结果/`）。默认跳过两个联网段，加 `WITH_NET=1` 才跑
-  `data_parity.py` + `xdxr_parity.py`。
+- `Backtest/Exp/_rerun.sh`（**就在本目录下**，不在仓库根）：一键把全部跑分重算一遍
+  （stdout 直接落到本目录 `参照日志/`，聚合 json 归档到 `参照结果/`）。
+  默认跳过两个联网段，加 `WITH_NET=1` 才跑 `data_parity.py` + `xdxr_parity.py`。
+  它**按自身位置推仓库根**（`$0` 的上两级），所以放在 `Backtest/Exp/` 下就能直接跑，
+  不再依赖"必须放仓库根"；整份拷到仓库外时才需要 `CHAN_REPO=<仓库根>`。
 - **`.gitignore` 的中间产物规则已随交付提供**（仓库根 `.gitignore` 里，
   文件末尾「===== 回测实验（Backtest/Exp）中间产物 =====」那一段，7 条规则 + 5 行注释）——
   `_rerun.sh` 会在 `entry/` `exit/` 留下中间产物，否则每次重跑都脏 `git status`；
