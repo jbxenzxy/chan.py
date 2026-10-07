@@ -916,10 +916,20 @@ class Scanner:
                         app_data.cache_remove(make_live_key(mkt, cd, freq))
                     return {"code": code, "is_lianzhang": False}
 
-                first_open = seg[0].get("open", 0) or 0
+                # 涨幅口径与 K 线图底部**十字白框**同源（Frontend/app.js 的两处
+                #   白框渲染：悬停某根时显示「N 根 +涨跌(涨幅%)」）：
+                #     基期 = 悬停那根的**前一根收盘**（无前根时回落该根开盘）；
+                #     终点 = 最右可见根收盘。
+                #   本模式窗口恒为最后 N 根 ⇒ 等价于「悬停窗口首根」的白框读数：
+                #     (末根收盘 − 首根前收) / 首根前收 —— **不是**首根开盘。
+                #   代数上 = N 根单根涨幅（同为「收盘/前收」）的复利连乘。
+                #   可为负：三根连红但整体跳空下跌是可能的。
+                i_first = len(klines) - need_bars
+                prev_close = (klines[i_first - 1].get("close", 0) or 0) if i_first >= 1 \
+                    else (seg[0].get("open", 0) or 0)
                 last_close = seg[-1].get("close", 0) or 0
-                gain_pct = (round((last_close - first_open) / first_open * 100.0, 2)
-                            if first_open > 0 else 0.0)
+                gain_pct = (round((last_close - prev_close) / prev_close * 100.0, 2)
+                            if prev_close != 0 else 0.0)
                 t_filter = time.time() - t0
                 t_total = time.time() - t_scan_start
                 log.info(f"[耗时-扫描-连涨] {code} 总{t_total:.3f}s(分析{t_analyze:.3f}s "
