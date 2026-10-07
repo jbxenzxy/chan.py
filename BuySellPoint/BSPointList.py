@@ -1016,7 +1016,6 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         self._dbg_bs0(' _cal_bs0point_4th', '进入', stroke_n_idx=stroke_n.idx,
                       nth_in_pivot=nth_in_pivot,
                       stroke_dir='up' if stroke_n.is_up() else 'down')
-        return
 
         is_buy = stroke_n.is_down()
         config = self.config.GetBSConfig(is_buy)
@@ -1091,7 +1090,6 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         self._dbg_bs0(' _cal_bs0point_nth', '进入', stroke_n_idx=stroke_n.idx,
                       nth_in_pivot=nth_in_pivot,
                       stroke_dir='up' if stroke_n.is_up() else 'down')
-        return
 
         bsp_found = self._cal_bs0point_nth_nzs(bi_list, pivot_a, stroke_n)
         if not bsp_found:
