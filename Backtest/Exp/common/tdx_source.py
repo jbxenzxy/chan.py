@@ -80,16 +80,16 @@ for _p in (REPO, HERE, os.path.dirname(HERE)):
 
 from DataAPI.TdxAPI import CTdxAPI, set_tdx_config          # noqa: E402
 
-# ── 通达信安装目录：与 App 层同源（AppConfig 读 .env 的 TDX_INSTALL_DIR）──
-try:
-    from App.AppConfig import app_config as _ac
-    TDX_INSTALL = os.environ.get("TDX_INSTALL_DIR") or _ac.tdx_install_dir
-    _VIPDOC = _ac.vipdoc_dir
-    set_tdx_config(vipdoc_dir=_VIPDOC, forward_adjust_enabled=_ac.forward_adjust_enabled)
-except Exception:                                            # noqa: BLE001
-    TDX_INSTALL = os.environ.get("TDX_INSTALL_DIR", r"D:\new_tdx_hd_test")
-    _VIPDOC = os.path.join(TDX_INSTALL, "vipdoc")
-    set_tdx_config(vipdoc_dir=_VIPDOC, forward_adjust_enabled=True)
+# ── 通达信安装目录：一律现读 App 层 SSOT（AppConfig 读 .env 的 TDX_INSTALL_DIR）──
+# ⚠ **不许**在这里再抄一份默认路径 / `forward_adjust_enabled`：那等于建第二个 SSOT，
+#   App 层改一次这里就静默漂移 —— 而"同源"假象正是本模块最难发现、代价最大的失效
+#   形态（回测照跑、数字照出，只是序列已经不是页面那条）。故这里**不做兜底**：
+#   取不到配置就当场报错，比带着错值继续跑一整轮要好。
+from App.AppConfig import app_config as _ac
+
+TDX_INSTALL = os.environ.get("TDX_INSTALL_DIR") or _ac.tdx_install_dir
+_VIPDOC = _ac.vipdoc_dir
+set_tdx_config(vipdoc_dir=_VIPDOC, forward_adjust_enabled=_ac.forward_adjust_enabled)
 
 FREQS = ("w", "d", "30m", "15m", "5m")
 CACHE = os.path.join(HERE, ".kcache_tdx")
@@ -124,16 +124,10 @@ _ENV_FULL = os.environ.get("EXP_FULL_DATA", "").strip().lower() in ("1", "true",
 if _ENV_FULL:
     PAGE_WINDOW = False
 
-try:
-    from App.AppConfig import app_config as _ac
-    _LOOKBACK = dict(_ac.stocks_lookback_config or {})
-    _FULL_DATA_MODE = bool(_ac.full_data_mode)
-    _SAVED_POINT_FILE = _ac.saved_point_file
-except Exception:                                            # noqa: BLE001
-    _LOOKBACK = {"w": (0, "不限制"), "d": (500, ""), "30m": (800, ""),
-                 "15m": (960, ""), "5m": (960, "")}
-    _FULL_DATA_MODE = False
-    _SAVED_POINT_FILE = os.path.join(os.path.dirname(HERE), "..", "App", "double_click_dt.csv")
+# 复用上面那一个 `app_config` 实例 —— 同一份 SSOT，上表数字一处都不抄
+_LOOKBACK = dict(_ac.stocks_lookback_config or {})
+_FULL_DATA_MODE = bool(_ac.full_data_mode)
+_SAVED_POINT_FILE = _ac.saved_point_file
 
 # 只读指向某个"选点表副本"做 what-if（**不要**指向生产 CSV 去改它）
 _SAVED_POINT_FILE = os.environ.get("EXP_SAVED_POINT_FILE") or _SAVED_POINT_FILE
