@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>chan.py L1-L3 出场策略诊断与优化 —— 以常山北明周K为例</title>
+<style>
+  :root{
+    --bg:#ffffff; --fg:#1a1d21; --muted:#5b6470; --line:#e3e7ec;
+    --head:#f6f8fa; --accent:#0b62d6; --red:#c0392b; --green:#1f7a4d;
+    --warn-bg:#fff8e6; --warn-line:#e0b400;
+    --ok-bg:#eaf6ee; --ok-line:#1f7a4d;
+    --bad-bg:#fdeceb; --bad-line:#c0392b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font-family:-apple-system,"Segoe UI","Microsoft YaHei",Helvetica,Arial,sans-serif;
+    font-size:15px;line-height:1.75;}
+  .wrap{max-width:1080px;margin:0 auto;padding:32px 28px 80px;}
+  h1{font-size:26px;margin:0 0 6px;line-height:1.4}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:28px}
+  h2{font-size:20px;margin:40px 0 14px;padding-bottom:8px;border-bottom:2px solid var(--line)}
+  h3{font-size:16px;margin:26px 0 10px;color:#24292f}
+  h4{font-size:14px;margin:18px 0 8px;color:var(--muted)}
+  p{margin:10px 0}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:13.5px}
+  th,td{border:1px solid var(--line);padding:7px 10px;text-align:right}
+  th{background:var(--head);font-weight:600;text-align:center}
+  td:first-child,th:first-child{text-align:left}
+  tbody tr:nth-child(even){background:#fbfcfd}
+  .best{background:var(--ok-bg)!important;font-weight:600}
+  .worst{background:var(--bad-bg)!important}
+  code{background:#f2f4f7;padding:1px 5px;border-radius:3px;font-size:12.5px;
+    font-family:"SFMono-Regular",Consolas,monospace}
+  pre{background:#f6f8fa;border:1px solid var(--line);border-radius:6px;
+    padding:12px 14px;overflow-x:auto;font-size:12.5px;line-height:1.6}
+  .box{border-left:4px solid var(--accent);background:#f5f9ff;padding:12px 16px;
+    margin:16px 0;border-radius:0 6px 6px 0}
+  .warn{border-left-color:var(--warn-line);background:var(--warn-bg)}
+  .ok{border-left-color:var(--ok-line);background:var(--ok-bg)}
+  .bad{border-left-color:var(--bad-line);background:var(--bad-bg)}
+  .kpi{display:flex;flex-wrap:wrap;gap:14px;margin:18px 0}
+  .kpi div{flex:1;min-width:150px;border:1px solid var(--line);border-radius:8px;
+    padding:12px 14px;background:#fbfcfd}
+  .kpi .v{font-size:22px;font-weight:700;line-height:1.3}
+  .kpi .l{font-size:12px;color:var(--muted)}
+  .neg{color:var(--red)} .pos{color:var(--green)}
+  ul,ol{margin:10px 0;padding-left:24px}
+  li{margin:5px 0}
+  .small{font-size:12.5px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>chan.py L1-L3 出场策略诊断与优化方案</h1>
+<div class="sub">
+  代码基线 <code>origin/custom-dev @ d5faa84</code> · 样本：沪深主板+创业板 755 只有效标的 /
+  周K 1080 笔交易 · 生成于 2026-10-07
+</div>
+
+<div class="box ok">
+<b>一句话结论</b>：你描述的现象<b>完全属实且可精确复现</b>，你的直觉方向<b>是对的</b>，
+但只对了一半 —— 真正"漏钱"的地方<b>不是保本层，而是跟踪层</b>。
+单独加"10% 保本"在统计上<b>不显著</b>（p=0.19）；
+而"10% 保本 + 跟踪层改百分比"的组合，在样本内、样本外、早期、近期
+<b>四个子集全部显著为正</b>（全样本 Δ+3.73pp，p=0.0006）。
+</div>
+
+<h2>一、你的案例：精确复现，且比你记忆的更极端</h2>
+
+<p>用仓库真实回测引擎跑 <code>sz000158</code> 周K（前复权，800 根），第 6 笔交易即你说的那一单：</p>
+
+<table>
+<thead><tr><th>项</th><th>数值</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>标的 / 周期</td><td>sz000158 常山北明 / 周K</td><td>—</td></tr>
+<tr><td>入场</td><td>2025-04-30，type=0，做多</td><td>缠论 0 类买点</td></tr>
+<tr><td>入场价 entry</td><td>22.533</td><td>—</td></tr>
+<tr><td><b>R</b></td><td><b>5.940</b>（占入场价 26.4%）</td><td>与你说的 5.94 完全一致</td></tr>
+<tr><td>初始止损</td><td>22.533 − 5.940 = <b>16.593</b></td><td>全程未被抬高过</td></tr>
+<tr><td>保本触发线</td><td>entry + 1R = <b>28.473</b></td><td>需 best 严格 &gt; 该值</td></tr>
+<tr><td>持仓期最高极值</td><td><b>28.34</b>（2025-08-29 当周）</td><td>—</td></tr>
+<tr class="worst"><td><b>MFE（最大有利偏移）</b></td><td><b>5.810 点 = 25.8% = 0.98R</b></td>
+    <td>距保本线只差 <b>0.133 点 / 0.6 个百分点</b></td></tr>
+<tr><td>离场</td><td>2026-05-22，close 15.423</td><td>reason = <code>sl</code>（初始止损线）</td></tr>
+<tr class="worst"><td>结果</td><td>R 倍数 −1.20，净收益 <b>−31.6%</b></td><td>与你说的"亏 31%+"一致</td></tr>
+</tbody>
+</table>
+
+<div class="box bad">
+<b>差 0.133 点，结果差 45 个百分点。</b><br>
+若当时多涨 0.14 点触发保本，保护价会被抬到 entry + 0.5R = 25.503；
+后续回落至 25.503 以下即离场 —— 按这笔的实际路径，最终会以约 <b>+13%</b> 离场，
+而不是 −31.6%。一笔单子的两种结局相差 45 个百分点，只因为差了 0.02R。
+</div>
+
+<h2>二、根因：不是"策略不完善"，是阈值用错了尺子</h2>
+
+<h3>2.1 R 里混进了"结构距离"，它不该当锁利的尺子</h3>
+
+<p>现行 <code>R = max(A, atr_sl_multiple × ATR)</code>，其中 A = 入场价到分型极值的距离。
+实测（干净样本 453 笔入场）：</p>
+
+<table>
+<thead><tr><th>R 的主导项</th><th>笔数占比</th><th>平均 A%</th><th>平均 B%</th><th>平均 R%</th><th>平均 R/ATR</th></tr></thead>
+<tbody>
+<tr><td><b>A（结构距离）主导</b></td><td><b>65.8%</b></td><td>16.4%</td><td>10.0%</td><td>16.4%</td><td><b>1.65</b></td></tr>
+<tr><td>B（ATR）主导</td><td>34.2%</td><td>9.1%</td><td>12.0%</td><td>12.0%</td><td>1.00</td></tr>
+<tr><td>全部</td><td>100%</td><td>13.9%</td><td>10.7%</td><td>14.9%</td><td><b>1.43</b></td></tr>
+</tbody>
+</table>
+
+<p>R/ATR 分布：1~1.5 占 66.7%，1.5~2 占 18.3%，2~3 占 13.2%，3~5 占 1.8%。</p>
+
+<div class="box">
+<b>为什么这是错的</b>：<br>
+· <b>止损</b>用 R 是对的 —— 结构位失效就该离场，R 天然是"这笔愿意承担的风险"。<br>
+· <b>锁利</b>用 R 是错的 —— 锁利要衡量的是"行情已经朝有利方向走了多少个<b>波动单位</b>"，
+  而 A 是<b>结构量</b>（由缠论分型位置决定），与波动率无关。当 A 撑大了 R，
+  "浮盈 1R"就变成要涨 1.65 个 ATR（全样本均值 1.43 ATR，对应涨幅 14.7%）。<br>
+· 业界文献里的"1R 保本"，那个 R 通常是 <b>1~2×ATR 定义的初始风险</b>，
+  而这里被结构距离顶到了 1.43~1.65 ATR。
+</div>
+
+<h3>2.2 单一阈值 = 悬崖效应</h3>
+
+<p>保本只有"浮盈 &gt; 1R"这一把尺子，且判定用<b>严格不等</b>（恰好 1R 不算）。
+于是 0.98R 和 1.00R 的待遇天差地别。全样本中卡在这个悬崖边的不是个例：</p>
+
+<div class="kpi">
+  <div><div class="v">56 笔</div><div class="l">MFE 落在 0.8~1.0R<br>"差一点点"未触发保本</div></div>
+  <div><div class="v">14.7%</div><div class="l">这些笔的平均 MFE</div></div>
+  <div><div class="v neg">−22.7%</div><div class="l">这些笔的平均最终收益</div></div>
+  <div><div class="v">12.8%</div><div class="l">占全部止损笔的比例</div></div>
+</div>
+
+<h3>2.3 真正的钱漏在跟踪层（数据反转）</h3>
+
+<p>现行跟踪：<code>win_loss_ratio=2.0</code> ⇒ 浮盈 &gt; <b>2R</b> 才启动跟踪（按平均 R%=14.7%，
+即要涨 <b>29.4%</b>）；跟踪距离 <code>trailing_trigger_r=1.0</code> ⇒ 从最高点回撤 <b>1R</b>（约 14.7%）才走。
+这导致大量赢利单在启动跟踪前就把利润吐回去了。</p>
+
+<p>A/B 的证据很直接（干净样本，平均单笔净收益）：</p>
+<table>
+<thead><tr><th>只改哪一层</th><th>样本内</th><th>样本外</th><th>相对基线的改善</th></tr></thead>
+<tbody>
+<tr><td>基线（不动）</td><td>0.40%</td><td class="worst">−2.93%</td><td>—</td></tr>
+<tr><td><b>只改保本层</b>（10% 触发）</td><td>0.49%</td><td>−1.80%</td><td>样本外 +1.13pp</td></tr>
+<tr><td><b>只改跟踪层</b>（20%/10%）</td><td>1.17%</td><td>−1.63%</td><td>样本外 +1.30pp</td></tr>
+<tr class="best"><td><b>两层一起改</b></td><td><b>1.90%</b></td><td><b>−0.77%</b></td><td><b>样本外 +2.16pp</b></td></tr>
+</tbody>
+</table>
+
+<h2>三、全样本实证：这个问题有多普遍</h2>
+
+<p class="small">干净样本：755 只有效标的、1080 笔已平仓交易、周K 800 根。
+MFE 按持仓期内"根内有利极值"的单调最大值计算（与 <code>Exit.check()</code> 达标判据同口径）。</p>
+
+<h3>3.1 你问的那个桶：浮盈 5~10% 却最终止损</h3>
+
+<table>
+<thead><tr><th>止损笔的 MFE 区间</th><th>笔数</th><th>占止损笔</th><th>占全部交易</th><th>平均 MFE</th><th>平均最终收益</th></tr></thead>
+<tbody>
+<tr><td>未浮盈（≤0）</td><td>36</td><td>8.2%</td><td>3.3%</td><td>—</td><td>—</td></tr>
+<tr><td>0 ~ 5%</td><td>233</td><td>53.2%</td><td>21.6%</td><td>2.0%</td><td>−17.4%</td></tr>
+<tr class="best"><td><b>5 ~ 10%（你问的）</b></td><td><b>116</b></td><td><b>26.5%</b></td><td><b>10.7%</b></td><td>7.1%</td><td>−21.1%</td></tr>
+<tr><td>10 ~ 15%</td><td>45</td><td>10.3%</td><td>4.2%</td><td>12.4%</td><td>−23.7%</td></tr>
+<tr><td>15 ~ 20%</td><td>29</td><td>6.6%</td><td>2.7%</td><td>17.8%</td><td>−37.2%</td></tr>
+<tr><td>20 ~ 30%</td><td>11</td><td>2.5%</td><td>1.0%</td><td>23.9%</td><td>−41.3%</td></tr>
+<tr><td>≥ 30%</td><td>4</td><td>0.9%</td><td>0.4%</td><td>41.3%</td><td>−72.8%</td></tr>
+</tbody>
+</table>
+
+<div class="box warn">
+<b>回答你的问题</b>：严格按"浮盈 5~10%"这个桶，是 <b>116 笔（占全部交易 10.7%）</b>。
+但把口径放宽到"曾经浮盈 ≥5% 却以止损收场"，是 <b>205 笔（占全部交易 19.0%、占止损笔 46.8%）</b>，
+这些笔平均浮盈到过 <b>11.3%</b>，最终平均 <b>−26.0%</b>，<b>平均回吐 37.4 个百分点</b>。
+—— 问题比你估计的更大，而且浮盈越大的桶，最后亏得越狠（因为 R 也大）。
+</div>
+
+<h3>3.2 离场原因分布</h3>
+<table>
+<thead><tr><th>reason</th><th>笔数</th><th>占比</th><th>含义</th></tr></thead>
+<tbody>
+<tr><td><code>sl</code></td><td>438</td><td>40.6%</td><td>保护价从未被抬高过，吃到初始止损</td></tr>
+<tr><td><code>breakeven</code></td><td>359</td><td>33.2%</td><td>进过保本层</td></tr>
+<tr><td><code>trailing</code></td><td>283</td><td>26.2%</td><td>进过跟踪层</td></tr>
+</tbody>
+</table>
+
+<h2>四、你的"10% 触发保本"：对，但单独用不够</h2>
+
+<h3>4.1 单笔效果（常山北明那一单）</h3>
+<table>
+<thead><tr><th>方案</th><th>离场日</th><th>离场价</th><th>净收益</th><th>离场原因</th></tr></thead>
+<tbody>
+<tr class="worst"><td>现状（1R → +0.5R）</td><td>2026-05-22</td><td>15.423</td><td><b>−31.61%</b></td><td>sl</td></tr>
+<tr><td>0.5R → 保本</td><td>2025-05-30</td><td>22.033</td><td>−2.29%</td><td>breakeven</td></tr>
+<tr><td><b>10% 或 1R → 保本（你的方案）</b></td><td>2025-05-30</td><td>22.033</td><td><b>−2.29%</b></td><td>breakeven</td></tr>
+<tr><td>10% → 保本 +2% 缓冲</td><td>2025-05-23</td><td>22.623</td><td>+0.33%</td><td>breakeven</td></tr>
+<tr><td>0.75R → +0.25R 阶梯</td><td>2025-09-05</td><td>23.873</td><td class="pos">+5.87%</td><td>breakeven</td></tr>
+</tbody>
+</table>
+<p class="small">注：你的方案把这一单从 −31.6% 救到 −2.3%（挽回 29.3 个百分点），
+但它也在 2025-05-30 就被震出了，错过了 8 月涨到 28.34（+25.8%）的行情 ——
+这正是"保本太早"的代价，也是为什么<b>必须配合跟踪层改造</b>才能真正吃到那段。</p>
+
+<h3>4.2 全样本效果（干净样本，755 只）</h3>
+<table>
+<thead><tr><th>方案</th><th>样本内</th><th>样本外</th><th>早期(≤2018)</th><th>近期(>2018)</th><th>样本外胜率</th><th>样本外盈亏比</th><th>样本外止损占比</th></tr></thead>
+<tbody>
+<tr><td>基线（现状）</td><td>0.40%</td><td class="worst">−2.93%</td><td>−1.36%</td><td>−1.10%</td><td>49.1%</td><td>0.70</td><td>43.7%</td></tr>
+<tr><td>① 保本 10%（你的方案）</td><td>0.49%</td><td>−1.80%</td><td>−0.13%</td><td>−0.91%</td><td>29.0%</td><td>0.80</td><td>36.2%</td></tr>
+<tr><td>② 保本 15%</td><td>0.65%</td><td>−2.20%</td><td>−0.08%</td><td>−1.12%</td><td>31.8%</td><td>0.79</td><td>45.9%</td></tr>
+<tr><td>③ 仅改跟踪 20%/回撤10%</td><td>1.17%</td><td>−1.63%</td><td>−0.12%</td><td>−0.21%</td><td>52.9%</td><td>0.82</td><td>42.2%</td></tr>
+<tr><td>④ 跟踪 + 保本 15%</td><td>1.86%</td><td>−1.20%</td><td>0.97%</td><td>0.03%</td><td>43.8%</td><td>0.87</td><td>45.7%</td></tr>
+<tr class="best"><td><b>⑤ 跟踪 + 保本 10%　← 推荐</b></td><td><b>1.90%</b></td><td><b>−0.77%</b></td><td><b>1.41%</b></td><td><b>0.13%</b></td><td>39.7%</td><td><b>0.90</b></td><td>35.9%</td></tr>
+<tr><td>⑥ 跟踪 + 负落点阶梯</td><td>1.59%</td><td>−1.26%</td><td>0.87%</td><td>−0.19%</td><td>40.9%</td><td>0.86</td><td><b>27.5%</b></td></tr>
+<tr><td>⑦ 跟踪 + 时间兜底 12根</td><td>1.82%</td><td>−0.91%</td><td>0.29%</td><td>0.64%</td><td>51.9%</td><td>0.88</td><td>32.8%</td></tr>
+<tr><td>⑧ 跟踪 15%/回撤10%</td><td>1.86%</td><td>−0.74%</td><td>0.68%</td><td>0.56%</td><td><b>54.7%</b></td><td><b>0.91</b></td><td>38.8%</td></tr>
+</tbody>
+</table>
+
+<h3>4.3 统计显著性（按标的配对，消除"这只票好不好做"的共同因子）</h3>
+<table>
+<thead><tr><th>方案 vs 基线</th><th>全样本 Δ总净收益</th><th>p</th><th>样本外 Δ</th><th>p</th><th>样本内 Δ</th><th>p</th></tr></thead>
+<tbody>
+<tr><td>① 保本 10%（你的方案）</td><td>+1.32pp</td><td>0.194</td><td>+2.40pp</td><td>0.084</td><td>+0.27pp</td><td class="worst">0.856</td></tr>
+<tr><td>③ 仅改跟踪 20%/10%</td><td>+1.96pp</td><td>0.018</td><td>+2.24pp</td><td>0.029</td><td>+1.69pp</td><td>0.194</td></tr>
+<tr class="best"><td><b>⑤ 跟踪 + 保本 10%</b></td><td><b>+3.73pp</b></td><td><b>0.0006</b></td><td><b>+4.06pp</b></td><td><b>0.0036</b></td><td>+3.41pp</td><td><b>0.042</b></td></tr>
+<tr><td>⑦ 跟踪 + 时间兜底 12根</td><td>+3.62pp</td><td>0.0003</td><td>+4.05pp</td><td>0.0019</td><td>+3.20pp</td><td>0.031</td></tr>
+<tr class="best"><td>⑧ 跟踪 15%/回撤10%</td><td>+3.64pp</td><td><b>0.0001</b></td><td>+4.06pp</td><td><b>0.0008</b></td><td>+3.22pp</td><td>0.028</td></tr>
+</tbody>
+</table>
+
+<div class="box warn">
+<b>怎么读这张表</b>：<br>
+· 你的方案①<b>单独用</b>：方向对（三个子集都是正的），但样本内 p=0.86、
+  样本外 p=0.084 —— <b>统计上不显著</b>，可以理解为"改善有，但噪声里捞不出来"。<br>
+· 加上跟踪改造后（⑤⑧）：<b>全样本 / 样本外 / 样本内三个子集全部 p&lt;0.05</b>，
+  这才是能写进代码的结论。<br>
+· <b>10% 优于 15%</b>（干净样本上 ⑤ &gt; ④），所以你选 10% 是对的，不必调到 15%。
+</div>
+
+<h2>五、业界标准做法对照</h2>
+
+<table>
+<thead><tr><th>环节</th><th>业界常见做法</th><th>chan.py 现状</th><th>差距</th></tr></thead>
+<tbody>
+<tr><td>初始止损</td><td>结构位（支撑/阻力外）+ 至少 1×ATR 校验</td>
+    <td>R = max(A, 1×ATR)，止损 = entry − R</td><td class="pos">一致 ✓</td></tr>
+<tr><td>保本触发</td><td>浮盈 +1R；高波动资产用 1.5~2×ATR；也有用固定 %（8~10%）</td>
+    <td>浮盈 &gt; 1R（= 平均 1.43 ATR / 涨幅 14.7%）</td><td class="neg">偏高，且无 % 备选</td></tr>
+<tr><td>保本落点</td><td>entry + 小缓冲（覆盖成本，避免被回测入场区扫掉）</td>
+    <td>entry + 0.5R（= 平均 +7.4%）</td><td>落点偏激进（等于直接锁 0.5R）</td></tr>
+<tr><td>跟踪启动</td><td>+1.5R ~ +2R，或 ATR-based（Chandelier: HH(22) − 3×ATR）</td>
+    <td>+2R（= 平均涨幅 29.4% 才启动）</td><td class="neg">太晚</td></tr>
+<tr><td>跟踪距离</td><td>1~3×ATR，或按回撤百分比</td>
+    <td>1R（= 平均回撤 14.7%）</td><td class="neg">太宽</td></tr>
+<tr><td>时间止损</td><td>3~5 根无进展即收紧到 0.5R / 离场</td>
+    <td><b>完全没有</b></td><td class="neg">缺失</td></tr>
+<tr><td>分批止盈</td><td>+2R 平一半，剩余移到 +1R（scale out）</td>
+    <td><b>没有（单笔全平）</b></td><td class="neg">缺失，需引擎改造</td></tr>
+</tbody>
+</table>
+
+<p class="small">参考口径：初始止损结构+ATR 校验、+1R 保本、+2R 转 ATR 跟踪、
+3~5 根无进展收紧、Chandelier Exit = HighestHigh(22) − 3×ATR(22)、
+分批止盈 +2R 减半 —— 均为公开交易工程资料的通行写法。</p>
+
+<h2>六、推荐方案（可直接落地）</h2>
+
+<h3>6.1 参数表</h3>
+<table>
+<thead><tr><th>参数（建议新增/调整）</th><th>现状</th><th>建议值</th><th>作用</th></tr></thead>
+<tbody>
+<tr><td><code>breakeven_trigger_r</code></td><td>1.0</td><td>1.0（保留）</td><td>R 口径保本阈值，继续作为一条腿</td></tr>
+<tr class="best"><td><code>breakeven_trigger_pct</code>（新增）</td><td>—（无）</td><td><b>0.10</b></td>
+    <td>浮盈/入场价 &gt; 10% 也触发保本；<b>与 1R 取先到</b></td></tr>
+<tr><td><code>breakeven_buffer_r</code></td><td>0.5</td><td>0.5（保留）</td><td>1R 触发时的落点</td></tr>
+<tr><td><code>breakeven_buffer_pct</code>（新增）</td><td>—</td><td>0.005 ~ 0.02</td>
+    <td>百分比触发时的落点，覆盖成本+小缓冲，避免被回测入场区扫掉</td></tr>
+<tr class="best"><td><code>trail_trigger_pct</code>（新增）</td><td>—（无）</td><td><b>0.15 ~ 0.20</b></td>
+    <td>浮盈/入场价 &gt; 15~20% 启动跟踪（替代/补充 2R）</td></tr>
+<tr class="best"><td><code>trail_dist_pct</code>（新增）</td><td>—</td><td><b>0.10</b></td>
+    <td>跟踪保护价 = best × (1 − 10%)，即从最好极值回撤 10% 离场</td></tr>
+<tr><td><code>win_loss_ratio</code></td><td>2.0</td><td>保留（R 口径腿）</td><td>不要单独下调（实测降到 1.5R 反而变差：5.00% &lt; 6.76%）</td></tr>
+<tr><td><code>trailing_trigger_r</code></td><td>1.0</td><td>保留</td><td>R 口径跟踪距离</td></tr>
+<tr><td><code>time_stop_bars</code>（新增，可选）</td><td>—</td><td>12（周K）</td>
+    <td>持仓满 12 根仍在 sl 层 ⇒ 离场（样本外 Δ+4.05pp, p=0.0019）</td></tr>
+</tbody>
+</table>
+
+<h3>6.2 判据怎么合并（伪代码）</h3>
+<pre># 保本层：两条腿取先到，落点取更靠有利侧
+if fav_profit &gt; breakeven_trigger_r * R:          # R 口径腿
+    cand = entry + breakeven_buffer_r * R
+if fav_pct    &gt; breakeven_trigger_pct:            # 百分比腿（新增）
+    cand = entry * (1 + breakeven_buffer_pct)
+new_stop = max(new_stop, cand)                    # 只朝有利方向移动
+
+# 跟踪层：两条腿取先到，落点取更靠有利侧
+if fav_profit &gt; win_loss_ratio * R:               # R 口径腿（保留）
+    cand = best - trailing_trigger_r * R
+if fav_pct    &gt; trail_trigger_pct:                # 百分比腿（新增）
+    cand = best * (1 - trail_dist_pct)
+new_stop = max(new_stop, cand)</pre>
+
+<div class="box">
+<b>为什么"取先到 / 取更靠有利侧"而不是"二选一"</b>：
+两条腿量的东西不同（R 是风险单位，% 是资金单位），谁先达标就按谁锁，
+可以覆盖"R 被结构距离撑大"（用 % 兜底）和"低价股 R 很小"（用 R 兜底）两种情形。
+实测 A/B 中这就是方案⑤⑧的形态。
+</div>
+
+<h3>6.3 代码改动点（务必三源同步）</h3>
+<ol>
+<li><code>Trading/Config.py::ExitConfig</code> —— 新增上表 4 个字段 + 启动期校验
+    （沿用 <code>_check_exit_param_order</code> 的既有范式：buffer &lt; trigger、负值拒绝）</li>
+<li><code>Trading/Strategy/Exit.py::LayeredExitPolicy.check()</code> ——
+    在 ① L3 达标块内加两条百分比分支；<b>注意保持"先抬价、再判触发"的顺序</b>
+    （现有注释与 <code>test_p61</code> 都钉死了这一点）</li>
+<li><code>Backtest/ExitParams.py::STOCK_EXIT_PARAMS</code> —— 同步同值</li>
+<li><code>App/AppTPSL.py::_STOCK_EXIT_OVERRIDES</code> —— 同步同值</li>
+<li><code>Backtest/Test/test_bt03_exit_params_contract.py</code> ——
+    契约测试补上"股票侧 == 全局默认"的新键</li>
+<li>（可选）时间止损：<b><code>Backtest/Runner.py:424</code> 调
+    <code>pol.check(pos, bar, inst)</code> 时不传 <code>bars_held</code></b>，
+    恒为 0 ⇒ 时间止损在回测侧不会生效，需先补传参</li>
+</ol>
+
+<h2>七、风险、代价与未验证项</h2>
+
+<div class="box warn">
+<b>1. 不能只看"平均净收益"就拍板</b>：所有方案在<b>样本外平均净收益仍为负</b>
+（最优 ⑤ 也只有 −0.77%）。这说明<b>这套缠论信号本身在随机 A 股样本上长期≈零和</b>，
+出场改造是把 −2.93% 拉到 −0.77%，<b>不是把它变成印钞机</b>。
+改造的价值在于"少亏、少回吐"，盈利性要靠信号/选股端解决。<br><br>
+<b>2. 保本越早，胜率越难看</b>：① 的样本外胜率只有 29.0%（基线 49.1%），
+因为保本离场扣掉双边成本后算"亏损"。这是口径问题，不是变差了 ——
+同期平均亏损从 −19.13% 收窄到 −12.45%，盈亏比 0.70 → 0.80。<br><br>
+<b>3. 本轮只测了周K</b>。日K / 30m 未跑，参数（尤其时间兜底的 12 根）需按周期重标。<br><br>
+<b>4. 分批止盈（scale out）未实现</b>。这是业界标准做法且大概率能再吃一档收益，
+但当前三态净敞口模型是"单笔全平"，需要动引擎，建议单独开一轮。<br><br>
+<b>5. 未建模涨跌停/停牌</b>：保护价可能不可成交（项目自带说明），周K 上影响小于日K。
+</div>
+
+<h2>八、数据质量坑（这轮踩到，务必记住）</h2>
+
+<div class="box bad">
+腾讯前复权接口对<b>长期高分红股会过度复权出负价</b>（实测泸州老窖 −19.02、
+山西汾酒 −15.47，另有五粮液、紫金矿业、海螺水泥等）。
+本轮第一版 A/B 混进了 19 只这样的标的，基线平均净收益被抬到 3.28%；
+加质量门剔除 45 只不合格标的后，同一基线降到 <b>0.40%（样本内）/ −2.93%（样本外）</b>
+—— <b>结论方向没变，但幅度差了约 3 倍</b>。<br><br>
+⇒ 批量取数必须加质量门：任一 OHLC ≤ 0 即<b>整只剔除</b>（不要截断，
+截断会改变缠论历史长度，等于换了一个标的）。<br>
+⇒ 另：<code>web.ifzq.gtimg.cn</code> 高并发会返回 501 限流页，
+<code>ifzq.gtimg.cn</code> 更稳，并发建议 ≤5。
+</div>
+
+<h2>九、复现方式</h2>
+<p class="small">实验脚本均在 <code>WorkBuddy/2026-10-07-06-41-06/exp/</code>，
+评审用代码在 <code>wt_latest/</code>（detached @ d5faa84，未动你的脏工作区）。</p>
+<pre>python exp/verify_equiv.py                      # ① 等价性钉死（改 check 后必跑，60 只逐笔一致）
+python exp/case_trace.py                        # ② 常山北明那笔逐根解剖
+python exp/batch_stats.py --freq w --limit 800  # ③ 问题规模统计
+python exp/diag_r.py 300 w                      # ④ R 构成诊断
+python exp/ab_final.py  --freq w --in 400 --oos 400   # ⑤ A/B（含样本内/外/时间切分）
+python exp/signif.py                            # ⑥ 按标的配对的显著性检验
+python exp/case_plans.py                        # ⑦ 各方案对该单的效果</pre>
+<p class="small"><code>exp_policy.py</code> 用 monkey-patch 把 <code>ExpExitPolicy</code>
+换进 <code>Runner</code>，走真实状态机（含"出场变早 ⇒ 持仓期拒收信号变化"的二阶效应），
+不是离线近似。等价性由 ① 钉死。</p>
+
+</div>
+</body>
+</html>
