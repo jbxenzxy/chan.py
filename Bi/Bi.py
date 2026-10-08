@@ -192,7 +192,7 @@ class CBi:
 
     def cal_macd_metric(self, macd_algo):
         # ===== MACD 面积族：均基于 MACD 柱(|macd|)的面积累加，区别在覆盖区间与反向柱处理 =====
-        if macd_algo == MACD_ALGO.AREA_FULL:      # 2026-09-25 由 FULL_AREA 改名：整笔同向柱面积之和（忽略反向柱）
+        if macd_algo == MACD_ALGO.AREA_FULL:        # 2026-09-25 由 FULL_AREA 改名：整笔同向柱面积之和（忽略反向柱）
             return self.Cal_MACD_area_full()
         elif macd_algo == MACD_ALGO.AREA_FULL_EXT:  # 2026-09-26 语义变更：first-to-peak（第一根同向柱→最长峰值同向柱区间面积；见 Cal_MACD_area_full_ext）
             return self.Cal_MACD_area_full_ext()
