@@ -327,6 +327,13 @@ COMPONENTS = [
      [sys.executable, os.path.join("Test", "test_docs_anchor_refs.py")]),
     ("aol_ledger_display",
      [sys.executable, os.path.join("Test", "test_aol_ledger_display.py")]),
+    # 报单成交后自动打开账本（2026-10-08 需求 ⑴⑵）：开仓成交 open_filled /
+    # 离场成交 close_filled → 幂等打开账本面板，并在面板顶挂一行「刚刚：…」
+    # 一次性提示（平仓后面板只剩"空仓"，光看持仓说不出发生了什么）。
+    # 护栏要点：只认成交 code（阶段跃迁 / 账单同步不触发）、首次拉取不回放、
+    # 面板已开时不被 toggle 关掉、提示行随下次账本刷新失效。5 条变异全拦下。
+    ("aol_auto_open_on_fill",
+     [sys.executable, os.path.join("Test", "test_aol_auto_open_on_fill.py")]),
     # 0 类买卖点「第5/7笔」㈠ 闪电走势判据（2026-10-04 放宽）：由「相邻回调笔
     # 逐级收窄」改为「各回调笔只与笔1比较」。该分支在 8 个快照回归样本（合成 K 线）
     # 里**零触及** ⇒ 快照全绿证不了这次改动，故补两条护栏：

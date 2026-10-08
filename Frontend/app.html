@@ -73,6 +73,10 @@
                  注意：这是**交易引擎账本**，不是柜台真值 —— 柜台以快期3 为准。 -->
             <div class="auto-order-ledger-panel" id="auto-order-ledger-panel"
                  style="display:none" onclick="event.stopPropagation()">
+                <!-- 事件提示行（2026-10-08）：报单成交自动打开账本时，把"刚才
+                     发生了什么"贴在这里；下次账本数据刷新即清。默认不显示、
+                     不占位，与"成交节已删"的面板形态不冲突。 -->
+                <div class="aol-flash" id="aol-flash" style="display:none"></div>
                 <div class="aol-sec">
                     <div class="aol-title">持仓</div>
                     <div class="aol-body" id="aol-positions">（暂无账本数据）</div>
@@ -363,6 +367,6 @@
             </div>
         </div>
     </aside>
-    <script src="app.js?v=71"></script>
+    <script src="app.js?v=72"></script>
 
 </body></html>

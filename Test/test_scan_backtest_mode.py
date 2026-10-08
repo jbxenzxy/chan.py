@@ -559,8 +559,8 @@ def part6():
           bool(re.search(r'value="backtest"[^>]*onchange="updateScanRecentDisabled\(\)"',
                          html)),
           "缺 onchange")
-    check("⑥ 静态资源版本号已 bump（v=71，防浏览器吃旧缓存；10-07 连涨披露行措辞轮同步）",
-          'app.js?v=71' in html, "仍指向旧版本号")
+    check("⑥ 静态资源版本号已 bump（v=72，防浏览器吃旧缓存；10-08 报单成交自动打开账本轮同步）",
+          'app.js?v=72' in html, "仍指向旧版本号")
 
     appjs = io.open(APPJS, encoding="utf-8").read()
     check("⑥ localStorage 白名单收 backtest（否则重开弹窗回落到标注模式）",

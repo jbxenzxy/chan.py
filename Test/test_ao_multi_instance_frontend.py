@@ -274,13 +274,20 @@ def test_toasts(src, failures):
 'use strict';
 const SRC = %s;
 const state = { seen: {} };
+// handleAutoOrderToasts 的两个外部依赖（2026-10-08 起新增）：
+//   AOL_AUTOPEN_CODES —— 命中成交 code 的清单；openAutoOrderLedger —— 打开账本。
+// 本组件只钉「轻提示水位 per 实例」，故前者传空集合（永不命中）、后者空实现：
+// 自动打开的真实判据由 Test/test_aol_auto_open_on_fill.py 独占覆盖，
+// 这里不再复制一份命中集合（两处各写一遍必然漂移）。
 function run(toasts) {
   const shown = [];
   const fn = new Function(
     'toasts', 'autoOrderSeenToastTs', 'showToast', 'aoSysNotify',
+    'AOL_AUTOPEN_CODES', 'openAutoOrderLedger',
     SRC + '\\nreturn handleAutoOrderToasts;'
   )(toasts, state.seen,
-    function (m) { shown.push(m); }, function () {});
+    function (m) { shown.push(m); }, function () {},
+    {}, function () {});
   fn(toasts);
   return shown;
 }

@@ -102,7 +102,9 @@ check("[1i] 拒绝授权时给页内提示（后台将收不到提醒）",
 print("\n[2] 三通道接线")
 check("[2a] warn 告警 → 系统通知", "aoSysNotify('自动下单提醒', warn[i].msg, 'ao-warn');" in JS, True)
 check("[2b] severe 告警 → 系统通知", "aoSysNotify('自动下单：需人工介入', severeMsg, 'ao-alert');" in JS, True)
-check("[2c] 成交 toast → 系统通知", "aoSysNotify('自动下单', fresh[i], 'ao-toast');" in JS, True)
+# fresh 自 2026-10-08 起是 {msg, code} 对象数组（要带 code 判是否成交类）⇒ 取 .msg
+check("[2c] 成交 toast → 系统通知",
+      "aoSysNotify('自动下单', fresh[i].msg, 'ao-toast');" in JS, True)
 check("[2d] 权限请求挂在开关手势（await 之前）",
       "if (on) requestAoNotifyPermission();" in JS, True)
 check("[2e] severe 弹窗与通知共用同一份正文（severeMsg）",

@@ -9490,6 +9490,46 @@
         // 投影保留不动，只是前端不再消费）；同日二次拍板：持仓行加序号
         // （1. 空 2 手 … / 2. 多 2 手 …），按后端 positions 原序编号。
         let autoOrderLedgerData = null;
+        // 点面板与按钮之外任意处即收起 —— 全局只挂一次监听。
+        // 自动打开也走它（2026-10-08）：否则自动弹出的账本点哪儿都关不掉。
+        function bindLedgerOutsideClose() {
+            if (bindLedgerOutsideClose._bound) return;
+            bindLedgerOutsideClose._bound = true;
+            document.addEventListener('click', function (e) {
+                const p = document.getElementById('auto-order-ledger-panel');
+                const b = document.getElementById('auto-order-ledger-btn');
+                if (p && b && !p.contains(e.target) && !b.contains(e.target)) {
+                    p.style.display = 'none';
+                }
+            });
+        }
+
+        // 事件提示行（2026-10-08）：自动打开账本时把"刚才发生了什么"贴在面板顶。
+        //   平仓后面板只剩"空仓"（成交节已于 2026-09-24 拍板删除），光看持仓
+        //   说不出发生了什么 —— 这一行补的就是这段信息。账本数据每刷新一次
+        //   即清（renderAutoOrderLedger 开头清）：一次性、不常驻，也不进成交
+        //   列表（与"成交节已删"的拍板不冲突）。
+        function setAolFlash(msg) {
+            const el = document.getElementById('aol-flash');
+            if (!el) return;
+            if (!msg) { el.style.display = 'none'; el.textContent = ''; return; }
+            el.textContent = '刚刚：' + msg;
+            el.style.display = 'block';
+        }
+
+        // 报单成交后自动打开账本（2026-10-08 需求 ⑴⑵）：与手工点击的**切换**
+        //   语义不同 —— 这里是幂等"确保打开"，面板已开着时再触发仍是开着，
+        //   绝不能被 toggle 关掉（连续开平仓会闪成筛子）。
+        function openAutoOrderLedger(flashMsg) {
+            const panel = document.getElementById('auto-order-ledger-panel');
+            if (!panel) return;
+            panel.style.display = 'block';
+            bindLedgerOutsideClose();
+            renderAutoOrderLedger(autoOrderLedgerData);
+            refreshLedgerPanel();   // 打开即拉一次聚合账本（§3.10.1）
+            setAolFlash(flashMsg || '');   // 必须在渲染之后：渲染会清掉提示行
+        }
+
         function toggleAutoOrderLedger(ev) {
             if (ev) ev.stopPropagation();
             const panel = document.getElementById('auto-order-ledger-panel');
@@ -9499,18 +9539,9 @@
             const willShow = (panel.style.display === 'none');
             panel.style.display = willShow ? 'block' : 'none';
             if (willShow) {
+                bindLedgerOutsideClose();
                 renderAutoOrderLedger(autoOrderLedgerData);
                 refreshLedgerPanel();   // 打开即拉一次聚合账本（§3.10.1）
-            }
-            if (!toggleAutoOrderLedger._outside) {
-                toggleAutoOrderLedger._outside = true;
-                document.addEventListener('click', function (e) {
-                    const p = document.getElementById('auto-order-ledger-panel');
-                    const b = document.getElementById('auto-order-ledger-btn');
-                    if (p && b && !p.contains(e.target) && !b.contains(e.target)) {
-                        p.style.display = 'none';
-                    }
-                });
             }
         }
         function fmtAolPx(v) {
@@ -9538,6 +9569,7 @@
             autoOrderLedgerData = led;
             const panel = document.getElementById('auto-order-ledger-panel');
             if (!panel || panel.style.display === 'none') return;   // 关着不渲染
+            setAolFlash('');   // 数据每刷新一次，事件提示行即失效（一次性）
             const posEl = document.getElementById('aol-positions');
             if (!posEl) return;
             const groups = (led && Array.isArray(led.groups)) ? led.groups : [];
@@ -10247,6 +10279,13 @@
         //   —— 5 秒自动消失、不需要确认、不合并（两次开仓是两个独立事件都要弹）。
         //   首次拉取只定水位不回放历史：页面晚开不该把半小时前的开仓弹一遍。
         // ══════════════════════════════════════════════════════════════
+        // 自动打开账本只认**成交**类 code（2026-10-08）：开仓成交 open_filled
+        // （买卖点驱动的建仓，含翻仓 / 拆锁入场）与离场成交 close_filled
+        // （平仓 / 锁仓离场，含移动止盈、保本止损、初始止损）。阶段跃迁
+        // （run_breakeven / run_trailing）与账单同步（reconcile_sync）都不是
+        // 报单结果，不打扰看图。
+        const AOL_AUTOPEN_CODES = { open_filled: 1, close_filled: 1 };
+
         function handleAutoOrderToasts(toasts) {
             // toasts = 合并后的全部运行中实例轻提示（已带实例前缀 _instLabel）。
             // 水位同样按实例键控（§3.10.4）：单值水位下 A 实例的高 ts 会把
@@ -10263,21 +10302,29 @@
                 const prev = autoOrderSeenToastTs[ik] || 0;
                 // 首次拉到该实例的队列只定水位、不回放历史（页面晚开不该把
                 // 半小时前的开仓弹一遍）—— 与原 prev>0 门同语义，只是逐实例。
-                if (prev > 0 && ts > prev) fresh.push(String(t.msg || ''));
+                if (prev > 0 && ts > prev) {
+                    fresh.push({ msg: String(t.msg || ''),
+                                 code: String(t.code || '') });
+                }
             }
             Object.keys(edges).forEach(function (ik) {
                 if (edges[ik] > (autoOrderSeenToastTs[ik] || 0)) {
                     autoOrderSeenToastTs[ik] = edges[ik];
                 }
             });
+            // 同一轮多条成交取**最后一条**（最新）作为账本提示行文案
+            let autoOpenMsg = '';
             for (let i = 0; i < fresh.length; i++) {
-                if (fresh[i]) {
-                    showToast('自动下单：' + fresh[i]);
-                    // toast 5 秒即逝，页面在后台时用户根本看不见 —— 同步补一条
-                    // 系统通知（同 tag 覆盖，多条合并成 Action Center 里一条）
-                    aoSysNotify('自动下单', fresh[i], 'ao-toast');
+                if (!fresh[i].msg) continue;
+                showToast('自动下单：' + fresh[i].msg);
+                // toast 5 秒即逝，页面在后台时用户根本看不见 —— 同步补一条
+                // 系统通知（同 tag 覆盖，多条合并成 Action Center 里一条）
+                aoSysNotify('自动下单', fresh[i].msg, 'ao-toast');
+                if (AOL_AUTOPEN_CODES[fresh[i].code]) {
+                    autoOpenMsg = fresh[i].msg;
                 }
             }
+            if (autoOpenMsg) openAutoOrderLedger(autoOpenMsg);
         }
 
         // ══════════════════════════════════════════════════════════════
