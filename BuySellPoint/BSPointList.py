@@ -1062,7 +1062,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           threshold=round(config.divergence_rate, 2))
             return
 
-        # ㈣ 离开笔4和进入笔，MACD面积背驰
+        # ㈣ 离开笔4和进入笔，要求离开笔MACD面积 < 进入笔MACD面积
         in_metric = entry_bi.cal_macd_metric(config.macd_algo, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA_HALF 有意义
         out_metric = stroke_n.cal_macd_metric(config.macd_algo, is_reverse=True)
         divergence_rate = out_metric / (in_metric + 1e-7)
@@ -1173,7 +1173,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           threshold=round(config.divergence_rate, 2))
             return False
 
-        # ㈤ 离开笔和进入笔，MACD面积背驰
+        # ㈤ 离开笔和进入笔，要求离开笔MACD面积 < 进入笔MACD面积
         in_metric = entry_bi.cal_macd_metric(config.macd_algo, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA_HALF 有意义
         out_metric = stroke_n.cal_macd_metric(config.macd_algo, is_reverse=True)
         divergence_rate = out_metric / (in_metric + 1e-7)
@@ -1348,7 +1348,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           threshold=round(config.divergence_rate, 2))
             return
 
-        # ㈣ 离开笔6/8和进入笔，MACD面积背驰
+        # ㈣ 离开笔6/8和进入笔，要求离开笔MACD面积 < 进入笔MACD面积
         in_metric = entry_bi.cal_macd_metric(config.macd_algo, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA_HALF 有意义
         out_metric = stroke_n.cal_macd_metric(config.macd_algo, is_reverse=True)
         divergence_rate = out_metric / (in_metric + 1e-7)
