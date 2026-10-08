@@ -226,7 +226,16 @@ def main():
     # 数字抄一份到实验代码里"。所以这里反过来钉：Exp 下凡是引了 App / Frontend / Test
     # 的文件，都必须在 `EXP_APP_ALLOW` 里点名登记 ⇒ 新增实验脚本再引一处就红，
     # 逼着先看一眼它有没有顺手抄第二个 SSOT（见 tdx_source.py 的模块注释）。
-    EXP_APP_ALLOW = {"Exp/common/tdx_source.py"}
+    #
+    # 登记理由（每条一句话，防"顺手加白"）：
+    #   · tdx_source.py —— 取 TDX 目录 / 回看上限一律现读 App 层 SSOT（不做兜底副本）。
+    #   · data_parity.py —— 同上：原先自带 `os.environ.get("TDX_INSTALL_DIR", <字面量>)`
+    #     兜底，等于第二份 SSOT（改目录只改 App 层它会静默漂移）；改为现读 AppConfig
+    #     的 tdx_install_dir 后成为第二处合法上层依赖（2026-10-08 TDX 目录单一源改造）。
+    EXP_APP_ALLOW = {
+        "Exp/common/tdx_source.py",
+        "Exp/common/data_parity.py",
+    }
     exp_hits = []
     exp_dir = os.path.join(BACKTEST_DIR, "Exp")
     if os.path.isdir(exp_dir):

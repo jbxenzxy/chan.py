@@ -133,6 +133,11 @@ COMPONENTS = [
      [sys.executable, os.path.join("Test", "test_newline_hygiene.py")]),
     ("dotenv_secrets_guard",
      [sys.executable, os.path.join("Test", "test_dotenv_secrets_guard.py")]),
+    # TDX 安装目录「单一事实源」护栏（零网络、秒级）：路径字面量只许出现在
+    #   App/AppConfig.py 的 _default_tdx_install_dir()，消费方一律现读 SSOT，
+    #   注释/文档不许复制路径值 —— 防"改目录只改一处"被悄悄破坏成第二个源。
+    ("tdx_dir_ssot_guard",
+     [sys.executable, os.path.join("Test", "test_tdx_dir_ssot_guard.py")]),
     ("snapshot_regression",
      [sys.executable, os.path.join("Test", "snapshot_runner.py")]),
     ("trigger_step_replay",

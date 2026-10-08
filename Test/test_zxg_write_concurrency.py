@@ -27,9 +27,9 @@
 
 ## 隔离说明
 
-`app_config.tdx_install_dir` 默认指向真实通达信目录（用户机器上的
-`C:\\new_tdx_hd_test`），本用例**绝不触碰**——用只读代理把 zxg 路径
-重定向到临时目录，其余配置项一律透传真配置。
+`app_config.tdx_install_dir` 默认指向真实通达信目录（用户机器上的安装目录，
+取值见 `App/AppConfig.py` 的 `_default_tdx_install_dir()`），本用例**绝不触碰**
+——用只读代理把 zxg 路径重定向到临时目录，其余配置项一律透传真配置。
 
 运行：把本文件放在仓库 Test/ 下，在仓库根目录执行
     python Test/test_zxg_write_concurrency.py

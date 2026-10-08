@@ -222,7 +222,7 @@
       <ol style="margin:0.4rem 0 0 1.2rem; color:var(--muted);">
         <li><strong>进程 → 线程 → 协程到底谁属于谁</strong>：SSE 协程不是线程，它跑在 API 进程的「事件循环线程」上；线程池的线程（至多 40，按需创建后常驻）属于 API 进程；worker 是独立进程、与 API 进程平行。见 <a href="#sec-thread-co" style="color:var(--accent)">2.3</a>。</li>
         <li><strong>为什么用「事件循环 + 协程」，而不是每连接一个线程、也不是两个线程各跑一堆协程</strong>：关键在「协程只在 <code>await</code> 时让出线程」，IO 型任务适用协程，CPU 型任务（缠论分析无 <code>await</code>）只能靠真线程 / 真进程并行。见 <a href="#sec-io-cpu" style="color:var(--accent)">2.4</a>。</li>
-        <li><strong>扫描结果（SQLite）的删除时机与文件位置</strong>：SQLite 结果不在 future 收割时删除，而是保留约 7 天、下次提交扫描时惰性清理；默认落在 <code>C:\new_tdx_hd_test\vipdoc\scan_tasks.db</code>（WAL 模式）。见 <a href="#sec-sqlite" style="color:var(--accent)">3.6</a>。</li>
+        <li><strong>扫描结果（SQLite）的删除时机与文件位置</strong>：SQLite 结果不在 future 收割时删除，而是保留约 7 天、下次提交扫描时惰性清理；默认落在 <code>&lt;vipdoc_dir&gt;\scan_tasks.db</code>（WAL 模式）。见 <a href="#sec-sqlite" style="color:var(--accent)">3.6</a>。</li>
         <li><strong>图 1 修正与 API 层启动分流</strong>：图 1 用方框套方框标出「事件循环线程（1 个线程）内嵌 SSE 协程」，并新增「API 层启动与分流」说明（先建进程 → 再建事件循环线程 → 按请求类型分三条路）。</li>
       </ol>
       <p style="margin-top:0.5rem;"><strong>v7.0 修正说明：</strong>v4.0 的上述第 1、2、4 条基于「SSE 用协程」的旧架构。v7.0 起 SSE 实时流<strong>不再使用协程</strong>——改为每连接 1 条常驻线程（同步生成器 + <code>StreamingResponse</code> 在线程池中迭代）。「SSE 协程不是线程」的说法已不适用：现在 SSE 本身就是线程池里的一条常驻线程；「为什么用事件循环 + 协程」的论证也已被 2.4 节「为什么不用协程」取代。图 1 已同步更新为「SSE 常驻线程 ×N（线程池内）」，不再有「事件循环线程内嵌 SSE 协程」的画法。v4.0 的分析保留在此仅作历史演进记录。</p>
@@ -1066,7 +1066,7 @@
 
         <div class="callout">
           <div class="t">SQLite 文件在哪、叫什么名？</div>
-          <p>默认路径是 <code>C:\new_tdx_hd_test\vipdoc\scan_tasks.db</code>。由 <code>AppScanStore._default_db_path()</code> 算出：<code>vipdoc_dir</code>（=<code>tdx_install_dir\vipdoc</code>，<code>tdx_install_dir</code> 默认 <code>C:\new_tdx_hd_test</code>，可在 <code>.env</code> 改）下的 <code>scan_tasks.db</code>。两条可改变它的途径：</p>
+          <p>默认路径是 <code>&lt;vipdoc_dir&gt;\scan_tasks.db</code>。由 <code>AppScanStore._default_db_path()</code> 算出：<code>vipdoc_dir</code>（=<code>tdx_install_dir\vipdoc</code>，<code>tdx_install_dir</code> 默认值由 <code>AppConfig._default_tdx_install_dir()</code> 单点定义，可在 <code>.env</code> 改）下的 <code>scan_tasks.db</code>。两条可改变它的途径：</p>
           <div class="steps">
             <div class="step"><div class="num">1</div><div class="body"><div class="t">环境变量优先</div><p><code>SCAN_TASK_DB</code> 若被设置，则使用它指定的路径（测试隔离 / 多实例用）。</p></div></div>
             <div class="step"><div class="num">2</div><div class="body"><div class="t">否则跟随安装目录</div><p><code>.env</code> 里改 <code>tdx_install_dir</code>，<code>vipdoc_dir</code> 随之变化，DB 落在新的 <code>vipdoc</code> 下。</p></div></div>

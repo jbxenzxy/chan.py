@@ -58,7 +58,13 @@ from Common.CEnum import AUTYPE                                        # noqa: E
 from Backtest.Runner import default_chan_config, kl_type_of            # noqa: E402
 from tdx_source import ext_records                                     # noqa: E402
 
-TDX_INSTALL = os.environ.get("TDX_INSTALL_DIR", r"D:\new_tdx_hd_test")
+# ── 通达信安装目录：一律现读 App 层 SSOT ──────────────────────────────
+# ⚠ **不许**在这里再抄一份默认路径：那等于建第二个 SSOT，App 层改一次这里就
+#   静默漂移（同 tdx_source.py 的约定）。故这里不做兜底，直接取 AppConfig 的
+#   tdx_install_dir（其默认值由 _default_tdx_install_dir() 单点定义）。
+from App.AppConfig import app_config as _ac                       # noqa: E402
+
+TDX_INSTALL = os.environ.get("TDX_INSTALL_DIR") or _ac.tdx_install_dir
 set_tdx_config(vipdoc_dir=os.path.join(TDX_INSTALL, "vipdoc"),
                forward_adjust_enabled=True)
 

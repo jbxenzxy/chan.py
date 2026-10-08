@@ -23,7 +23,9 @@
 
 用法
 ----
-  python Test/gen_fixtures_real.py --vipdoc D:\\new_tdx_hd_test\\vipdoc
+  python Test/gen_fixtures_real.py --vipdoc <本机通达信目录>\\vipdoc
+      （路径不写死：取本机 AppConfig.tdx_install_dir 或按环境变量
+        TDX_INSTALL_DIR 指定，默认值见 App/AppConfig.py _default_tdx_install_dir()）
       生成全部样本。已存在且字节一致的**不动**；已存在但字节不同的**默认拒绝
       覆盖**并报出差异（防止无意重冻让下游基线全红），要覆盖加 `--force`。
 

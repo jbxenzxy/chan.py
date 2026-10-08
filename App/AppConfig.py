@@ -19,8 +19,9 @@ _AppConfigBase（派生路径 + 方法），字段默认值收于 _FIELD_DEFAULT
 凭据安全：TQ 账号/密码仅进程启动时读取、内存使用，不落缓存、不写日志、
 不随任务序列化；对外展示必须走 as_dict(redact=True)。
 
-跨平台：TDX_INSTALL_DIR 默认值平台适应 —— Windows 用 C:\\new_tdx_hd_test，
-其它平台用 ~/tdx；显式 .env / 环境变量仍可覆盖默认值。
+跨平台：TDX_INSTALL_DIR 默认值平台适应 —— Windows 与其它平台各取一值，
+具体取值见 _default_tdx_install_dir()（单一事实源，本注释不复制路径以免漂移）；
+显式 .env / 环境变量仍可覆盖默认值。
 """
 import json
 import os
@@ -62,14 +63,14 @@ def _parse_env_file(path):
 # 跨平台默认安装目录
 # ═══════════════════════════════════════════════════════════════════
 def _default_tdx_install_dir() -> str:
-    """平台适应的 TDX_INSTALL_DIR 默认值。
+    """平台适应的 TDX_INSTALL_DIR 默认值（**本函数是默认路径的唯一事实源**）。
 
-    Windows：默认 C:\\new_tdx_hd_test；
-    其它平台：~/tdx（避免 Windows 路径在 *nix 上必然不可用）。
+    Windows 与其它平台各取一值，路径写字面量只在本函数内出现；
+    其它模块 / 注释 / 文档**不得**再抄一份路径副本（副本会随目录迁移静默漂移）。
     显式 .env / 环境变量仍可覆盖该默认值。
     """
     if os.name == "nt":
-        return r"D:\new_tdx_hd_test"
+        return r"D:\new_tdx64"
     return os.path.join(os.path.expanduser("~"), "tdx")
 
 
