@@ -191,13 +191,13 @@ class CBi:
         self.clean_cache()
 
     def cal_macd_metric(self, macd_algo, is_reverse):
-        # ===== MACD 面积族：三者均基于 MACD 柱(|macd|)的面积累加，区别在覆盖区间与反向柱处理 =====
-        if macd_algo == MACD_ALGO.AREA_HALF:        # 2026-09-25 由 AREA 改名：仅取笔首/尾连续同向柱的"半段"面积
-            return self.Cal_MACD_area_half(is_reverse)
-        elif macd_algo == MACD_ALGO.AREA_FULL:      # 2026-09-25 由 FULL_AREA 改名：整笔同向柱面积之和（忽略反向柱）
+        # ===== MACD 面积族：三者均基于 MACD 柱(|BAR|)的面积累加，区别在覆盖区间与反向柱处理 =====
+        if macd_algo == MACD_ALGO.AREA_FULL:        # 2026-09-25 由 FULL_AREA 改名：整笔同向柱面积之和（忽略反向柱）
             return self.Cal_MACD_area_full()
         elif macd_algo == MACD_ALGO.AREA_FULL_EXT:  # 2026-09-26 语义变更：first-to-peak（第一根同向柱→最长峰值同向柱区间面积；见 Cal_MACD_area_full_ext）
             return self.Cal_MACD_area_full_ext()
+        elif macd_algo == MACD_ALGO.AREA_HALF:      # 2026-09-25 由 AREA 改名：仅取笔首/尾连续同向柱的"半段"面积
+            return self.Cal_MACD_area_half(is_reverse)
         # ===== MACD 指标族：BAR/DIF/DEA 均为 MACD 衍生指标的整笔峰值（命名对齐，见 Common/CEnum MACD_ALGO）=====
         elif macd_algo == MACD_ALGO.BAR:            # 2026-09-25 由 PEAK 改名：BAR=MACD柱(直方图)峰值，与 DIF/DEA 对齐
             return self.Cal_MACD_bar()
@@ -225,13 +225,6 @@ class CBi:
             return self.Cal_Rsi()
         else:
             raise CChanException(f"unsupport macd_algo={macd_algo}, should be one of area_half/area_full/area_full_ext/bar/dif/dea/diff/slope/amp", ErrCode.PARA_ERROR)
-
-    @make_cache
-    def Cal_Rsi(self):
-        rsi_lst: List[float] = []
-        for klc in self.klc_lst:
-            rsi_lst.extend(klu.rsi for klu in klc.lst)
-        return 10000.0/(min(rsi_lst)+1e-7) if self.is_down() else max(rsi_lst)
 
     @make_cache
     def Cal_MACD_area_full(self):
@@ -276,6 +269,48 @@ class CBi:
 
         # 累加 第 0 根(第一根同向柱) -> 第 peak_idx 根(最长同向柱), 含端点
         _s += sum(abs(same_dir[i]) for i in range(peak_idx + 1))
+        return _s
+
+    def Cal_MACD_area_half(self, is_reverse):
+        if is_reverse:
+            return self.Cal_MACD_area_half_reverse()
+        else:
+            return self.Cal_MACD_area_half_obverse()
+
+    @make_cache
+    def Cal_MACD_area_half_obverse(self):
+        _s = 1e-7
+        begin_klu = self.get_begin_klu()
+        peak_macd = begin_klu.macd.BAR
+        for klc in self.klc_lst:
+            for klu in klc.lst:
+                if klu.idx < begin_klu.idx:
+                    continue
+                if klu.macd.BAR*peak_macd > 0:
+                    _s += abs(klu.macd.BAR)
+                else:
+                    break
+            else:  # 没有被break，继续找写一个KLC
+                continue
+            break
+        return _s
+
+    @make_cache
+    def Cal_MACD_area_half_reverse(self):
+        _s = 1e-7
+        begin_klu = self.get_end_klu()
+        peak_macd = begin_klu.macd.BAR
+        for klc in self.klc_lst_re:
+            for klu in klc[::-1]:
+                if klu.idx > begin_klu.idx:
+                    continue
+                if klu.macd.BAR*peak_macd > 0:
+                    _s += abs(klu.macd.BAR)
+                else:
+                    break
+            else:  # 没有被break，继续找写一个KLC
+                continue
+            break
         return _s
 
 # ===== 原实现(2026-09-26 注释停用, 未删): AREA_FULL_EXT = 整笔同向柱 + 反向柱峰值修正(X-Y) =====
@@ -364,48 +399,6 @@ class CBi:
                         peak = abs(klu.macd.DEA)
         return peak
 
-    def Cal_MACD_area_half(self, is_reverse):
-        if is_reverse:
-            return self.Cal_MACD_area_half_reverse()
-        else:
-            return self.Cal_MACD_area_half_obverse()
-
-    @make_cache
-    def Cal_MACD_area_half_obverse(self):
-        _s = 1e-7
-        begin_klu = self.get_begin_klu()
-        peak_macd = begin_klu.macd.BAR
-        for klc in self.klc_lst:
-            for klu in klc.lst:
-                if klu.idx < begin_klu.idx:
-                    continue
-                if klu.macd.BAR*peak_macd > 0:
-                    _s += abs(klu.macd.BAR)
-                else:
-                    break
-            else:  # 没有被break，继续找写一个KLC
-                continue
-            break
-        return _s
-
-    @make_cache
-    def Cal_MACD_area_half_reverse(self):
-        _s = 1e-7
-        begin_klu = self.get_end_klu()
-        peak_macd = begin_klu.macd.BAR
-        for klc in self.klc_lst_re:
-            for klu in klc[::-1]:
-                if klu.idx > begin_klu.idx:
-                    continue
-                if klu.macd.BAR*peak_macd > 0:
-                    _s += abs(klu.macd.BAR)
-                else:
-                    break
-            else:  # 没有被break，继续找写一个KLC
-                continue
-            break
-        return _s
-
     @make_cache
     def Cal_MACD_diff(self):
         """
@@ -461,6 +454,23 @@ class CBi:
         else:
             return (end_klu.high-begin_klu.low)/begin_klu.low
 
+    def Cal_MACD_trade_metric(self, metric: str, cal_avg=False) -> float:
+        _s = 0
+        for klc in self.klc_lst:
+            for klu in klc.lst:
+                metric_res = klu.trade_info.metric[metric]
+                if metric_res is None:
+                    return 0.0
+                _s += metric_res
+        return _s / self.get_klu_cnt() if cal_avg else _s
+
+    @make_cache
+    def Cal_Rsi(self):
+        rsi_lst: List[float] = []
+        for klc in self.klc_lst:
+            rsi_lst.extend(klu.rsi for klu in klc.lst)
+        return 10000.0/(min(rsi_lst)+1e-7) if self.is_down() else max(rsi_lst)
+
     @make_cache
     def is_macd_same_side_dominant(self):
         """
@@ -504,16 +514,6 @@ class CBi:
             if k.macd.DIF * expected <= 0 or k.macd.DEA * expected <= 0:
                 return False
         return True
-
-    def Cal_MACD_trade_metric(self, metric: str, cal_avg=False) -> float:
-        _s = 0
-        for klc in self.klc_lst:
-            for klu in klc.lst:
-                metric_res = klu.trade_info.metric[metric]
-                if metric_res is None:
-                    return 0.0
-                _s += metric_res
-        return _s / self.get_klu_cnt() if cal_avg else _s
 
     # def set_klc_lst(self, lst):
     #     self.__klc_lst = lst
