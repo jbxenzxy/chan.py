@@ -1802,9 +1802,10 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0", end_date=None):
         if len(records2) < 5:
             raise DataFetchError(f"选点后K线数据不足: 仅{len(records2)}条")
 
-        # 注入数据源 + 创建新 CChan（统一走 _build_futures_chan，复用 config）
+        # 注入数据源 + 创建新 CChan（统一走 _build_futures_chan；config 省略即由
+        # 其内部按 _make_chan_config() 取默认——不再向上游要一个已不存在的局部变量）
         # 数据注入经 src2.set_data（Session 协议），不落类级缓存
-        chan2, _ = _build_futures_chan(records2, symbol, freq_sec, config=config, src=src2)
+        chan2, _ = _build_futures_chan(records2, symbol, freq_sec, src=src2)
 
         # Step 5: 提取快照并返回（复盘态选点 is_replay=True，前端保持复盘 UI）
         result = _extract_realtime_snapshot(chan2, kl_type, symbol, name, freq_label,

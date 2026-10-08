@@ -781,6 +781,16 @@ COMPONENTS = [
     #      非首根开盘；见 test ①「判别力」两条与 ④ 白框同源锚点）。
     ("scan_lianzhang",
      [sys.executable, os.path.join("Test", "test_scan_lianzhang_mode.py")]),
+    # 未定义全局名静态护栏（2026-10-08 期货选点 NameError 事故防回潮）：
+    #   db6f886 把「定位」段的 `config = _make_chan_config()` 换成
+    #   `init_chan_symbol(...)`，下方 Step 4 的 `config=config` 遂成孤立引用
+    #   → 选中点即 `NameError: name 'config' is not defined`，选点 100% 失败。
+    #   门禁此前**没有「未定义全局名」这一维度**：NameError 只在真跑到那行才抛，
+    #   桩驱动/单测都进不到 Step 4；`config` 又是合法标识符，语法检查一律放过。
+    #   判据：全仓逐 code object 扫 `LOAD_GLOBAL` ∉（模块级绑定名 ∪ 内建名），空即绿；
+    #   另含事故点锚点断言 + 两条检测器自证（含「同名局部不得掩盖」的收集范围棘轮）。
+    ("undefined_global_guard",
+     [sys.executable, os.path.join("Test", "test_undefined_global_guard.py")]),
     # ── 暂不注册（注册即恒红 / 无拦截力，注册了门禁形同虚设）──────────
     #   Test/repro_n4_cleanup_race.py          N4 未修，且脚本只有 return 0
     #                                          （恒通过、无拦截力，须先改成
