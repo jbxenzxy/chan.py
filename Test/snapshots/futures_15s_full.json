@@ -2153,6 +2153,26 @@
    "type": "1"
   },
   {
+   "date": "2024/06/03 22:29:00",
+   "fractal_high": 4765.912,
+   "fractal_low": 4747.226,
+   "high": 4763.586,
+   "is_buy": true,
+   "low": 4760.988,
+   "price": 4762.203,
+   "type": "2"
+  },
+  {
+   "date": "2024/06/03 22:28:45",
+   "fractal_high": 4765.912,
+   "fractal_low": 4747.226,
+   "high": 4765.114,
+   "is_buy": true,
+   "low": 4752.039,
+   "price": 4763.368,
+   "type": "2"
+  },
+  {
    "date": "2024/06/03 22:21:45",
    "fractal_high": 4793.552,
    "fractal_low": 4785.269,
@@ -2211,6 +2231,16 @@
    "low": 4741.654,
    "price": 4754.848,
    "type": "0"
+  },
+  {
+   "date": "2024/06/03 14:56:00",
+   "fractal_high": 4754.523,
+   "fractal_low": 4752.231,
+   "high": 4754.038,
+   "is_buy": false,
+   "low": 4750.457,
+   "price": 4751.687,
+   "type": "2"
   },
   {
    "date": "2024/06/03 11:11:30",
@@ -35288,7 +35318,7 @@
    "ema26": 4099.080799658
   },
   "bi_count": 107,
-  "bsp_count": 12,
+  "bsp_count": 15,
   "chan_version": "chan.py",
   "date_range": "2024/06/03 09:00:00 ~ 2024/06/04 21:29:45",
   "forward_adjust": false,

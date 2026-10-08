@@ -32,8 +32,8 @@
  },
  "kind": "backtest-p0-freeze",
  "metrics": {
-  "avg_bars_held": 6.0,
-  "avg_net_return": 0.0601421207,
+  "avg_bars_held": 5.5,
+  "avg_net_return": 0.0652714388,
   "bars_total": 1393,
   "by_bsp_type": {
    "0": {
@@ -42,6 +42,14 @@
     "expectancy_r": 5.64935,
     "l": 1,
     "n": 2,
+    "w": 1
+   },
+   "2": {
+    "avg_net_return": 0.090918029,
+    "e": 0,
+    "expectancy_r": 2.6773,
+    "l": 0,
+    "n": 1,
     "w": 1
    },
    "3": {
@@ -71,34 +79,34 @@
     "w": 0
    },
    "trailing": {
-    "avg_net_return": 0.5283459437,
+    "avg_net_return": 0.3096319864,
     "e": 0,
-    "expectancy_r": 12.7201,
+    "expectancy_r": 7.6987,
     "l": 0,
-    "n": 1,
-    "w": 1
+    "n": 2,
+    "w": 2
    }
   },
   "e": 0,
-  "expectancy_r": 1.7224,
+  "expectancy_r": 1.88155,
   "filtered": 0,
   "l": 4,
   "max_loss_r": -1.4214,
   "max_win_r": 12.7201,
-  "n": 5,
-  "profit_factor": 2.32101897,
-  "profit_loss_ratio": 9.28407589,
+  "n": 6,
+  "profit_factor": 2.72042106,
+  "profit_loss_ratio": 5.44084211,
   "rej": 4,
   "u": 0,
-  "w": 1,
-  "win_rate": 0.2
+  "w": 2,
+  "win_rate": 0.3333333333
  },
  "note": "Backtest/ 的 P0 冻结基线。来源 = 冻结真实行情切片 Test/fixtures_real/sz002190_d.json；逐笔口径见本文件对应测试的 docstring。改了内核要刷新时跑 test_bt01_p0_fixture.py --freeze。",
  "run": {
   "bars_total": 1393,
   "signals_filtered": 0,
   "signals_rejected": 4,
-  "signals_seen": 9,
+  "signals_seen": 10,
   "type_appended_after_freeze": 0
  },
  "target": {
@@ -162,6 +170,24 @@
    "trade_id": 3
   },
   {
+   "bars_held": 3,
+   "bsp_type": "2",
+   "cost_cash": 37.9507,
+   "entry_date": "2024-03-11",
+   "entry_price": 15.708,
+   "exit_date": "2024-03-14",
+   "exit_price": 17.148,
+   "exit_reason": "trailing",
+   "gross_return": 0.0916730328,
+   "net_return": 0.090918029,
+   "open": false,
+   "r_distance": 0.537857,
+   "r_multiple": 2.6773,
+   "shares": 3200,
+   "side": "long",
+   "trade_id": 4
+  },
+  {
    "bars_held": 11,
    "bsp_type": "0",
    "cost_cash": 33.6706,
@@ -177,7 +203,7 @@
    "r_multiple": -1.4214,
    "shares": 1400,
    "side": "long",
-   "trade_id": 4
+   "trade_id": 5
   },
   {
    "bars_held": 6,
@@ -195,7 +221,7 @@
    "r_multiple": 12.7201,
    "shares": 1400,
    "side": "long",
-   "trade_id": 5
+   "trade_id": 6
   }
  ],
  "version": 1

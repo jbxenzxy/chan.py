@@ -120,13 +120,13 @@ def part1():
           "keys=%r" % sorted(d.keys()))
 
     run, s, tgt = d["run"], d["summary"], d["target"]
-    # 2026-10-06 0类 4th/nzs/68th 新增 DIF 背驰前置闸后重冻：6→5 笔（4th 的 2023/04 一笔被 DIF 闸拦下）
-    check("交易笔数 = 5（P0-④ 基线）", run["filled"] == 5, "filled=%r" % run["filled"])
-    check("胜负平 = 1/4/0", (s["w"], s["l"], s["e"]) == (1, 4, 0),
+    # 2026-10-08 内核演进（多出 1 笔 2 类买卖点）后重冻：5→6 笔
+    check("交易笔数 = 6（P0-④ 基线）", run["filled"] == 6, "filled=%r" % run["filled"])
+    check("胜负平 = 2/4/0", (s["w"], s["l"], s["e"]) == (2, 4, 0),
           "w/l/e=%r" % ((s["w"], s["l"], s["e"]),))
-    check("实际胜率 = 1/5 = 0.2", abs(s["win_rate"] - 1.0 / 5.0) < 1e-6,
+    check("实际胜率 = 2/6 = 0.333333", abs(s["win_rate"] - 2.0 / 6.0) < 1e-6,
           "win_rate=%r" % s["win_rate"])
-    check("期望 R ≈ 1.7224（L3 启动阈值 2R 口径）", abs(s["expectancy_r"] - 1.7224) < 1e-3,
+    check("期望 R ≈ 1.88155（L3 启动阈值 2R 口径）", abs(s["expectancy_r"] - 1.88155) < 1e-3,
           "expectancy_r=%r" % s["expectancy_r"])
     check("区间 [2021-01-04, 2026-09-30] 且 bars=1393",
           tgt["date_from"] == "2021-01-04" and tgt["date_to"] == "2026-09-30"
@@ -185,29 +185,38 @@ def part2():
     print("══ ② 逐周期（App 边界 · 页面日期格式）══")
     kl30 = _page_klines("sz002190_30m.json", minute=True)
     d30 = _call("sz002190", "30m", kl30)
-    check("30m：笔数 = 8（P0-④ 基线）", d30["run"]["filled"] == 8,
+    # 2026-10-08 内核演进（多出 1 笔）后重冻：8→9 笔
+    check("30m：笔数 = 9（P0-④ 基线）", d30["run"]["filled"] == 9,
           "filled=%r" % d30["run"]["filled"])
-    check("30m：期望 R ≈ 0.240257", abs(d30["summary"]["expectancy_r"] - 0.240257) < 1e-3,
+    check("30m：期望 R ≈ 0.38645", abs(d30["summary"]["expectancy_r"] - 0.38645) < 1e-3,
           "expectancy_r=%r" % d30["summary"]["expectancy_r"])
     check("30m：区间首根 = 切片首根（2025-09-30）",
           d30["target"]["date_from"] == "2025-09-30", "target=%r" % d30["target"])
     # 30m 有 1 笔持仓中（切片末尾信号未平仓）⇒ 正好验「未平仓不进指标分母」
-    check("30m：closed=7 / still_open=1（切片末尾未平仓）",
-          d30["run"]["closed"] == 7 and d30["run"]["still_open"] == 1,
+    check("30m：closed=8 / still_open=1（切片末尾未平仓）",
+          d30["run"]["closed"] == 8 and d30["run"]["still_open"] == 1,
           "run=%r" % d30["run"])
-    check("30m：w + l + e == closed（未平仓不计胜负，分母是 7 不是 8）",
+    check("30m：w + l + e == closed（未平仓不计胜负，分母是 8 不是 9）",
           d30["summary"]["w"] + d30["summary"]["l"] + d30["summary"]["e"]
           == d30["run"]["closed"],
           "summary=%r closed=%r" % ({k: d30["summary"][k] for k in ("w", "l", "e")},
                                     d30["run"]["closed"]))
     d30_3 = _call("sz002190", "30m", kl30, bsp_types="3")
     d30_0 = _call("sz002190", "30m", kl30, bsp_types="0")
-    check('30m：本切片信号全为 3 类 ⇒ "3" ≡ 全放行、`"0"` → 0 笔',
-          d30_3["run"]["filled"] == d30["run"]["filled"] == 8
-          and d30_0["run"]["filled"] == 0,
-          '"3" filled=%r "0" filled=%r' % (d30_3["run"]["filled"], d30_0["run"]["filled"]))
-    check('30m：`"0"` 的 filtered == seen == 10（事前过滤在 30m 同样生效）',
-          d30_0["run"]["signals_filtered"] == d30_0["run"]["signals_seen"] == 10,
+    # 2026-10-08 内核演进后本切片含 1 笔 2 类 ⇒ "3" 不再 ≡ 全放行（差 1 笔），
+    # 断言改为「全放行 = 3类 + 2类」「3类恰好少 1 笔」，语义随内核同步。
+    d30_2 = _call("sz002190", "30m", kl30, bsp_types="2")
+    check('30m："3" 少 1 笔（切片含 1 笔 2 类）；"3"+"2" 拼回全放行',
+          d30_3["run"]["filled"] == d30["run"]["filled"] - 1 == 8
+          and d30_2["run"]["filled"] == 1
+          and d30_3["run"]["filled"] + d30_2["run"]["filled"] == d30["run"]["filled"],
+          '"3" filled=%r "2" filled=%r 全放行=%r'
+          % (d30_3["run"]["filled"], d30_2["run"]["filled"], d30["run"]["filled"]))
+    check('30m：`"0"` → 0 笔（本切片无 0 类信号，全被过滤）',
+          d30_0["run"]["filled"] == 0,
+          'filled=%r' % d30_0["run"]["filled"])
+    check('30m：`"0"` 的 filtered == seen == 11（事前过滤在 30m 同样生效）',
+          d30_0["run"]["signals_filtered"] == d30_0["run"]["signals_seen"] == 11,
           "run=%r" % d30_0["run"])
 
     klw = _page_klines("sz002190_w.json")
@@ -236,8 +245,10 @@ def part3(kl, base_exp):
     print("══ ③ bsp_types 四态（§4.7.3 同一份 SSOT）══")
     d_none = _call("sz002190", "d", kl)
     d0 = _call("sz002190", "d", kl, bsp_types="0")
+    d2 = _call("sz002190", "d", kl, bsp_types="2")
     d3 = _call("sz002190", "d", kl, bsp_types="3")
     d03 = _call("sz002190", "d", kl, bsp_types="0,3")
+    d032 = _call("sz002190", "d", kl, bsp_types="0,2,3")
     d_empty = _call("sz002190", "d", kl, bsp_types="")
 
     check('"0" → 2 笔 / R≈5.64935',
@@ -246,11 +257,19 @@ def part3(kl, base_exp):
     check('"3" → 3 笔 / R≈-0.8956',
           d3["run"]["filled"] == 3 and abs(d3["summary"]["expectancy_r"] + 0.8956) < 1e-3,
           "filled=%r R=%r" % (d3["run"]["filled"], d3["summary"]["expectancy_r"]))
-    check('"0,3" ≡ 全放行（笔数与 R 同基线）',
-          d03["run"]["filled"] == d_none["run"]["filled"] == 5
-          and abs(d03["summary"]["expectancy_r"] - base_exp) < 1e-9,
-          "filled=%r R=%r base=%r" % (d03["run"]["filled"],
-                                      d03["summary"]["expectancy_r"], base_exp))
+    # 2026-10-08 内核演进出 2 类买卖点后：本切片含 1 笔 2 类，
+    # 「0,3」不再是全放行（少那 1 笔 2 类）；补上 2 类才 ≡ 全放行。
+    check('"2" → 1 笔（内核新增类型，独立可筛）',
+          d2["run"]["filled"] == 1,
+          'filled=%r' % d2["run"]["filled"])
+    check('"0,3" 少 1 笔（≠ 全放行，因切片含 1 笔 2 类）',
+          d03["run"]["filled"] == d_none["run"]["filled"] - 1 == 5,
+          "filled=%r 全放行=%r" % (d03["run"]["filled"], d_none["run"]["filled"]))
+    check('"0,2,3" ≡ 全放行（笔数与 R 同基线）',
+          d032["run"]["filled"] == d_none["run"]["filled"] == 6
+          and abs(d032["summary"]["expectancy_r"] - base_exp) < 1e-9,
+          "filled=%r R=%r base=%r" % (d032["run"]["filled"],
+                                      d032["summary"]["expectancy_r"], base_exp))
     check('"" → 0 笔（**全过滤**，与 None 全放行语义相反）',
           d_empty["run"]["filled"] == 0, "filled=%r" % d_empty["run"]["filled"])
     check('"" → 口径行披露 bsp_types=""（与 None 可区分）',
