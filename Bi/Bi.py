@@ -270,7 +270,7 @@ class CBi:
         if not same_dir:
             return _s
 
-        # 峰值: |macd| 全局最大者(第一根->峰, 即 first-to-peak); 多个相等时取第一个(冲量峰值)
+        # 峰值: |BAR| 全局最大者(第一根->峰, 即 first-to-peak); 多个相等时取第一个(冲量峰值)
         peak_abs = max(abs(v) for v in same_dir)
         peak_idx = next(i for i, v in enumerate(same_dir) if abs(v) == peak_abs)
 
