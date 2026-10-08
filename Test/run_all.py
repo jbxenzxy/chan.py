@@ -786,12 +786,12 @@ COMPONENTS = [
     #      非首根开盘；见 test ①「判别力」两条与 ④ 白框同源锚点）。
     ("scan_lianzhang",
      [sys.executable, os.path.join("Test", "test_scan_lianzhang_mode.py")]),
-    # 放量扫描（扫描模式 "fangliang"）：最近 N 根内**成交额最大的一根 A** 严格
+    # 放量扫描（扫描模式 "fangliang"）：最近 N 根内**成交额最大的那一根**严格
     # 大于其前 W 根的最高成交额（W = app_config.SCAN_FANGLIANG_WINDOW_BARS，
     # 默认 120）—— 即「成交额创 W 根新高」。**不是**「最近 N 根天天放量」：
     # N 根里只有最猛的那一根参与比较。四段守护 ——
     #   ① 后端判据（合成样本：命中 / 平量不命中 + 一丝超出即命中的判别力自证 /
-    #      巨量落在比较窗口内不命中 / 数据不足 / A 为 0 / N=1 / A 收阴）；
+    #      巨量落在比较窗口内不命中 / 数据不足 / 最猛那根成交额为 0 / N=1 / 最猛那根收阴）；
     #   ② 真实冻结切片（截断点 × N 与独立复算逐组一致 + 命中项 amount_a/peak_prev
     #      逐组一致 + 非空转自证 + 样本内确有命中窗口）；
     #   ③ 前端真函数（node 抽段）：口径披露行的存在 / 措辞 / 窗口根数取自配置
@@ -810,6 +810,19 @@ COMPONENTS = [
     #   另含事故点锚点断言 + 两条检测器自证（含「同名局部不得掩盖」的收集范围棘轮）。
     ("undefined_global_guard",
      [sys.executable, os.path.join("Test", "test_undefined_global_guard.py")]),
+    # 死参数防回潮护栏（2026-10-09 移除 cal_macd_metric 的 is_reverse 形参后防复活）：
+    #   is_reverse 的唯一消费者 AREA_HALF 家族已于 2026-10-08 移除，Bi.Bi / Seg.Seg
+    #   两处函数体再无任何读取点 ⇒ 形参成为死参数；而 17 处调用点仍机械地传
+    #   True/False，读者会误以为它影响计算（实际两者结果完全相同）。判据 ——
+    #   ① 两处形参集合**恰好** {self, macd_algo}：既防 is_reverse 复活，也防把
+    #      macd_algo 一起删过头（反向锚点）；② 全仓 cal_macd_metric 调用点无
+    #      is_reverse 关键字传参；③ 纯文本兜底拦「照抄旧签名」的新定义
+    #      （AST 只看调用点，管不住新写的 def）；④ 函数体仍消费 macd_algo，
+    #      证明判据入口存活；⑤⑥ 检测器双向自证（旧片段必命中 / 干净片段与
+    #      说明性注释不误报）。变异实证：复活传参命中 ②、复活形参命中 ①、
+    #      删成 (self) 命中 ① 反向锚点。
+    ("dead_param_guard",
+     [sys.executable, os.path.join("Test", "test_dead_param_guard.py")]),
     # ── 暂不注册（注册即恒红 / 无拦截力，注册了门禁形同虚设）──────────
     #   Test/repro_n4_cleanup_race.py          N4 未修，且脚本只有 return 0
     #                                          （恒通过、无拦截力，须先改成

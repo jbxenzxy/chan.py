@@ -192,6 +192,8 @@ class MACD_ALGO(Enum):
     # - AREA_FULL_EXT：2026-09-26 语义变更 → first-to-peak（第一根同向柱→笔内最长(全局最大)峰值同向柱区间 |macd| 之和，峰值之后不计）；原 Cal_MACD_area_ext 实现已注释停用(见 Bi.Bi.Cal_MACD_area_full_ext)。
     # AREA_HALF / Cal_MACD_area_half 家族（"半段"面积，唯一消费 is_reverse 的算法）已于 2026-10-08 彻底移除：
     # 全仓无任何内置配置指向它，测试/回测/交易三域零引用，真实链路探针命中 0 次（详见输出报告）。
+    # 随其消失，cal_macd_metric 的 is_reverse 形参已无消费方 ⇒ 2026-10-09 一并移除
+    # （Bi.Bi / Seg.Seg 两处签名同步收窄为 (macd_algo)，17 处调用点去掉关键字传参）。
     AREA_FULL = auto()        # 2026-09-25 由 FULL_AREA 改名（原 Cal_MACD_area）
     AREA_FULL_EXT = auto()    # 2026-09-25 由 FULL_AREA_EXT 改名（原 Cal_MACD_area_ext）
     # ===== MACD 指标族：BAR/DIF/DEA 均为 MACD 衍生指标的整笔峰值 =====

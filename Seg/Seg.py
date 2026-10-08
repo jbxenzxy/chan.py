@@ -114,7 +114,7 @@ class CSeg(Generic[LINE_TYPE]):
     def get_klu_cnt(self):
         return self.get_end_klu().idx - self.get_begin_klu().idx + 1
 
-    def cal_macd_metric(self, macd_algo, is_reverse):
+    def cal_macd_metric(self, macd_algo):
         if macd_algo == MACD_ALGO.SLOPE:
             return self.Cal_MACD_slope()
         elif macd_algo == MACD_ALGO.AMP:

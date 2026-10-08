@@ -256,8 +256,8 @@ class CBSPointList(Generic[LINE_TYPE, LINE_LIST_TYPE]):
             return
         if last_bi.is_up() and last_bi._high() < pre_bi._high():  # 创新高
             return
-        in_metric = pre_bi.cal_macd_metric(BSP_CONF.macd_algo, is_reverse=False)
-        out_metric = last_bi.cal_macd_metric(BSP_CONF.macd_algo, is_reverse=True)
+        in_metric = pre_bi.cal_macd_metric(BSP_CONF.macd_algo)
+        out_metric = last_bi.cal_macd_metric(BSP_CONF.macd_algo)
         is_diver, divergence_rate = out_metric <= BSP_CONF.divergence_rate*in_metric, out_metric/(in_metric+1e-7)
         if not is_diver:
             is_target_bsp = False
@@ -1063,8 +1063,8 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             return
 
         # ㈣ 离开笔4和进入笔，要求离开笔MACD面积 < 进入笔MACD面积
-        in_metric = entry_bi.cal_macd_metric(config.macd_algo, is_reverse=False) # is_reverse 已无消费方（唯一使用者 AREA_HALF 于 2026-10-08 移除），保留传参仅为兼容调用签名
-        out_metric = stroke_n.cal_macd_metric(config.macd_algo, is_reverse=True)
+        in_metric = entry_bi.cal_macd_metric(config.macd_algo)
+        out_metric = stroke_n.cal_macd_metric(config.macd_algo)
         divergence_rate = out_metric / (in_metric + 1e-7)
         is_diver = out_metric < config.divergence_rate * in_metric
         if not is_diver:
@@ -1174,8 +1174,8 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             return False
 
         # ㈤ 离开笔和进入笔，要求离开笔MACD面积 < 进入笔MACD面积
-        in_metric = entry_bi.cal_macd_metric(config.macd_algo, is_reverse=False) # is_reverse 已无消费方（唯一使用者 AREA_HALF 于 2026-10-08 移除），保留传参仅为兼容调用签名
-        out_metric = stroke_n.cal_macd_metric(config.macd_algo, is_reverse=True)
+        in_metric = entry_bi.cal_macd_metric(config.macd_algo)
+        out_metric = stroke_n.cal_macd_metric(config.macd_algo)
         divergence_rate = out_metric / (in_metric + 1e-7)
         is_diver = out_metric < config.divergence_rate * in_metric
         if not is_diver:
@@ -1349,8 +1349,8 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             return
 
         # ㈣ 离开笔6/8和进入笔，要求离开笔MACD面积 < 进入笔MACD面积
-        in_metric = entry_bi.cal_macd_metric(config.macd_algo, is_reverse=False) # is_reverse 已无消费方（唯一使用者 AREA_HALF 于 2026-10-08 移除），保留传参仅为兼容调用签名
-        out_metric = stroke_n.cal_macd_metric(config.macd_algo, is_reverse=True)
+        in_metric = entry_bi.cal_macd_metric(config.macd_algo)
+        out_metric = stroke_n.cal_macd_metric(config.macd_algo)
         divergence_rate = out_metric / (in_metric + 1e-7)
         is_diver = out_metric < config.divergence_rate * in_metric
         if not is_diver:
@@ -1509,10 +1509,10 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                 for i in range(c_offset, -1, -1):  # N-c_offset 到 N（含）
                     s = bi_list[stroke_n.idx - i]
                     if (is_buy and s.is_down()) or (not is_buy and s.is_up()):
-                        c_metric += s.cal_macd_metric(config.macd_algo, is_reverse=True)
+                        c_metric += s.cal_macd_metric(config.macd_algo)
                         c_bi_idxs.append(s.idx)
 
-                entry_metric = entry_bi.cal_macd_metric(config.macd_algo, is_reverse=False)
+                entry_metric = entry_bi.cal_macd_metric(config.macd_algo)
                 c_divergence_rate = c_metric / (entry_metric + 1e-7)
                 is_c_diver = c_metric < config.divergence_rate * entry_metric
                 if not is_c_diver:
@@ -1862,8 +1862,8 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         """
         最近同向笔 MACD背驰比较(macd_algo 指定比较指标，如 MACD_ALGO.BAR / MACD_ALGO.DIF)
         """
-        n_metric   = n.cal_macd_metric(macd_algo, is_reverse=False) # is_reverse 已无消费方（唯一使用者 AREA_HALF 于 2026-10-08 移除），保留传参仅为兼容调用签名
-        nm2_metric = nm2.cal_macd_metric(macd_algo, is_reverse=True)
+        n_metric   = n.cal_macd_metric(macd_algo)
+        nm2_metric = nm2.cal_macd_metric(macd_algo)
         is_diver   = n_metric < config.divergence_rate * nm2_metric
         return is_diver, n_metric, nm2_metric
 
@@ -2419,8 +2419,8 @@ def _red_range_multi_bi_diver(bi_list):
     if prev_same_dir is None:
         return {"diverged": False, "detail": "未找到前一个同向笔"}
 
-    prev_bar = prev_same_dir.cal_macd_metric(MACD_ALGO.BAR, is_reverse=False) # 2026-09-25 PEAK→BAR；is_reverse 已无消费方（唯一使用者 AREA_HALF 于 2026-10-08 移除），保留传参仅为兼容调用签名
-    curr_bar = last_bi.cal_macd_metric(MACD_ALGO.BAR, is_reverse=True)
+    prev_bar = prev_same_dir.cal_macd_metric(MACD_ALGO.BAR) # 2026-09-25 PEAK→BAR
+    curr_bar = last_bi.cal_macd_metric(MACD_ALGO.BAR)
     is_diver = curr_bar <= prev_bar * CMyBSPointList.NESTED_MACD_DIVER_RATIO
     detail = (
         f"多笔无中枢，{'MACD背驰' if is_diver else '未背驰'}"

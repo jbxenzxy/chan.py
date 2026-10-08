@@ -162,11 +162,11 @@ class CZS(Generic[LINE_TYPE]):
     def is_divergence(self, config: CPointConfig, out_bi=None):
         if not self.end_bi_break(out_bi):  # 最后一笔必须突破中枢
             return False, None
-        in_metric = self.get_bi_in().cal_macd_metric(config.macd_algo, is_reverse=False)
+        in_metric = self.get_bi_in().cal_macd_metric(config.macd_algo)
         if out_bi is None:
-            out_metric = self.get_bi_out().cal_macd_metric(config.macd_algo, is_reverse=True)
+            out_metric = self.get_bi_out().cal_macd_metric(config.macd_algo)
         else:
-            out_metric = out_bi.cal_macd_metric(config.macd_algo, is_reverse=True)
+            out_metric = out_bi.cal_macd_metric(config.macd_algo)
 
         if config.divergence_rate > 100:  # 保送
             return True, out_metric/in_metric

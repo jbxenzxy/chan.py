@@ -190,7 +190,7 @@ class CBi:
         self.check()
         self.clean_cache()
 
-    def cal_macd_metric(self, macd_algo, is_reverse):
+    def cal_macd_metric(self, macd_algo):
         # ===== MACD 面积族：均基于 MACD 柱(|macd|)的面积累加，区别在覆盖区间与反向柱处理 =====
         if macd_algo == MACD_ALGO.AREA_FULL:      # 2026-09-25 由 FULL_AREA 改名：整笔同向柱面积之和（忽略反向柱）
             return self.Cal_MACD_area_full()
