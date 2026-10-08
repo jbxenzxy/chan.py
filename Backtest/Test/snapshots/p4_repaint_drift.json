@@ -62,13 +62,13 @@
    ],
    "drift_count": 3,
    "ever_but_not_final": [],
-   "ever_seen": 10,
+   "ever_seen": 9,
    "field_revision_signals": [
     "2021-08-23 type=3 buy=True",
     "2021-12-22 type=3 buy=True",
     "2022-05-24 type=3 buy=False"
    ],
-   "final_alive": 10,
+   "final_alive": 9,
    "fixture": {
     "bars": 1393,
     "file": "sz002190_d.json",
@@ -83,7 +83,7 @@
     "2021-12-22 type=3 buy=True": 1,
     "2022-05-24 type=3 buy=False": 4
    },
-   "signals_total": 10,
+   "signals_total": 9,
    "xcheck": {
     "drift_trade_rows": [
      {
@@ -118,8 +118,8 @@
      }
     ],
     "r_lt_A_last_count": 2,
-    "signals_seen": 10,
-    "trades": 6
+    "signals_seen": 9,
+    "trades": 5
    }
   },
   {
@@ -182,13 +182,13 @@
    ],
    "drift_count": 3,
    "ever_but_not_final": [],
-   "ever_seen": 11,
+   "ever_seen": 10,
    "field_revision_signals": [
     "2026-02-13 15:00 type=3 buy=False",
     "2026-05-06 14:00 type=3 buy=False",
     "2026-06-16 11:30 type=3 buy=True"
    ],
-   "final_alive": 11,
+   "final_alive": 10,
    "fixture": {
     "bars": 1936,
     "file": "sz002190_30m.json",
@@ -203,7 +203,7 @@
     "2026-05-06 14:00 type=3 buy=False": 4,
     "2026-06-16 11:30 type=3 buy=True": 4
    },
-   "signals_total": 11,
+   "signals_total": 10,
    "xcheck": {
     "drift_trade_rows": [
      {
@@ -238,8 +238,8 @@
      }
     ],
     "r_lt_A_last_count": 3,
-    "signals_seen": 11,
-    "trades": 9
+    "signals_seen": 10,
+    "trades": 8
    }
   }
  ],

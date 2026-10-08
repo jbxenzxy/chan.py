@@ -10,3 +10,16 @@ Test/fixtures_real/*.json text eol=lf
 # 读侧走 json（EOL 无关），但重冻（--freeze）落盘是 LF ⇒ 钉 LF 免得
 # core.autocrlf=true 的机器上"改一下再冻"产出满屏无意义 diff。
 Backtest/Test/snapshots/*.json text eol=lf
+# 引擎快照回归基线（Test/snapshots/ 下 snapshot_runner.py 管辖的那 8 个 case）：
+#   同上面两处 —— `--update` 重冻落盘是 LF，不钉规则则 newline_hygiene 按
+#   「默认 CRLF」判红。**只逐条列出这 8 个**：同目录另有 9 个由其它测试写、
+#   约定为 CRLF 的快照（phase3_routes / sse_* / step_replay_* 等），
+#   用目录级通配会把它们一并误判为违规。
+Test/snapshots/stock_d_full.json text eol=lf
+Test/snapshots/stock_d_end_date.json text eol=lf
+Test/snapshots/stock_d_step_m5.json text eol=lf
+Test/snapshots/multilevel_d_30m.json text eol=lf
+Test/snapshots/edge_gap.json text eol=lf
+Test/snapshots/edge_zero_vol.json text eol=lf
+Test/snapshots/futures_15s_full.json text eol=lf
+Test/snapshots/futures_15s_end_date.json text eol=lf
