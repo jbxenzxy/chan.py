@@ -186,13 +186,12 @@ class SEG_TYPE(Enum):
 
 
 class MACD_ALGO(Enum):
-    # ===== MACD 面积族：三者均基于 MACD 柱(|macd|)的面积累加，区别在覆盖区间与反向柱处理 =====
-    # 2026-09-25 由 AREA/FULL_AREA/FULL_AREA_EXT 改名，统一为 AREA_* 前缀，函数名对齐 Cal_MACD_area_*：
-    # - AREA_HALF：仅取笔首/尾连续同向柱的"半段"面积（遇第一根反向柱即停），受 is_reverse 控制取首还是尾；
-    #   原 Cal_MACD_half，改名为 area_half 以表达"半段/边界段"，不再误导为整笔面积。
-    # - AREA_FULL：整笔所有同向柱 |macd| 之和，反向柱直接忽略（不计也不减）；原 Cal_MACD_area。
+    # ===== MACD 面积族：均基于 MACD 柱(|macd|)的面积累加，区别在覆盖区间与反向柱处理 =====
+    # 2026-09-25 由 FULL_AREA/FULL_AREA_EXT 改名，统一为 AREA_* 前缀，函数名对齐 Cal_MACD_area_*：
+    # - AREA_FULL：整笔所有柱中与笔方向同向的 |macd| 之和，反向柱直接忽略（不计也不减）；原 Cal_MACD_area。
     # - AREA_FULL_EXT：2026-09-26 语义变更 → first-to-peak（第一根同向柱→笔内最长(全局最大)峰值同向柱区间 |macd| 之和，峰值之后不计）；原 Cal_MACD_area_ext 实现已注释停用(见 Bi.Bi.Cal_MACD_area_full_ext)。
-    AREA_HALF = auto()        # 2026-09-25 由 AREA 改名（原 Cal_MACD_half）
+    # AREA_HALF / Cal_MACD_area_half 家族（"半段"面积，唯一消费 is_reverse 的算法）已于 2026-10-08 彻底移除：
+    # 全仓无任何内置配置指向它，测试/回测/交易三域零引用，真实链路探针命中 0 次（详见输出报告）。
     AREA_FULL = auto()        # 2026-09-25 由 FULL_AREA 改名（原 Cal_MACD_area）
     AREA_FULL_EXT = auto()    # 2026-09-25 由 FULL_AREA_EXT 改名（原 Cal_MACD_area_ext）
     # ===== MACD 指标族：BAR/DIF/DEA 均为 MACD 衍生指标的整笔峰值 =====

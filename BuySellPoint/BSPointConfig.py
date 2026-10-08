@@ -63,8 +63,8 @@ class CPointConfig:
 
     def SetMacdAlgo(self, macd_algo):
         _d = {
-            # ===== MACD 面积族（2026-09-25 由 area/full_area/full_area_ext 改名，统一 AREA_* 前缀，函数 Cal_MACD_area_* 对齐）=====
-            "area_half": MACD_ALGO.AREA_HALF,        # 原 AREA / Cal_MACD_half：笔首(尾)连续同向柱"半段"面积
+            # ===== MACD 面积族（2026-09-25 由 full_area/full_area_ext 改名，统一 AREA_* 前缀，函数 Cal_MACD_area_* 对齐）=====
+            # "area_half"（原 AREA / Cal_MACD_half）已于 2026-10-08 彻底移除 —— 见下方 _removed
             "area_full": MACD_ALGO.AREA_FULL,        # 原 FULL_AREA / Cal_MACD_area：整笔同向柱面积之和
             "area_full_ext": MACD_ALGO.AREA_FULL_EXT, # 原 FULL_AREA_EXT / Cal_MACD_area_ext：2026-09-26 改为 first-to-peak（第一根同向柱→最长峰值同向柱区间面积）
             # ===== MACD 指标族 =====
@@ -82,7 +82,16 @@ class CPointConfig:
             "rsi": MACD_ALGO.RSI,
         }
         if macd_algo not in _d:
-            _legacy = {"peak": "bar", "area": "area_half", "full_area": "area_full", "full_area_ext": "area_full_ext"}
+            # 2026-09-25 更名表（旧名 → 现行名，提示用户改配置）
+            _legacy = {"peak": "bar", "full_area": "area_full", "full_area_ext": "area_full_ext"}
+            # 2026-10-08 已移除的算法（无替代品，须让用户换算法而不是改名）——
+            # "area_half" 及其旧名 "area" 都指向已删除的 AREA_HALF，不能再映射到 _d 里的任何项。
+            _removed = {"area_half", "area"}
+            if macd_algo in _removed:
+                raise CChanException(
+                    f"macd_algo={macd_algo!r} 已于 2026-10-08 移除（原 MACD_ALGO.AREA_HALF / Cal_MACD_area_half 已删除），"
+                    f"请改用: {sorted(_d)}",
+                    ErrCode.PARA_ERROR)
             _hint = f'；注意："{macd_algo}" 已于 2026-09-25 更名为 "{_legacy[macd_algo]}"，请更新你的配置' if macd_algo in _legacy else ""
             raise CChanException(
                 f"unsupport macd_algo={macd_algo!r}, valid: {sorted(_d)}{_hint}",
