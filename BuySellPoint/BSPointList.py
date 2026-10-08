@@ -1595,10 +1595,12 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             return
 
         # 笔N-2上需有买/卖点(一买确认后才有二买)
+        '''
         if not self._has_bsp_for_bi(stroke_nm2):
             self._dbg_bs2('cal_bs2point', '跳过: 笔N-2上没有买/卖点',
                           n_2_idx=stroke_nm2.idx)
             return
+        '''
 
         # ── 生成2类买卖点 ──
         is_buy = stroke_n.is_down()
