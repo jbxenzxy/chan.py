@@ -16,7 +16,7 @@
   ④ 成交列表排序（后端投影保留，契约随之保留）：App/AppTrader.py 用
      `_all_trades[-10:]`（库内 exit_at 升序原序截尾），最新一条排在**最后**；
      `reversed(_all_trades)` 不得回潮；
-  ⑤ 资源版本号：app.html 引 app.js?v=72（改前端必须抬版本号，防缓存假象；
+  ⑤ 资源版本号：app.html 引 app.js?v=73（改前端必须抬版本号，防缓存假象；
      版本号是**单调递增**的，每次改前端都要同时抬这里的期望值与残留断言）；
   ⑥ 账本与开关解耦（2026-09-22 二次拍板）：空态文案「（暂无账本数据）」，
      「（自动下单未运行）」零残留；AppTrader._read_engine_switch 收 out_dir、
@@ -164,7 +164,8 @@ print("\n[3] 资源版本号")
 #   故远端 HEAD 上本组曾是红的，本轮一并校正）。
 #   本组断言刻意保留"写死当前值"的形态 —— 它的作用正是强迫每次改前端的人意识到
 #   要抬版本号；放宽成"任意 v=\d+"就等于把这条守卫拆掉。
-check("app.html 引 app.js?v=72", 'app.js?v=72' in HTML, True)
+check("app.html 引 app.js?v=73", 'app.js?v=73' in HTML, True)
+check("旧版本号 v=72 零残留", 'app.js?v=72' in HTML, False)
 check("旧版本号 v=71 零残留", 'app.js?v=71' in HTML, False)
 check("旧版本号 v=70 零残留", 'app.js?v=70' in HTML, False)
 check("旧版本号 v=69 零残留", 'app.js?v=69' in HTML, False)

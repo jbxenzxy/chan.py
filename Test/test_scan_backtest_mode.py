@@ -233,6 +233,12 @@ def part2b(kl):
           "bsp spec 未传 bsp_types")
     check("②b 前端买/卖点扫描结果披露买卖点类型口径",
           "买卖点类型：" in appjs, "缺披露行")
+    # 措辞必须点明「事前」过滤：被拒类型**不参与**「最新买卖点是买还是卖」的
+    #   判定（§4.7.3 定案）。说成"结果里过滤掉"会误导用户以为放行类型的命中
+    #   不受勾选影响 —— 这正是「图上有买卖点却扫不到」被当 bug 的成因。
+    check("②b 买卖点披露写明**事前过滤**语义（未勾选类型不参与判定）",
+          "未勾选的类型不参与判定（事前过滤，非事后过滤）" in appjs,
+          "事前过滤语义未写进披露行")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -559,8 +565,8 @@ def part6():
           bool(re.search(r'value="backtest"[^>]*onchange="updateScanRecentDisabled\(\)"',
                          html)),
           "缺 onchange")
-    check("⑥ 静态资源版本号已 bump（v=72，防浏览器吃旧缓存；10-08 报单成交自动打开账本轮同步）",
-          'app.js?v=72' in html, "仍指向旧版本号")
+    check("⑥ 静态资源版本号已 bump（v=73，防浏览器吃旧缓存；10-08 放量口径披露同步）",
+          'app.js?v=73' in html, "仍指向旧版本号")
 
     appjs = io.open(APPJS, encoding="utf-8").read()
     check("⑥ localStorage 白名单收 backtest（否则重开弹窗回落到标注模式）",

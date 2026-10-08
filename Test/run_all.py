@@ -781,11 +781,25 @@ COMPONENTS = [
     #   ③ 前端真函数（node 抽段）：置灰契约（连涨「最近N根」可用）、切模式自动填 3
     #      （附买卖点模式对照证非恒真）、涨幅降序 /「N连涨」标签 / 涨红跌绿 /
     #      终态口径披露；④ 静态契约（HTML 位置紧跟「放量」、选项数 =7、版本号
-    #      v=71、localStorage 白名单、后端判据严格 `>`）。
+    #      v=73、localStorage 白名单、后端判据严格 `>`）。
     #   涨幅基期 = 窗口首根**前收** → 末根收盘（与 K 线图底部十字白框同口径，
     #      非首根开盘；见 test ①「判别力」两条与 ④ 白框同源锚点）。
     ("scan_lianzhang",
      [sys.executable, os.path.join("Test", "test_scan_lianzhang_mode.py")]),
+    # 放量扫描（扫描模式 "fangliang"）：最近 N 根内**成交额最大的一根 A** 严格
+    # 大于其前 W 根的最高成交额（W = app_config.SCAN_FANGLIANG_WINDOW_BARS，
+    # 默认 120）—— 即「成交额创 W 根新高」。**不是**「最近 N 根天天放量」：
+    # N 根里只有最猛的那一根参与比较。四段守护 ——
+    #   ① 后端判据（合成样本：命中 / 平量不命中 + 一丝超出即命中的判别力自证 /
+    #      巨量落在比较窗口内不命中 / 数据不足 / A 为 0 / N=1 / A 收阴）；
+    #   ② 真实冻结切片（截断点 × N 与独立复算逐组一致 + 命中项 amount_a/peak_prev
+    #      逐组一致 + 非空转自证 + 样本内确有命中窗口）；
+    #   ③ 前端真函数（node 抽段）：口径披露行的存在 / 措辞 / 窗口根数取自配置
+    #      （SSOT：/api/health 下发；未拉到回落中性措辞、**不硬编码 120**）/
+    #      进度期与终态共用一个披露函数 / 空结果态仍给披露；
+    #   ④ 静态契约（披露单一来源 / 后端严格 `>` / 配置 SSOT / 版本号 v=73）。
+    ("scan_fangliang",
+     [sys.executable, os.path.join("Test", "test_scan_fangliang_mode.py")]),
     # 未定义全局名静态护栏（2026-10-08 期货选点 NameError 事故防回潮）：
     #   db6f886 把「定位」段的 `config = _make_chan_config()` 换成
     #   `init_chan_symbol(...)`，下方 Step 4 的 `config=config` 遂成孤立引用

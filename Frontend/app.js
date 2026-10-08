@@ -228,6 +228,13 @@
         // 不覆盖用户显式设置值。
         let _scanMinFloatMcServer = null;
 
+        // 放量扫描的比较窗口根数：SSOT 在后端 app_config.SCAN_FANGLIANG_WINDOW_BARS
+        // （App/AppScan.py 的 fangliang 分支据此取前窗峰值）。前端**只在口径披露
+        // 文案里引用它**，绝不参与判定；经 /api/health 的 config 下发（同
+        // _scanMinFloatMcServer 的手法）。null = 尚未拉到 ⇒ 文案回落中性的
+        // 「前述比较窗口」，不编造 120 —— 写死数字等于在前端复制一份口径。
+        let _scanFangliangWindowBars = null;
+
         let _dateKeyArrow = false, _dateKeyEnter = false, _dateManualTyping = false;
 
         let _dateInputTriggered = false;   // input 已触发 gotoDate，change 跳过
@@ -6757,7 +6764,10 @@
                 return;
             }
 
-            // fangliang：放量扫描（最近 N 根内成交额最大者为 A，且 A 大于前 120 根峰值）
+            // fangliang：放量扫描（最近 N 根内成交额最大者为 A，且 A 大于前 W 根峰值）
+            //   W = 后端 app_config.SCAN_FANGLIANG_WINDOW_BARS（默认 120），经
+            //   _scanFangliangWindowBars 下发给面板的**披露文案**；判定在后端，
+            //   前端不重算 —— 两处口径必须同一句话（见 _fangliangCaliberHtml）。
             if (_scanMode === "fangliang") {
                 runScan({
                     mode: "fangliang",
@@ -6772,6 +6782,9 @@
                     classify: function(data) { return !!data.is_fangliang; },
                     renderRows: function(results) {
                         var html = _scanMarketSummaryHtml(results);
+                        // 进度期同样挂口径披露：与终态共用 _fangliangCaliberHtml()，
+                        // 两处措辞只可能同源（进度期就能读到判据，不必等扫完）。
+                        html += _fangliangCaliberHtml();
                         // 动态排序：红色（A为阳线，a_is_rise=true）排前面，绿色排后面；仅红色勾选
                         results.sort(function(a, b) {
                             return ((b.a_is_rise ? 1 : 0) - (a.a_is_rise ? 1 : 0));
@@ -6935,8 +6948,12 @@
             // 买卖点类型口径披露：扫描按它做**事前过滤**（后端同一门）。
             //   不写出来的话，勾选被改过 / 全不勾时用户只会看到"图上有买卖点、
             //   扫描却没扫到"，然后当成 bug 来查。
+            //   措辞必须点明「事前」：被拒类型**不参与**"最新买卖点是买还是卖"的
+            //   判定（§4.7.3 定案）—— 说成"结果里过滤掉"是错的，会误导用户以为
+            //   放行类型的命中不受勾选影响。
             html += '<div class="scan-summary" style="font-size:10px;color:#7a8399;">'
-                + '买卖点类型：' + statsEsc(_btBspTypesLabel(_btBspTypes())) + '</div>';
+                + '买卖点类型：' + statsEsc(_btBspTypesLabel(_btBspTypes()))
+                + ' · 未勾选的类型不参与判定（事前过滤，非事后过滤）</div>';
             if (results.length === 0) {
                 html += '<div class="scan-no-result">当前周期下未发现买卖点股票</div>';
             } else {
@@ -7035,12 +7052,37 @@
             updateScanSaveBtn();
         }
 
+        // 放量扫描口径披露行 —— 与连涨披露行（renderLianzhangScanResults）**同构**：
+        //   同一 class（scan-summary）+ 同一字号/颜色，面板上两种模式的解释读起来是一套。
+        //
+        //   为什么必须写：放量判据不是「最近 N 根天天放量」，而是「最近 N 根里**最猛
+        //   的那一根** A，比它前面的比较窗口内任何一根都猛」—— 这条不看代码推不出来。
+        //   不写清楚，用户看到图上某一根明明是巨量柱却没被扫出来（那根不在最近 N 根
+        //   内 / 或没超过前窗峰值），只会当成 bug 来查。
+        //
+        //   窗口根数取自 _scanFangliangWindowBars（SSOT = 后端 SCAN_FANGLIANG_WINDOW_BARS），
+        //   **不在文案里硬编码 120**；未拉到（离线/旧缓存）时回落中性措辞，宁可不给数字
+        //   也不给错的数字。窗口根数、比较基准、数据不足的跳过语义三者都要说全。
+        function _fangliangCaliberHtml() {
+            var w = _scanFangliangWindowBars;
+            var windowTxt = (typeof w === "number" && w >= 1)
+                ? ('其前 ' + w + ' 根')
+                : '其前一段比较窗口';
+            return '<div class="scan-summary" style="font-size:10px;color:#7a8399;">'
+                + '最近 ' + _scanRecentDays + ' 根 · 判据：其中成交额最大的一根 A'
+                + ' > ' + windowTxt + '的最高成交额（成交额创新高即放量，比较窗口不足则不参评）'
+                + '</div>';
+        }
+
         // 放量扫描结果渲染
         function renderFangliangScanResults(results, total, skipped, interrupted) {
             var body = document.getElementById("scan-body");
             var label = interrupted ? "（已中断）" : "";
             var sourceLabel = _scanSourceLabel();
             var html = '<div class="scan-summary">' + sourceLabel + ' <b>' + total + '</b> 只，跳过 <b>' + skipped + '</b> 只，扫描 <b>' + (total - skipped) + '</b> 只，放量 <b>' + results.length + '</b> 只' + label + '</div>';
+            // 口径披露：判据 + 比较窗口根数（SSOT 在后端配置）。
+            //   同连涨披露行一样，把「凭什么算放量」写在脸上，防「明明是巨量柱却没扫到」被当 bug。
+            html += _fangliangCaliberHtml();
             if (results.length === 0) {
                 html += '<div class="scan-no-result">当前周期下未发现放量标的</div>';
             } else {
@@ -10661,6 +10703,13 @@
                     _scanMinFloatMcServer = data.config.scan_min_float_mc;
                     var _mcInput2 = document.getElementById("scan-min-float-mc");
                     if (_mcInput2) _mcInput2.placeholder = String(_scanMinFloatMcServer);
+                }
+                // 放量扫描比较窗口根数：同样以后端 SCAN_FANGLIANG_WINDOW_BARS 为
+                // 单一事实源，仅用于结果面板的口径披露文案（不参与判定）。
+                if (data && data.config
+                    && typeof data.config.scan_fangliang_window_bars === 'number'
+                    && data.config.scan_fangliang_window_bars >= 1) {
+                    _scanFangliangWindowBars = data.config.scan_fangliang_window_bars;
                 }
             } catch (e) { /* 离线兜底：保留本地常量 */ }
         })();
