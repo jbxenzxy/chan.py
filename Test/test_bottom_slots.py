@@ -577,7 +577,15 @@ const out = {
   winA:     getRsiRange(wA),
   winB:     getRsiRange(wB),
   peak:     getRsiRange(peak),
+  // ⑷ 边界窗口：RSI 的自然定义域是 [0,100]，留白不得把刻度推到域外
+  userCase: getRsiRange([{ rsi: 0 }, { rsi: 95.229 }]),   // 上证指数日K 实测那对（0 与 95.229）
+  topEdge:  getRsiRange([{ rsi: 60 }, { rsi: 100 }]),
+  botEdge:  getRsiRange([{ rsi: 40 }, { rsi: 0 }]),
+  bothEdge: getRsiRange([{ rsi: 0 }, { rsi: 100 }]),
 };
+// 夹回之前的旧口径（同一窗口），用来钉住用户报的那两个数字从哪来
+const _span = 95.229 - 0;
+out.userCaseOld = { min: 0 - _span * 0.05, max: 95.229 + _span * 0.05 };
 out.peakSpan = Math.max.apply(null, peak.map(k => k.rsi))
              - Math.min.apply(null, peak.map(k => k.rsi));
 out.peakFillOld = out.peakSpan / 100;                        // 旧口径：固定 [0,100] 的占屏比
@@ -644,6 +652,53 @@ def test_rsi_style_and_range():
         bool(re.search(r"drawBottomSlotDivider\(si\);.*?drawBottomSlotLabel\(si, bottomCtx\);",
                        js, re.S)), "")
 
+    print("\n⑦ 标签行排版（chip 靠右 / 无边框 / 与正文同字号同字重同基线）")
+    chip_fn = strip_comments(fn_src(js, "getBottomSlotChipRect"))
+    rec("⑦", "chip 靠标签行**右端**：x 由 label.x + label.w 反推（不再钉在最左）",
+        bool(re.search(r"x:\s*label\.x \+ label\.w - \d+(\.\d+)? - \(tw \+ CHIP_PAD_X \* 2\)",
+                       chip_fn))
+        and "x: label.x + 2" not in chip_fn,
+        chip_fn.splitlines()[-1].strip())
+    chip_draw = strip_comments(fn_src(js, "drawBottomSlotChip"))
+    rec("⑦", "chip 形态 = 文字 + 底色，**无边框**（fillRect 在，strokeRect / strokeStyle 不在）",
+        "fillRect(chip.x" in chip_draw and "strokeRect" not in chip_draw
+        and "strokeStyle" not in chip_draw, "")
+    row = strip_comments(fn_src(js, "drawBottomSlotLabel"))
+    _tx = re.search(r"c\.textX = (\w+)\.x \+ (\d+);", row)
+    # ⚠ 只断言「字符串里有这句话」是不够的：P27 曾写成 c.textX = label.x + 4，
+    #   而该函数的局部名是 textArea ⇒ 静态断言全绿、真渲染 ReferenceError 整图崩掉。
+    #   故这里连「引用的标识符在函数内声明过」一起钉住。
+    rec("⑦", "标签行正文自**左端**起画，且引用的局部几何变量确实在函数内声明过",
+        bool(_tx) and ("const %s = " % _tx.group(1)) in row
+        and "chip.x + chip.w" not in js,
+        (_tx.group(0) if _tx else "未匹配") + " | 声明=%s" % (
+            ("const %s = " % _tx.group(1)) in row if _tx else None))
+    fns = {n: strip_comments(fn_src(js, n)) for n in
+           ("drawBottomSlotChip", "drawVolSlotLabel", "drawMacdSlotLabel", "drawRsiSlotLabel")}
+    fonts = set()
+    for _src in fns.values():
+        fonts.update(re.findall(r'ctx\.font = "([^"]+)"', _src))
+    rec("⑦", "chip 与三个指标的正文共用同一字体串（11px monospace，且都不含 bold）",
+        fonts == {"11px monospace"} and all("bold" not in v for v in fns.values()),
+        str(sorted(fonts)))
+    _mth = int(re.search(r"const MACD_TEXT_HEIGHT = (\d+);", js).group(1))
+    _chiph = re.search(r"const CHIP_H = (.+?);", js).group(1).strip()
+    _cy = int(re.search(r"y: label\.y \+ (\d+),", chip_fn).group(1))
+    _ch = int(re.search(r"h: CHIP_H - (\d+),", chip_fn).group(1))
+    _cb = int(re.search(r"chip\.y \+ chip\.h - (\d+)\)", fns["drawBottomSlotChip"]).group(1))
+    _the = [re.search(r"const lineY = textArea\.y \+ (\d+);", fns[n]).group(1)
+            for n in ("drawVolSlotLabel", "drawMacdSlotLabel", "drawRsiSlotLabel")]
+    _base = _cy + (_mth - _ch) - _cb
+    rec("⑦", "chip 文字与标签行正文**基线同值**（%d ≡ %s）：不是靠调视力凑的"
+        % (_base, _the[0]),
+        _chiph == "MACD_TEXT_HEIGHT" and len(set(_the)) == 1 and _base == int(_the[0]),
+        "chip=%d 正文=%s（三个指标必须同值）" % (_base, _the))
+    vol_fn = strip_comments(fn_src(js, "drawVolSlotLabel"))
+    rec("⑦", "类MACD 不再在右上角重复画「成交额 / 成交量」（chip 已标识品种口径）",
+        "textAlign = \"right\"" not in vol_fn
+        and "textArea.x + textArea.w - 4" not in js
+        and "isFuturesMode() ? '成交量' : '成交额'" in js, "")
+
     print("\n⑥ RSI 值域自适应（node 真执行 getRsiRange）")
     drv = RSI_RANGE_DRIVER % (fn_src(js, "rsiOf"), fn_src(js, "getRsiRange"))   # 两个 %s ⇒ 必须给元组
     d = run_node(drv, "⑥")
@@ -675,6 +730,26 @@ def test_rsi_style_and_range():
         "该窗真实波动 %.3f 点：旧占屏 %.4f / 新占屏 %.4f（%.0f×）"
         % (d["peakSpan"], d["peakFillOld"], d["peakFillNew"],
            d["peakFillNew"] / max(d["peakFillOld"], 1e-12)))
+    # ★ ⑷ 夹回 [0,100]：用户实测（上证指数日K）纵轴印出 99.99 / −4.76 —— 负值来自
+    #   留白（min − 0.05Δ），不是 RSI 本身。把同一窗口的旧/新口径都钉住。
+    _old_lo = "%.2f" % d["userCaseOld"]["min"]
+    _old_hi = "%.2f" % d["userCaseOld"]["max"]
+    rec("④", "用户报的两个数确系留白所致：同一窗口旧口径印 %s / %s，夹回后下沿为 0.00"
+        % (_old_hi, _old_lo),
+        _old_lo == "-4.76" and _old_hi == "99.99"
+        and abs(d["userCase"]["min"]) < 1e-12
+        and abs(d["userCase"]["max"] - 99.99045) < 1e-6,
+        "旧=[%s, %s] 新=%s" % (_old_lo, _old_hi, d["userCase"]))
+    rec("④", "值域夹回指标定义域 [0,100]：下沿不出现负值、上沿不超过 100",
+        d["topEdge"]["max"] == 100 and d["botEdge"]["min"] == 0
+        and d["bothEdge"] == {"min": 0, "max": 100},
+        "topEdge=%s botEdge=%s bothEdge=%s"
+        % (d["topEdge"], d["botEdge"], d["bothEdge"]))
+    _wins = ["empty", "noField", "allNull", "flat", "trend", "withNull",
+             "winA", "winB", "peak", "userCase", "topEdge", "botEdge", "bothEdge"]
+    rec("④", "任意窗口都不变量：0 ≤ min < max ≤ 100（有界量 + 不塌陷）",
+        all(0 <= d[w]["min"] < d[w]["max"] <= 100 for w in _wins),
+        str({w: (d[w]["min"], d[w]["max"]) for w in _wins}))
 
 
 # ══════════════════════════════════════════════════════════════════

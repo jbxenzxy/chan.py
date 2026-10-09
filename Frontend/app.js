@@ -75,7 +75,7 @@
         //   axis(area, range)     → 纵轴刻度
         //   label(textArea, c)    → 标签行正文（chip 由渲染层统一画）
         // 加一个指标 = 加一条记录 + 三个函数，几何与分派都不用再动。
-        // chip（标签行最左那个可点的指标名）用短名：成交额 / 成交量 ——
+        // chip（标签行**最右**那个可点的指标名）用短名：成交额 / 成交量 ——
         // 数值区前缀仍走既有 getVolLabel()（含 "(手)"），不动它的既有口径。
         const BOTTOM_INDICATORS = {
             vol: {
@@ -1149,7 +1149,9 @@
             if (window._isRenderingBottom) renderBottom(); else render();
         }
 
-        // 第 i 槽 chip 的矩形（标签行最左）。只依赖几何与文本宽度，不读鼠标状态。
+        // 第 i 槽 chip 的矩形（标签行**最右**）。只依赖几何与文本宽度，不读鼠标状态。
+        // 靠右放：chip 上写的就是该槽的指标短名（成交额 / 成交量 / MACD / RSI），
+        // 正好替代改造前在正文右侧又画一遍的「成交额 / 成交量」文字。
         function getBottomSlotChipRect(i) {
             const label = getBottomSlotLabelArea(i);
             const name = BOTTOM_INDICATORS[_slotAt(i)].tabLabel();
@@ -1157,7 +1159,7 @@
             ctx.font = "11px monospace";
             const tw = ctx.measureText(name).width;
             ctx.restore();
-            return { x: label.x + 2, y: label.y + 1,
+            return { x: label.x + label.w - 2 - (tw + CHIP_PAD_X * 2), y: label.y + 1,
                      w: tw + CHIP_PAD_X * 2, h: CHIP_H - 2, text: name };
         }
 
@@ -2057,6 +2059,12 @@
         // 毫无影响 —— 放大后被压成一条直线（通达信副图是「自动」纵轴：按当前显示区间
         // 的最大/最小值铺刻度，缩放时范围跟着变；另有「固定」模式才手填上下边界）。
         // 上下各留 5% 余量（与 getPriceRange 同口径）；整窗无 rsi（全缺值）回落 [0,100]。
+        // ★ 留白后必须**夹回 [0,100]**：RSI 是有界量，刻度落在定义域外一定是错的 ——
+        //   实测（上证指数日K）窗口里有 RSI = 0 的K线时，下沿被留白算成 −4.76 印在
+        //   纵轴上；反向（窗口含 RSI = 100，暖机段给过）上沿会越过 100。
+        //   RSI = 0 / 100 不是占位值，是本实现的**暖机口径**产物：见
+        //   App/AppUtils.calculate_rsi（前端只读 k.rsi）—— 前 period−1 根的 up/down
+        //   走简单平均，这批 diff 一根上涨都没有 ⇒ ups = 0 ⇒ rs = 0 ⇒ RSI = 0.0。
         function getRsiRange(klines) {
             if (!klines || !klines.length) return { min: 0, max: 100 };
             let min = Infinity, max = -Infinity;
@@ -2067,12 +2075,15 @@
                 if (v > max) max = v;
             });
             if (min === Infinity) return { min: 0, max: 100 };
+            let lo, hi;
             if (max - min < 1e-9) {          // 全等（含整窗恒 50）：给个不塌陷的窗口
                 const d = Math.max(1, Math.abs(max) * 0.05);
-                return { min: min - d, max: max + d };
+                lo = min - d; hi = max + d;
+            } else {
+                const margin = (max - min) * 0.05;
+                lo = min - margin; hi = max + margin;
             }
-            const margin = (max - min) * 0.05;
-            return { min: min - margin, max: max + margin };
+            return { min: Math.max(0, lo), max: Math.min(100, hi) };
         }
 
         // 值 → Y。翻转视图只翻 Y 方向，值原样参与计算（与 drawMacd 的 macdToY 同式）。
@@ -2188,18 +2199,17 @@
         }
 
         // ══ 底部指标区标签行（chip + 正文）══════════════════════════════════
-        // chip：标签行最左那个显示当前指标名的小方块，可点击切换（见 cycleBottomSlot）
+        // chip：标签行最右那个显示当前指标名的小方块，可点击切换（见 cycleBottomSlot）。
+        // 形态 = 文字 + 底色，**不画边框**。
         function drawBottomSlotChip(chip) {
             ctx.font = "11px monospace"; ctx.textAlign = "left";
             ctx.fillStyle = "rgba(255,255,255,0.08)";
             ctx.fillRect(chip.x, chip.y, chip.w, chip.h);
-            ctx.strokeStyle = "rgba(255,255,255,0.18)"; ctx.lineWidth = 1;
-            ctx.strokeRect(chip.x + 0.5, chip.y + 0.5, chip.w - 1, chip.h - 1);
             ctx.fillStyle = COLORS.textLight;
             ctx.fillText(chip.text, chip.x + CHIP_PAD_X, chip.y + chip.h - 2);
         }
 
-        // 画第 i 槽的标签行：chip + 该指标的正文（正文起点接在 chip 右侧）。
+        // 画第 i 槽的标签行：该指标的正文（自左端起）+ 右端的 chip。
         // hover 命中该标签行 → 取指向的K线；否则末根兜底（与改造前的 drawMacdLabel 同规则）。
         function drawBottomSlotLabel(i, c) {
             const textArea = getBottomSlotLabelArea(i);
@@ -2211,21 +2221,23 @@
                 targetK = c.klines[Math.min(idx, c.klines.length - 1)];
             }
             c.targetK = targetK || c.klines[c.klines.length - 1] || null;
-            c.textX = chip.x + chip.w + 6;
+            // 正文自标签行左端起（chip 已移到右端，正文不再接在 chip 后面）。
+            // 与 chip 的基线同源：正文 = textArea.y + 11，chip = label.y + 1 + (CHIP_H-2) - 2 = 同值。
+            c.textX = textArea.x + 4;
             BOTTOM_INDICATORS[_slotAt(i)].label(textArea, c);
         }
 
         // 成交额/量 槽的标签行：柱状图模式显示数值；类MACD 模式与价格MACD同构
-        // （黄白线 + 红绿柱），品种口径「成交额/成交量」置于指标区右上角。
+        // （黄白线 + 红绿柱）。品种口径由标签行**右端的 chip**（成交额 / 成交量）标识。
         function drawVolSlotLabel(textArea, c) {
             const targetK = c.targetK;
             if (!targetK) return;
             ctx.font = "11px monospace"; ctx.textAlign = "left";
             const lineY = textArea.y + 11;
             if (_volDisplayMode === 'macd') {
-                // 成交额/量 类MACD：标签与价格MACD同构（黄白线 + 红绿柱）。
-                // 左标签去掉「成交额MACD/成交量MACD」前缀，只留 MACD(12,26,9)；
-                // 品种口径「成交额/成交量」改置指标区右上角（见下方右对齐绘制）。
+                // 成交额/量 类MACD：正文与价格MACD同构（黄白线 + 红绿柱），
+                // 不带「成交额MACD/成交量MACD」前缀，只留 MACD(12,26,9)；
+                // 品种口径由标签行右端的 chip 标识（见 getBottomSlotChipRect）。
                 // 数值单位随成交额/量。
                 const vmacd = volMacdOf(targetK);
                 const vlabel = "MACD(12,26,9)";
@@ -2242,11 +2254,8 @@
                 const vBarIsUp = _isMirrorMode ? (vmacd.macd < 0) : (vmacd.macd >= 0);
                 ctx.fillStyle = vBarIsUp ? "#FF3C3C" : "#00F0F0";
                 ctx.fillText("BAR:" + formatVolMacdVal(vmacd.macd), vxPos, lineY);
-                // 指标区右上角：成交额/成交量 前缀（从原左标签移除，保留品种口径区分）
-                ctx.textAlign = "right";
-                ctx.fillStyle = COLORS.textLight;
-                ctx.fillText(isFuturesMode() ? "成交量" : "成交额", textArea.x + textArea.w - 4, lineY);
-                ctx.textAlign = "left";
+                // 品种口径不再在此重复右对齐画一遍：标签行右端的 chip 就是
+                // 「成交额 / 成交量」本身（tabLabel()），重复绘制纯属冗余。
             } else {
                 // 柱状指标模式：股票显示成交额，期货显示成交量（文字灰色，数字红/绿）
                 // 翻转视图：颜色对调，与翻转后的成交量柱一致

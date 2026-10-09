@@ -26,12 +26,13 @@
   ④ 真渲染对照（无头 Chrome，浏览器不在位时降级 SKIP）：起本地静态服务 +
      路由打桩喂真实快照 → 点槽 0 的 chip 循环到 成交额/量 → 逐项量像素：
         · 柱状图模式：底部无 DIF 白线 / DEA 橙线（≈0），有红/青柱
-        · 类MACD模式：白线 + 橙线显著出现，标签文本变成「成交额MACD(12,26,9)」
-          （期货为「成交量MACD(12,26,9)」，参数写法与「价格MACD」逐字同构）
+        · 类MACD模式：白线 + 橙线显著出现，正文变成「MACD(12,26,9)」（与「价格MACD」
+          逐字同构）；品种口径由标签行**右端 chip**（成交额 / 成交量）标识，不再另画
         且标签里的 DIF 数值 ≡ Python 侧 calculate_macd 在同一根K线上的结果；
         切回柱状图白线/橙线消失（双向实时）；翻转视图下白线/橙线照常在。
         另：槽位交互（默认双槽 / chip 单击循环 + 落盘 / 双击不切换且不重置视图）
-        与 RSI 槽的纵轴三档翻转（100/50/0 ↔ 0/50/100、中间恒 "50"）也在本节覆盖；
+        与 RSI 槽的自适应纵轴（上下档 = 可见窗口 rsi 的 min/max 各留 5%，再夹回
+        指标定义域 [0,100]；中间档 "50" 仅在值域含 50 时画）也在本节覆盖；
         几何不变式与 RSI 两份后端实现的数值对齐另有专门用例
         Test/test_bottom_slots.py。
 
@@ -296,10 +297,12 @@ def test_render_dispatch(failures):
           "drawMacd 支持可选取值函数，缺省仍取价格MACD（价格MACD行为不变）")
     check(failures, "if (_volDisplayMode === 'macd') {" in js
           and '"MACD(12,26,9)"' in js
-          and 'isFuturesMode() ? "成交量" : "成交额"' in js
-          and '(isFuturesMode() ? "成交量MACD" : "成交额MACD")' not in js,
-          "类MACD左标签为 MACD(12,26,9)（与价格MACD同构、去掉成交额/量前缀）；"
-          "前缀成交额/成交量改在指标区右上角绘制，原「成交额MACD」左标签已移除")
+          and "tabLabel: () => (isFuturesMode() ? '成交量' : '成交额')" in js
+          and '(isFuturesMode() ? "成交量MACD" : "成交额MACD")' not in js
+          and "textArea.x + textArea.w - 4" not in js,
+          "类MACD 正文为 MACD(12,26,9)（与价格MACD同构、去掉成交额/量前缀）；"
+          "品种口径由标签行右端 chip（tabLabel 的成交额/成交量）承载，"
+          "右上角重复绘制已移除")
     # 参数写法与「价格MACD」逐字同构（本轮明确要求：两处 12 26 9 的间隔一致）
     check(failures, 'MACD(12,26,9)' in js and '(12, 26, 9)' not in js,
           "参数写法统一为「12,26,9」（逗号后无空格），无带空格旧写法残留")
@@ -676,9 +679,10 @@ def test_real_render(failures):
                        st0["sub"] == ["macd"], str(st0["sub"])))
 
         # ── 2) chip 单击循环：槽 0 macd → rsi →（双击只算一次）→ vol ──
-        # chip 几何与实现同源：chip.x = label.x + 2、高 = MACD_TEXT_HEIGHT − 2、
-        # 宽 = measureText(name) + 12 ⇒ 取 label.x + 5 / 标签行竖直中心，必在 chip 内。
-        chip_x = box["x"] + layout["left"] + 5
+        # chip 几何与实现同源：chip 在标签行**右端**，右边界 = label.x + label.w − 2
+        # （= area_x + area_w − 2），高 = MACD_TEXT_HEIGHT − 2 ⇒ 取「右边界内缩 6px」/
+        # 标签行竖直中心，落点必在 chip 内（chip 宽 = measureText(name) + 12 ≥ 24px）。
+        chip_x = box["x"] + layout["left"] + area_w - 6
         chip0_y = box["y"] + b_top + 7
         page.mouse.click(chip_x, chip0_y)
         page.wait_for_timeout(250)
@@ -695,10 +699,11 @@ def test_real_render(failures):
         #   可测的 r≈34；压在柱体（深≈10 / 亮≈233）上会落到判据 [30,115] 之外。而该 y 恰好是
         #   槽 0 绘图窗下沿、柱体基线所在行 ⇒ 槽 0 画成交额柱时只有 ~10% 像素可测（0.104），
         #   那是量测口径与被测物的相互作用，不是「没画线」。此刻槽 0 = rsi（单线，不落基线）。
-        # x 限定在「无文字区」（chip 与标签文字都在最左 ~150px 内）避免误计。
+        # x 限定在「无文字区」避免误计：正文自左端起约 300px 内、chip 贴右端（宽 ≤40px），
+        # 故取 [x0=area_x+400, x1=area_x+area_w−70] 两头都让开。
         _div_y = s1_plot_top - layout["textH"]        # 标签行上沿 = 上一槽绘图窗下沿
         div_probe = page.evaluate(SLOT_DIVIDER_PROBE_JS,
-                                  dict(x0=area_x + 400, x1=area_x + area_w - 20,
+                                  dict(x0=area_x + 400, x1=area_x + area_w - 70,
                                        rows=[["div", _div_y],
                                              ["above", _div_y - 3.0],
                                              ["up2", _div_y - 6.0],
@@ -874,14 +879,23 @@ def test_real_render(failures):
                    str([t for t in bar_texts if ":" in t][:6])))
     exp_vlabel = "MACD(12,26,9)"
     vmacd_label = has(exp_vlabel, macd_texts)
-    checks.append((f"类MACD模式左标签为「{exp_vlabel}」+ DIF/DEA/BAR（前缀已移至右上角）",
+    checks.append((f"类MACD模式正文为「{exp_vlabel}」+ DIF/DEA/BAR（品种口径移到右端 chip）",
                    len(vmacd_label) == 1
                    and len(has("DIF:", macd_texts)) == 1
                    and len(has("DEA:", macd_texts)) == 1
                    and len(has("BAR:", macd_texts)) == 1,
                    str([t for t in macd_texts if ":" in t or "MACD" in t][:8])))
-    checks.append(("类MACD模式：前缀「成交额/成交量」置于指标区（与左标签 MACD(12,26,9) 分离，保留品种口径区分）",
-                   bool(has("成交额", macd_texts)) or bool(has("成交量", macd_texts)), ""))
+    # ⑴ 品种口径由 chip 承载：'成交额/成交量' 恰好一处（就是 chip 文本），且贴在标签行右端；
+    #    改造前是「正文前缀 + 右上角右对齐」各画一遍。
+    _chip_pos = [p for p in macd_pos if p[0] in ("成交额", "成交量")]
+    _body_x = [p[1] for p in macd_pos if p[0].startswith(exp_vlabel)]
+    checks.append(("类MACD：品种口径由标签行**右端**的 chip 唯一承载（'成交额/成交量' 恰一处且 x 在正文右侧）",
+                   len(_chip_pos) == 1 and bool(_body_x)
+                   and _chip_pos[0][1] > max(_body_x)
+                   and _chip_pos[0][1] > area_x + area_w * 0.8,
+                   "chip=%s 正文 x=%s 行右端=%.0f" % (
+                       [(p[0], round(p[1], 1)) for p in _chip_pos],
+                       [round(v, 1) for v in _body_x], area_x + area_w)))
     checks.append(("类MACD 标签的参数写法与价格MACD 逐字同构（12,26,9，逗号后无空格）",
                    bool(vmacd_label) and all("(12,26,9)" in t for t in vmacd_label)
                    and not any("(12, 26, 9)" in t for t in macd_texts), ""))
@@ -912,6 +926,16 @@ def test_real_render(failures):
         rv = [k["rsi"] for k in klines[s:e] if isinstance(k.get("rsi"), (int, float))]
         return min(rv), max(rv)
 
+    def _rsi_range(off, cnt):
+        """与 getRsiRange 同式：min/max 各留 5%，再夹回指标定义域 [0,100]。
+
+        夹回是必需项 —— 窗口里出现 RSI = 0（本实现的暖机口径会给 0）时，
+        留白会把下沿算成负值印在纵轴上（用户实测上证指数日K 的 −4.76）。
+        """
+        m, M = _exp_rsi_span(off, cnt)
+        margin = (M - m) * 0.05
+        return max(0.0, m - margin), min(100.0, M + margin)
+
     def _rsi_y_in(v, lo, hi, mirror):
         """与 rsiToY 同式。值域自适应后不能再按 v/100 折算槽高。"""
         frac = (v - lo) / (hi - lo)
@@ -941,16 +965,21 @@ def test_real_render(failures):
             return None
 
     d_lo, d_hi = _exp_rsi_span(view["off"], view["cnt"])
-    lo_n, hi_n = d_lo - (d_hi - d_lo) * 0.05, d_hi + (d_hi - d_lo) * 0.05
+    lo_n, hi_n = _rsi_range(view["off"], view["cnt"])
+    _clamped = lo_n <= 0.0 or hi_n >= 100.0
     has50 = lo_n <= 50 <= hi_n
     ax_n, ax_m = _axis_texts(macd_pos), _axis_texts(mirror_pos)
 
 
-    checks.append(("RSI 值域已改为自适应：跨度 %.2f（固定口径恒为 100），且 ≡ 数据跨度 ×1.1"
+    checks.append(("RSI 值域已改为自适应：跨度 %.2f（固定口径恒为 100）；未触定义域时 ≡ 数据跨度 ×1.1"
                    % (hi_n - lo_n),
                    (hi_n - lo_n) < 100
-                   and abs((hi_n - lo_n) - (d_hi - d_lo) * 1.1) < 1e-9,
-                   "值域=[%.2f, %.2f] 数据跨度=%.2f" % (lo_n, hi_n, d_hi - d_lo)))
+                   and (_clamped or abs((hi_n - lo_n) - (d_hi - d_lo) * 1.1) < 1e-9),
+                   "值域=[%.2f, %.2f] 数据跨度=%.2f 触边界=%s"
+                   % (lo_n, hi_n, d_hi - d_lo, _clamped)))
+    checks.append(("RSI 值域恒落在指标定义域内（0 ≤ min < max ≤ 100，留白不得推出界外）",
+                   0 <= lo_n < hi_n <= 100,
+                   "值域=[%.4f, %.4f]" % (lo_n, hi_n)))
     checks.append(("RSI 纵轴档数 = 3（含中位 50）/ 2（50 落在值域外时省掉中间档）",
                    len(ax_n) == (3 if has50 else 2) and len(ax_m) == (3 if has50 else 2),
                    "非翻转 %s / 翻转 %s；50 在窗内=%s" % (
@@ -1068,8 +1097,7 @@ def test_real_render(failures):
                                               "RSI(12)" in macd_texts)))
 
     # ── ⑻ 真实 wheel 缩放：RSI 纵轴值域必须随可见窗口变化（要求 ⑥ 的端到端证明） ──
-    z_lo, z_hi = _exp_rsi_span(zoom_view["off"], zoom_view["cnt"])
-    z_lo, z_hi = z_lo - (z_hi - z_lo) * 0.05, z_hi + (z_hi - z_lo) * 0.05
+    z_lo, z_hi = _rsi_range(zoom_view["off"], zoom_view["cnt"])
     z_ax = _axis_texts(zoom_pos)
     z_top = _as_num(z_ax[0][0]) if z_ax else None
     z_bot = _as_num(z_ax[-1][0]) if z_ax else None
