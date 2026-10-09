@@ -567,8 +567,10 @@ def part6():
           bool(re.search(r'value="backtest"[^>]*onchange="updateScanRecentDisabled\(\)"',
                          html)),
           "缺 onchange")
-    check("⑥ 静态资源版本号已 bump（v=73，防浏览器吃旧缓存；10-08 放量口径披露同步）",
-          'app.js?v=73' in html, "仍指向旧版本号")
+    check("⑥ 静态资源为裸 app.js 引用（?v= 人工版本号 2026-10-09 已废除，"
+          "缓存击穿由 FrontAPI no-cache 头接管）",
+          'app.js?v=' not in html and 'src="app.js"' in html,
+          "仍带 ?v= 版本号或缺 app.js 引用")
 
     appjs = io.open(APPJS, encoding="utf-8").read()
     check("⑥ localStorage 白名单收 backtest（否则重开弹窗回落到标注模式）",

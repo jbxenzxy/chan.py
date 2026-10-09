@@ -470,9 +470,10 @@ def part4():
           and _ad["scan_fangliang_window_bars"] == app_config.scan_fangliang_window_bars,
           "as_dict 缺键或取值不符，现有键=" + str(sorted(_ad.keys())))
 
-    check("④ 资源版本号已抬到 v=73（防浏览器吃旧缓存），且 v=72 及更早零残留",
-          'app.js?v=73' in html and 'app.js?v=72' not in html,
-          "版本号未同步")
+    check("④ 资源为裸 app.js 引用（?v= 人工版本号 2026-10-09 已废除，"
+          "缓存击穿由 FrontAPI no-cache 头接管）",
+          'app.js?v=' not in html and 'src="app.js"' in html,
+          "仍带 ?v= 版本号或缺 app.js 引用")
     check("④ 端点仍走 /api/health 的 config（披露取值的唯一来路）",
           "api_health" in io.open(os.path.join(ROOT, "FrontAPI.py"),
                                   encoding="utf-8").read(), "健康检查端点缺失")

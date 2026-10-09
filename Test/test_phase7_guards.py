@@ -46,7 +46,7 @@
   · worker SIGINT 屏蔽（③：Windows Ctrl+C 进程组传播实测问题）；
   · scan_pool_workers <= 0 按 CPU 自适应（③：仍钳制 [1,16]）；
   · collector 任务级 error 终态（⑤：worker 崩溃≠静默 done）；
-  · app.html app.js?v=8 缓存击穿（⑥）；
+  · app.html 裸引 app.js（?v= 已废除，缓存击穿由 FrontAPI no-cache 头接管，⑥）；
   · Test/smoke_phase7.py 独立冒烟工具（③：工具面存在且 spawn 安全）。
 
 运行：python Test/test_phase7_guards.py          # 校验（run_all 组件 14）
@@ -387,13 +387,13 @@ def test_frontend_polling(failures):
     # 中止立即传播：点击中止必须同步调用 /api/stocks/scan/{task_id}/cancel
     if '"/cancel", { method: "POST" }' not in src:
         bad.append("缺少 scan/tasks/{id}/cancel 调用（中止无法传播到 worker）")
-    # 缓存击穿（合并自对方交付）：app.html 版本号必须 ≥8
+    # 缓存契约（2026-10-09 拍板）：?v= 人工版本号废除，裸引 app.js；
+    # 缓存击穿由 FrontAPI no-cache 头接管。
     html = read("Frontend/app.html")
-    m = re.search(r"app\.js\?v=(\d+)", html)
-    if not m:
-        bad.append("app.html 缺少 app.js?v=N 引用")
-    elif int(m.group(1)) < 8:
-        bad.append(f"app.html app.js?v={m.group(1)}（阶段 7 前端已改，版本号应 ≥8）")
+    if "app.js?v=" in html:
+        bad.append("app.html 仍带 ?v= 版本号（已废除，应为裸 app.js）")
+    elif 'src="app.js' not in html:
+        bad.append("app.html 缺少 app.js 引用")
     if bad:
         failures.extend(f"前端轮询: {b}" for b in bad)
         for b in bad:
@@ -401,7 +401,7 @@ def test_frontend_polling(failures):
     else:
         print(f"[PASS] ⑥ 前端轮询契约: 提交 + 增量轮询（seq+1 推进）+ 三态终判 + "
               f"3 次熔断 + onData/onDone 回调；{n_calls} 处调用点全异步，旧 scan_one "
-              f"并发循环清零；app.html 缓存版本 v={m.group(1)}（击穿在位）")
+              f"并发循环清零；app.html 裸引 app.js（缓存头接管，击穿在位）")
 
 
 # ═══════════════════════════════════════════════════════════════════════

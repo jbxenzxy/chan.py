@@ -26,7 +26,8 @@
     （轮询 Worker），r8 应用户要求把 Worker 源码内嵌回 app.js（Blob
      URL）并把入口页改名 app.html —— 文件面回到 3 文件。
   ⑥ JS 语法校验：node --check（node 不在位时 SKIP 降级，不判 FAIL）。
-  ⑧ 缓存击穿纪律：app.html 以 app.js?v=7+ 引用（版本号只增不减）。
+  ⑧ 缓存契约：app.html 裸引 app.js（?v= 人工版本号 2026-10-09 已废除，
+    缓存击穿由 FrontAPI no-cache 头接管，护栏在 test_aol_ledger_display ⑤）。
   ⑨ 合并层完整（A 方案 AppState 访问层，双方案取长合并项）：
      ChanApp.state 的 31 个 getter/setter 访问器 + 8 个方法别名在位，
      访问器变量与 [STATE] 区块声明交叉一致，且不新增 window.* 绑定。
@@ -302,15 +303,14 @@ def test_node_syntax(failures):
 
 def test_cache_bust(failures):
     html = read(ENTRY_HTML)
-    m = re.search(r"app\.js\?v=(\d+)", html)
-    if not m:
-        failures.append("⑧ 缓存击穿: app.html 未以 ?v=N 引用 app.js")
-        print("[FAIL] ⑧ 缓存击穿纪律: 未找到 app.js?v=N 引用")
-    elif int(m.group(1)) < 7:
-        failures.append(f"⑧ 缓存击穿: 版本号 v={m.group(1)} < 7（阶段 6 交付应为 v7+）")
-        print(f"[FAIL] ⑧ 缓存击穿纪律: v={m.group(1)} < 7")
+    if "app.js?v=" in html:
+        failures.append("⑧ 缓存契约: app.html 仍带 ?v= 版本号（2026-10-09 已废除，应为裸 app.js）")
+        print("[FAIL] ⑧ 缓存契约: ?v= 版本号残留")
+    elif 'src="app.js' not in html:
+        failures.append("⑧ 缓存契约: app.html 未引用 app.js")
+        print("[FAIL] ⑧ 缓存契约: 缺少 app.js 引用")
     else:
-        print(f"[PASS] ⑧ 缓存击穿纪律: app.js?v={m.group(1)}（≥7，版本号只增不减）")
+        print("[PASS] ⑧ 缓存契约: app.html 裸引 app.js（缓存击穿由 FrontAPI no-cache 头接管）")
 
 
 # ═══════════════════════════════════════════════════════════════════════

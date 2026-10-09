@@ -934,9 +934,29 @@ async def _frontend_entry():
             detail=(f"[错误] 入口页缺失（{_entry}）：Frontend/ 下没有 app.html，"
                     f"前后端版本不同步 —— 请同步部署 Frontend/ 目录"
                     f"（r8 起入口页由 index.html 改名为 app.html）"))
-    return FileResponse(_entry)
+    # no-cache 是缓存契约的根：app.html 每次都回源校验（未变 304），浏览器才能
+    # 看到最新的前端引用。此前裸 FileResponse 无缓存头 → 启发式缓存把 app.html
+    # 本身缓存住，app.js?v=N 抬了也送不到浏览器（2026-10-09 拍板废除 ?v=N，
+    # 缓存击穿全部由服务端头接管，护栏见 Test/test_aol_ledger_display.py ⑤）。
+    return FileResponse(_entry, headers={
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    })
 
-app.mount("/", StaticFiles(directory=_frontend_dir), name="frontend")
+class _NoCacheStaticFiles(StaticFiles):
+    """静态资源统一带 no-cache（2026-10-09 用户拍板，废除 app.js?v=N 人工版本号）：
+    浏览器每次回源条件校验 —— 文件未变 304、变了 200 拿新内容，普通刷新即生效，
+    无需强刷。缓存击穿从「人肉抬版本号」改为「HTTP 头强制」，忘配即门禁红
+    （护栏见 Test/test_aol_ledger_display.py ⑤ 与 Test/test_phase6_guards.py ⑧）。"""
+
+    def file_response(self, *args, **kwargs):
+        resp = super().file_response(*args, **kwargs)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
+app.mount("/", _NoCacheStaticFiles(directory=_frontend_dir), name="frontend")
 
 
 # ═══════════════════════════════════════════════════════════════════════

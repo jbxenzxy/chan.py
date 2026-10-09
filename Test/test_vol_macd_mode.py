@@ -121,10 +121,10 @@ def test_setting_ui(failures):
     check(failures, "借用传统" not in tip and "得到黄白线" not in tip and "双击" not in tip,
           "分组下方不再有长篇说明文案（含义与双击语义不写进抽屉）",
           repr(tip[:80]))
-    # 缓存击穿（改了 app.js 必须抬版本号）
-    m = re.search(r'app\.js\?v=(\d+)', html)
-    check(failures, bool(m) and int(m.group(1)) >= 16,
-          "app.html 以 app.js?v=16+ 引用", f"实际 {m.group(1) if m else '无'}")
+    # 缓存契约（2026-10-09 拍板）：?v= 人工版本号废除，缓存由 FrontAPI no-cache 头接管
+    check(failures, "app.js?v=" not in html and 'src="app.js"' in html,
+          "app.html 裸引 app.js（?v= 已废除）",
+          "仍带 ?v= 版本号或缺 app.js 引用")
 
 
 # ═══════════════════════════════════════════════════════════════════

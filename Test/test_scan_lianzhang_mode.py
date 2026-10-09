@@ -436,10 +436,10 @@ def part4():
     n_opts = len(re.findall(r'name="scan-mode"\s+value="', html))
     check("④ 扫描模式选项总数为 7（标注/均线/放量/连涨/底分型/买-卖点/回测）",
           n_opts == 7, n_opts)
-    check("④ 资源版本号已抬到 v=73（防浏览器吃旧缓存），且 v=72 / v=71 / v=70 / v=69 零残留",
-          'app.js?v=73' in html and 'app.js?v=72' not in html
-          and 'app.js?v=71' not in html
-          and 'app.js?v=70' not in html and 'app.js?v=69' not in html, "版本号未同步")
+    check("④ 资源为裸 app.js 引用（?v= 人工版本号 2026-10-09 已废除，"
+          "缓存击穿由 FrontAPI no-cache 头接管）",
+          'app.js?v=' not in html and 'src="app.js"' in html,
+          "仍带 ?v= 版本号或缺 app.js 引用")
 
     appjs = io.open(APPJS, encoding="utf-8").read()
     check("④ localStorage 白名单收 lianzhang（否则重开弹窗回落到标注模式）",

@@ -16,8 +16,12 @@
   ④ 成交列表排序（后端投影保留，契约随之保留）：App/AppTrader.py 用
      `_all_trades[-10:]`（库内 exit_at 升序原序截尾），最新一条排在**最后**；
      `reversed(_all_trades)` 不得回潮；
-  ⑤ 资源版本号：app.html 引 app.js?v=73（改前端必须抬版本号，防缓存假象；
-     版本号是**单调递增**的，每次改前端都要同时抬这里的期望值与残留断言）；
+  ⑤ 缓存契约：app.html 以裸 `app.js` 引用（`?v=N` 人工版本号已于 2026-10-09
+     用户拍板废除——实测 app.html 本身无 no-cache 头时，新版本号根本送不到
+     浏览器，抬不抬都得强刷，机制形同虚设）；缓存击穿改由 FrontAPI 服务端
+     头接管：根路由 FileResponse 带 no-cache + `_NoCacheStaticFiles` 对静态
+     资源统一 no-cache（未变 304 / 变了 200，普通刷新即生效）。本组同时
+     钉死这三处（裸引用 / 根路由头 / 挂载子类）不许被删；
   ⑥ 账本与开关解耦（2026-09-22 二次拍板）：空态文案「（暂无账本数据）」，
      「（自动下单未运行）」零残留；AppTrader._read_engine_switch 收 out_dir、
      status() 回退 上次运行目录 → 默认目录；进程不在时 alerts/toasts 置空；
@@ -162,13 +166,19 @@ print("\n[3] 资源版本号")
 #   离场成交 close_filled 幂等打开面板，并在面板顶挂一行「刚刚：…」一次性
 #   提示；同时补记：v=71 那一轮上游只抬了测试钉死点、app.html 实际停在 v=69，
 #   故远端 HEAD 上本组曾是红的，本轮一并校正）。
-#   本组断言刻意保留"写死当前值"的形态 —— 它的作用正是强迫每次改前端的人意识到
-#   要抬版本号；放宽成"任意 v=\d+"就等于把这条守卫拆掉。
-check("app.html 引 app.js?v=73", 'app.js?v=73' in HTML, True)
-check("旧版本号 v=72 零残留", 'app.js?v=72' in HTML, False)
-check("旧版本号 v=71 零残留", 'app.js?v=71' in HTML, False)
-check("旧版本号 v=70 零残留", 'app.js?v=70' in HTML, False)
-check("旧版本号 v=69 零残留", 'app.js?v=69' in HTML, False)
+# 2026-10-09 用户拍板：?v=N 人工版本号废除（v=73 为末版，历史抬号记录见 git）——
+#   app.html 本身无 no-cache 头时新版本号根本送不到浏览器，抬不抬都得强刷；
+#   缓存击穿改由服务端接管（FrontAPI 根路由 no-cache + _NoCacheStaticFiles），
+#   以下断言钉死这三处不许回潮。
+check("app.html 裸引 app.js（?v= 版本号零残留）", 'app.js?v=' in HTML, False)
+check("app.html 仍有 app.js 引用（script 标签在位）", 'src="app.js"' in HTML, True)
+_frontapi_src = open(os.path.join(REPO, "FrontAPI.py"), encoding="utf-8").read()
+check("FrontAPI 根路由 FileResponse 带 no-cache（app.html 每次回源校验）",
+      "no-cache, no-store, must-revalidate" in _frontapi_src
+      and "FileResponse(_entry, headers=" in _frontapi_src, True)
+check("FrontAPI 静态挂载用 _NoCacheStaticFiles（app.js/app.css 统一 no-cache）",
+      "class _NoCacheStaticFiles" in _frontapi_src
+      and '_NoCacheStaticFiles(directory=_frontend_dir)' in _frontapi_src, True)
 
 # ═══ ④ 成交列表排序（后端投影保留：展示删减不动数据完整性） ═══
 print("\n[4] 成交列表：升序原序截尾，最新在最后（投影保留，前端不消费）")
