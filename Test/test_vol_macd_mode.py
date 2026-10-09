@@ -31,8 +31,9 @@
         且标签里的 DIF 数值 ≡ Python 侧 calculate_macd 在同一根K线上的结果；
         切回柱状图白线/橙线消失（双向实时）；翻转视图下白线/橙线照常在。
         另：槽位交互（默认双槽 / chip 单击循环 + 落盘 / 双击不切换且不重置视图）
-        与 RSI 槽的自适应纵轴（上下档 = 可见窗口 rsi 的 min/max 各留 5%，再夹回
-        指标定义域 [0,100]；中间档 "50" 仅在值域含 50 时画）也在本节覆盖；
+        与 RSI 槽的自适应纵轴（值域 = 可见窗口 rsi 的 min/max 各留 5%，再夹回
+        指标定义域 [0,100]；刻度 = 语义档位 {80,50,20} ∩ 值域；一档都不在窗内时
+        退化为值域上下沿）也在本节覆盖；
         几何不变式与 RSI 两份后端实现的数值对齐另有专门用例
         Test/test_bottom_slots.py。
 
@@ -980,29 +981,27 @@ def test_real_render(failures):
     checks.append(("RSI 值域恒落在指标定义域内（0 ≤ min < max ≤ 100，留白不得推出界外）",
                    0 <= lo_n < hi_n <= 100,
                    "值域=[%.4f, %.4f]" % (lo_n, hi_n)))
-    checks.append(("RSI 纵轴档数 = 3（含中位 50）/ 2（50 落在值域外时省掉中间档）",
-                   len(ax_n) == (3 if has50 else 2) and len(ax_m) == (3 if has50 else 2),
-                   "非翻转 %s / 翻转 %s；50 在窗内=%s" % (
-                       [p[0] for p in ax_n], [p[0] for p in ax_m], has50)))
-    top_n = _as_num(ax_n[0][0]) if ax_n else None
-    bot_n = _as_num(ax_n[-1][0]) if ax_n else None
-    top_m = _as_num(ax_m[0][0]) if ax_m else None
-    bot_m = _as_num(ax_m[-1][0]) if ax_m else None
-    checks.append(("RSI 纵轴上下档 = 可见窗口值域两端（≈min/max ±5%，不再是写死的 0/100）",
-                   None not in (top_n, bot_n, top_m, bot_m)
-                   and abs(top_n - hi_n) <= 0.011 and abs(bot_n - lo_n) <= 0.011
-                   and abs(top_m - lo_n) <= 0.011 and abs(bot_m - hi_n) <= 0.011,
-                   "非翻转 [%s, %s] / 翻转 [%s, %s] vs 期望 [%.2f, %.2f]" % (
-                       top_n, bot_n, top_m, bot_m, lo_n, hi_n)))
-    if has50 and len(ax_n) == 3:
-        checks.append(("RSI 纵轴中间那档恒为 \"50\"（不是 MACD 的零线 \"0\"；"
-                       "照抄 drawMacdAxis 会画成两遍 \"0\"）",
-                       ax_n[1][0] == "50" and ax_m[1][0] == "50",
-                       "%s / %s" % ([p[0] for p in ax_n], [p[0] for p in ax_m])))
-    else:
-        checks.append(("RSI 纵轴中间那档恒为 \"50\"（本样本 50 出窗，本条按档数判据覆盖）",
-                       len(ax_n) == 2 and "50" not in [p[0] for p in ax_n],
-                       "%s / %s" % ([p[0] for p in ax_n], [p[0] for p in ax_m])))
+    # 纵轴刻度 = 语义档位 {80, 50, 20} ∩ 当前值域；一档都不在窗内时退化为值域上下沿。
+    _LEVELS = (80.0, 50.0, 20.0)
+
+    def _exp_axis(lo, hi):
+        """与 drawRsiAxis 同式：先取落在值域内的语义档位，空集时改用值域上下沿。"""
+        lv = [v for v in _LEVELS if lo <= v <= hi]
+        return [str(int(v)) for v in lv] if lv else ["%.2f" % hi, "%.2f" % lo]
+
+    exp_n = _exp_axis(lo_n, hi_n)
+    lab_n = [p[0] for p in ax_n]
+    lab_m = [p[0] for p in ax_m]
+    checks.append(("RSI 纵轴档位 = 语义档位 {80,50,20} ∩ 当前值域（本窗 %s；不再是值域端点）"
+                   % "/".join(exp_n),
+                   lab_n == exp_n
+                   and sorted(lab_m, key=float) == sorted(exp_n, key=float),
+                   "非翻转 %s / 翻转 %s；值域=[%.2f, %.2f]" % (lab_n, lab_m, lo_n, hi_n)))
+    checks.append(('RSI 纵轴印 "50" ⟺ 50 落在值域内；且无写死的 "0" / "100"'
+                   '（照抄 drawMacdAxis 会把中间写成 "0" 并与下沿重合而印两遍）',
+                   ("50" in lab_n) == bool(has50)
+                   and "0" not in lab_n + lab_m and "100" not in lab_n + lab_m,
+                   "50 在窗内=%s；刻度集合=%s" % (bool(has50), lab_n)))
 
     _pos_ok, _pos_det = True, []
     for _tag, _axs, _mir in (("未翻转", ax_n, False), ("翻转", ax_m, True)):
@@ -1099,17 +1098,30 @@ def test_real_render(failures):
     # ── ⑻ 真实 wheel 缩放：RSI 纵轴值域必须随可见窗口变化（要求 ⑥ 的端到端证明） ──
     z_lo, z_hi = _rsi_range(zoom_view["off"], zoom_view["cnt"])
     z_ax = _axis_texts(zoom_pos)
-    z_top = _as_num(z_ax[0][0]) if z_ax else None
-    z_bot = _as_num(z_ax[-1][0]) if z_ax else None
+    z_exp = _exp_axis(z_lo, z_hi)
     checks.append(("wheel 缩放真的生效（viewCount 由 %s 缩到 %s）" % (view["cnt"], zoom_view["cnt"]),
                    int(zoom_view["cnt"]) < int(view["cnt"]),
                    "offset=%s→%s" % (view["off"], zoom_view["off"])))
-    checks.append(("放大后 RSI 纵轴值域随新窗口收窄（不再是恒定 0~100 ⇒ 曲线被压平）",
-                   None not in (z_top, z_bot)
-                   and abs(z_top - z_hi) <= 0.011 and abs(z_bot - z_lo) <= 0.011
+    checks.append(("放大后 RSI 纵轴档位 = {80,50,20} ∩ 新值域（本窗 %s）" % "/".join(z_exp),
+                   sorted([p[0] for p in z_ax], key=float) == sorted(z_exp, key=float)
                    and (z_hi - z_lo) < (hi_n - lo_n),
-                   "缩放前 [%.2f, %.2f]（跨度 %.2f）→ 缩放后 [%.2f, %.2f]（跨度 %.2f）" % (
-                       lo_n, hi_n, hi_n - lo_n, z_lo, z_hi, z_hi - z_lo)))
+                   "缩放前值域 [%.2f, %.2f]（跨度 %.2f）→ 缩放后 [%.2f, %.2f]（跨度 %.2f）；"
+                   "刻度 %s" % (lo_n, hi_n, hi_n - lo_n, z_lo, z_hi, z_hi - z_lo,
+                                [p[0] for p in z_ax])))
+    # 端到端证据换成「刻度 y 匹配新值域」：不再靠「上下档 = 值域两端」这个已被替换的前提。
+    _z_ok, _z_shift, _z_det = True, 0.0, []
+    for _p in z_ax:
+        _v = _as_num(_p[0])
+        _ey = _rsi_y_in(_v, z_lo, z_hi, False)
+        _oy = _rsi_y_in(_v, lo_n, hi_n, False)
+        _z_shift = max(_z_shift, abs(_ey - _oy))
+        _z_det.append("%s@%.1f(新值域%.1f 旧值域%.1f)" % (_p[0], _p[2] - 4, _ey, _oy))
+        if abs((_p[2] - 4) - _ey) > 2.5:
+            _z_ok = False
+    checks.append(("放大后每一档的 y 都与**新**值域口径一致（值域确实跟着可见窗口重算）",
+                   bool(z_ax) and _z_ok, "; ".join(_z_det)))
+    checks.append(("新旧值域下同一档位的 y 有明显位移（证明纵轴不是写死 0~100 的固定刻度）",
+                   _z_shift > 6.0, "最大位移 %.1f px" % _z_shift))
     checks.append(("放大后 RSI 折线仍在槽 1 绘图窗内（值域切换不会静默丢线）",
                    (zoom_probe.get("whitePix") or 0) > 200,
                    "缩放后白像素数=%s" % zoom_probe.get("whitePix")))

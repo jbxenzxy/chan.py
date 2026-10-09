@@ -26,7 +26,7 @@
      · 值域**中点**是翻转不动点且恰在绘图窗正中；值域关于 50 对称时 80 / 20 互换
      · drawRsi / drawRsiAxis 的所有 y 都走 rsiToY(v)，**禁**硬编码相对比例
        （area.h * 0.2 / * 0.8 / * 0.5 之类）
-     · drawRsiAxis 中间档恒 "50"（不是 MACD 的零线 "0"），且不沿用 zeroY 命名
+     · drawRsiAxis 档位 = 与参考线同源的语义档位 80 / 50 / 20（非 MACD 的零线 "0"）
      · RSI 分支不做颜色对调（只翻 Y 位置、不改颜色）
   ⑤ RSI 观感契约（颜色 / 参考线 / chip / 标签行分割线 / 点虚线）
      · 曲线色 ≡ MACD 白线色（COLORS.rsi == COLORS.dif）；标签数值用 COLORS.dif
@@ -540,14 +540,19 @@ def test_mirror():
         and "moveTo(area.x, y)" in loop.group(1)
         and "[70, 30]" not in draw,
         "loop=%s rsiToY=%d" % (bool(loop), draw.count("rsiToY(")))
-    rec("④", "drawRsiAxis 三档的 y 全部走 rsiToY（不是手写 topVal / botVal 位置）",
-        axis.count("rsiToY(") == 3, "rsiToY 调用 %d 次" % axis.count("rsiToY("))
-    rec("④", "drawRsiAxis 中间档恒为字符串 \"50\"，且不沿用 MACD 的 zeroY 命名",
-        '"50"' in axis and "zeroY" not in axis and "50" in axis,
-        axis.replace("\n", " ")[:150])
-    rec("④", "drawRsiAxis 的上下档取 range 两端（翻转时换位，不是常量 100/0 写死）",
-        "const topVal = _isMirrorMode ? range.min : range.max;" in axis
-        and "const botVal = _isMirrorMode ? range.max : range.min;" in axis, "")
+    _ft_all = axis.count("ctx.fillText(")
+    _ft_y = len(re.findall(r"ctx\.fillText\([^;]*?rsiToY\(", axis, re.S))
+    rec("④", "每一档刻度的 y 都走 rsiToY（%d/%d 次；翻转只改 Y 方向，无需单独换位分支）"
+        % (_ft_y, _ft_all),
+        _ft_all >= 1 and _ft_y == _ft_all and "zeroY" not in axis, "")
+    rec("④", "纵轴档位 = 参考线同一组语义档位，且由 RSI_REF_VALUES 派生（无第二遍字面量）",
+        bool(re.search(r"const RSI_AXIS_LEVELS = RSI_REF_VALUES\.slice\(\)\.sort\(", js))
+        and "[80, 50, 20]" not in js and "[80,50,20]" not in js, "")
+    rec("④", "只印落在值域内的档位（与参考线的「出界不画」同一口径）",
+        "v >= range.min && v <= range.max" in axis, "")
+    rec("④", "一档都不在窗内时退化为值域上下沿（纵轴不留白；也无写死的 \"0\" / \"100\"）",
+        "range.max.toFixed(2)" in axis and "range.min.toFixed(2)" in axis
+        and '"0"' not in axis and '"100"' not in axis, "")
     rec("④", "RSI 分支不做颜色对调（只翻 Y 位置、不改颜色）：无涨跌色 / COLORS.up|down",
         all(k not in draw + axis for k in ("#FF3C3C", "#00F0F0", "COLORS.up", "COLORS.down")), "")
     rec("④", "RSI 折线为单色 COLORS.rsi（与红绿涨跌体系不冲突）",

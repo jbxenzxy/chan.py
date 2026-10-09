@@ -124,6 +124,9 @@
         const CHIP_H = MACD_TEXT_HEIGHT;               // chip 高度（与标签行同高）
         const RSI_REF_VALUES = [50, 80, 20];           // RSI 参考线：中轴 50、超买 80、超卖 20
         const RSI_REF_DASH = [1, 3];                   // 三条线统一「细点虚线」：1px 点 + 3px 空隙
+        // RSI 纵轴刻度档位 = 参考线同一组值，只按上→下排序（单一来源，不再写第二遍字面量）。
+        //   刻度与参考线因此天然同位：标签画在哪一档，那条虚线就在哪一行。
+        const RSI_AXIS_LEVELS = RSI_REF_VALUES.slice().sort((a, b) => b - a);
 
         // 双窗口模式逐窗布局参数（fix#1+#2）：
         // 双窗时每个 canvas 高度被砍半，若沿用单窗的 PADDING/GAP 绝对值与 0.2 占比，
@@ -2945,24 +2948,24 @@
             ctx.fillText("0", volArea.x + volArea.w + 6, volArea.y + volArea.h - 4);
         }
 
-        // RSI 纵轴：上下两档 = 当前值域的 max / min（随可见窗口自适应，与 drawMacdAxis
-        //   的 topVal / botVal 同机制，数值带两位小数）；中间那档是语义中位 **50**。
-        // ⚠ 不能照抄 drawMacdAxis 的三段式再把中间写成值域中点：MACD 的 0 是值域
-        //   **内插的零线**（位置随数据变），而 RSI 的 0 是值域**端点**、中位是 **50**。
-        //   照抄会把中间那档写成 "0"（与下沿重合）⇒ "0" 被画两遍、中间缺 "50"。
-        //   三档的 y 一样全部走 rsiToY，与折线 / 参考线 / 中轴同源；变量也不叫 zeroY。
-        // 50 落在值域外时**不画**那一档：位置会算到绘图窗外，压上相邻区域。
+        // RSI 纵轴刻度：印**语义档位** RSI_AXIS_LEVELS（超买 80 / 中轴 50 / 超卖 20），
+        //   与那三条参考线同一组值、同一套 rsiToY ⇒ 每个数字都贴在它自己那条虚线上，
+        //   读图时「这条线是多少」不用猜。对标通达信公式管理器「坐标线位置」的档位做法
+        //   （通达信默认 自动：按值域铺一串整齐刻度；本实现取语义档位）。
+        // 只印落在当前值域内的档位；值域整段挤在两档之间（如 RSI 恒在 24~41）时一档都
+        //   不在窗内 ⇒ 退化为值域上下沿（两位小数），纵轴不留白。
+        // ⚠ 不能照抄 drawMacdAxis 的三段式：MACD 的 0 是值域**内插的零线**（位置随数据
+        //   变），RSI 这里是固定档位。照抄会把中间写成 "0"，且与下沿重合印两遍。
+        // 翻转视图无需单独换位分支：位置一律由 rsiToY 决定（镜像只改 Y 方向）。
         function drawRsiAxis(area, range) {
             ctx.fillStyle = COLORS.text; ctx.font = "11px monospace";
             ctx.textBaseline = "alphabetic"; ctx.textAlign = "left";
             const x = area.x + area.w + 6;
-            const topVal = _isMirrorMode ? range.min : range.max;
-            const botVal = _isMirrorMode ? range.max : range.min;
-            ctx.fillText(topVal.toFixed(2), x, rsiToY(topVal, area, range) + 4);
-            if (range.min <= 50 && 50 <= range.max) {
-                ctx.fillText("50", x, rsiToY(50, area, range) + 4);
-            }
-            ctx.fillText(botVal.toFixed(2), x, rsiToY(botVal, area, range) + 4);
+            const inRange = RSI_AXIS_LEVELS.filter(v => v >= range.min && v <= range.max);
+            const ticks = inRange.length
+                ? inRange.map(v => [String(v), v])
+                : [[range.max.toFixed(2), range.max], [range.min.toFixed(2), range.min]];
+            ticks.forEach(t => ctx.fillText(t[0], x, rsiToY(t[1], area, range) + 4));
         }
 
 
