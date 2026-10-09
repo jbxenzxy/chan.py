@@ -22,11 +22,21 @@
      · 双击切换已废除（无 _showVolume = !_showVolume）；chip 按 BOTTOM_ORDER 循环
      · 单击处理器用 click.detail > 1 忽略双击的第二次点击（不得连切两位）
   ④ 翻转视图一致性（node 抽 rsiToY 真执行 + 源码反锚点）
-     · rsiToY(v) 翻转前后之和 ≡ 2×area.y + area.h；50 是不动点；70 / 30 互换
+     · rsiToY(v) 翻转前后之和 ≡ 2×area.y + area.h —— 对**任意**值域成立（不再只对 [0,100]）
+     · 值域**中点**是翻转不动点且恰在绘图窗正中；值域关于 50 对称时 80 / 20 互换
      · drawRsi / drawRsiAxis 的所有 y 都走 rsiToY(v)，**禁**硬编码相对比例
-       （area.h * 0.3 / * 0.7 / * 0.5 之类）
+       （area.h * 0.2 / * 0.8 / * 0.5 之类）
      · drawRsiAxis 中间档恒 "50"（不是 MACD 的零线 "0"），且不沿用 zeroY 命名
      · RSI 分支不做颜色对调（只翻 Y 位置、不改颜色）
+  ⑤ RSI 观感契约（颜色 / 参考线 / chip / 标签行分割线 / 点虚线）
+     · 曲线色 ≡ MACD 白线色（COLORS.rsi == COLORS.dif）；标签数值用 COLORS.dif
+     · 三条参考线 = [50, 80, 20]，统一「细点虚线」[1, 3]（不再各自 setLineDash）
+     · chip 短名 'RSI'（标签行仍带参数 RSI(12):，与 MACD 槽「chip=MACD / 标签带参数」同构）
+     · 槽 1..n-1 的标签行上沿补分割线（槽 0 那条已由主图末条网格线给出，不叠画两遍）
+  ⑥ RSI 值域自适应（node 真执行 getRsiRange + 源码锚点）
+     · 值域 = 可见窗口 rsi 的 min/max ± 5%（随放大/滚动而变，不再固定 [0,100]）
+     · 空窗 / 无 rsi 字段 / 全缺值 → 回落 [0,100]；整窗恒等 → 不塌陷；缺值点被跳过
+     · 量化证明：窗口收窄到波动极小的区间，占屏比从 span/100 升到 span/(span×1.1)
 
 零网络、零浏览器、秒级。跑法：python Test/test_bottom_slots.py
 """
@@ -457,61 +467,79 @@ RSI_Y_DRIVER = r"""
 let _isMirrorMode = false;
 %s
 const area = { x: 10, y: 100, w: 500, h: 200 };
-const range = getRsiRange();
-const vals = [0, 30, 50, 70, 100];
-const out = { normal: {}, mirror: {}, range: range,
-              midPoint: area.y + area.h / 2 };
-_isMirrorMode = false;
-vals.forEach(v => { out.normal[v] = rsiToY(v, area, range); });
-_isMirrorMode = true;
-vals.forEach(v => { out.mirror[v] = rsiToY(v, area, range); });
-out.symSumExpect = 2 * area.y + area.h;
+// 三组值域：两组关于 50 对称（0~100 / 20~80）、一组窄值域且不对称（52~56）。
+// 镜像不变式必须对**任意**值域成立——值域已改为随可见窗口自适应，不再是固定 [0,100]。
+const cases = [
+  { key: '0|100',  min: 0,  max: 100, vals: [0, 20, 50, 80, 100] },
+  { key: '20|80',  min: 20, max: 80,  vals: [20, 35, 50, 65, 80] },
+  { key: '52|56',  min: 52, max: 56,  vals: [52, 53, 54, 55, 56] },
+];
+const out = { normal: {}, mirror: {}, mid: {},
+              midPoint: area.y + area.h / 2,
+              symSumExpect: 2 * area.y + area.h };
+cases.forEach(rc => {
+  const range = { min: rc.min, max: rc.max };
+  out.mid[rc.key] = (rc.min + rc.max) / 2;
+  _isMirrorMode = false;
+  rc.vals.forEach(v => { out.normal[rc.key + '|' + v] = rsiToY(v, area, range); });
+  _isMirrorMode = true;
+  rc.vals.forEach(v => { out.mirror[rc.key + '|' + v] = rsiToY(v, area, range); });
+});
 process.stdout.write(JSON.stringify(out));
 """
+
 
 
 def test_mirror():
     print("\n④ 翻转视图一致性（node 抽 rsiToY 真执行 + 源码反锚点）")
     js = read(APP_JS)
-    drv = RSI_Y_DRIVER % "\n".join([fn_src(js, "getRsiRange"), fn_src(js, "rsiToY")])
+    drv = RSI_Y_DRIVER % "\n".join([fn_src(js, "rsiToY")])
     d = run_node(drv, "④")
     if d is None:
         return
 
-    rec("④", "RSI 值域固定 {min:0, max:100}（不从数据推；这是注册表带 range() 钩子的原因）",
-        d["range"] == {"min": 0, "max": 100}, str(d["range"]))
-    sym = all(abs(d["normal"][str(v)] + d["mirror"][str(v)] - d["symSumExpect"]) < 1e-9
-              for v in (0, 30, 50, 70, 100))
-    rec("④", "镜像不变式：rsiToY(v) 翻转前后之和 ≡ 2×area.y + area.h（对任意 v 成立）", sym,
-        "expect=%.1f got=%s" % (
-            d["symSumExpect"],
-            {v: round(d["normal"][str(v)] + d["mirror"][str(v)], 3)
-             for v in (0, 30, 50, 70, 100)}))
-    rec("④", "50 是翻转不动点（前后同位、且恰在绘图窗正中）",
-        abs(d["normal"]["50"] - d["mirror"]["50"]) < 1e-9
-        and abs(d["normal"]["50"] - d["midPoint"]) < 1e-9,
-        "normal=%.4f mirror=%.4f mid=%.4f" % (
-            d["normal"]["50"], d["mirror"]["50"], d["midPoint"]))
-    rec("④", "70 / 30 在翻转下互换（rsiToY(70) 翻后 == rsiToY(30) 翻前，反之亦然）",
-        abs(d["mirror"]["70"] - d["normal"]["30"]) < 1e-9
-        and abs(d["mirror"]["30"] - d["normal"]["70"]) < 1e-9,
-        "mirror70=%.3f normal30=%.3f | mirror30=%.3f normal70=%.3f" % (
-            d["mirror"]["70"], d["normal"]["30"],
-            d["mirror"]["30"], d["normal"]["70"]))
-    rec("④", "0 / 100 是值域两端（翻转后互换到另一侧，不与中位混淆）",
-        abs(d["normal"]["100"] - (d["midPoint"] - 100)) < 1e-9
-        and abs(d["normal"]["0"] - (d["midPoint"] + 100)) < 1e-9,
-        "rsiToY(100)=%.1f rsiToY(0)=%.1f" % (d["normal"]["100"], d["normal"]["0"]))
+    keys = sorted(d["normal"].keys())
+    sym = all(abs(d["normal"][k] + d["mirror"][k] - d["symSumExpect"]) < 1e-9
+              for k in keys)
+    rec("④", "镜像不变式：rsiToY(v) 翻转前后之和 ≡ 2×area.y + area.h"
+        "（对 3 组值域共 %d 个组合成立，不再只对固定 [0,100]）" % len(keys), sym,
+        "expect=%.1f worst=%.3e" % (d["symSumExpect"],
+        max(abs(d["normal"][k] + d["mirror"][k] - d["symSumExpect"]) for k in keys)))
+
+    midok, middetail = True, []
+    for key, mid in sorted(d["mid"].items()):
+        n = d["normal"][key + "|" + str(mid)]
+        m = d["mirror"][key + "|" + str(mid)]
+        middetail.append("%s->%.3f" % (key, n))
+        if abs(n - d["midPoint"]) > 1e-9 or abs(m - d["midPoint"]) > 1e-9:
+            midok = False
+    rec("④", "值域中点是翻转不动点，且恰在绘图窗正中（对任意值域成立，不只是对称值域）",
+        midok, "mid=%.1f got=%s" % (d["midPoint"], middetail))
+
+    swap = all(abs(d["mirror"]["20|80|" + str(a)] - d["normal"]["20|80|" + str(b)]) < 1e-9
+               for a, b in ((80, 20), (65, 35)))
+    rec("④", "值域关于 50 对称时，80 / 20（及 65 / 35）在翻转下互换", swap,
+        "m80=%.3f n20=%.3f | m65=%.3f n35=%.3f" % (d["mirror"]["20|80|80"],
+        d["normal"]["20|80|20"], d["mirror"]["20|80|65"], d["normal"]["20|80|35"]))
+
+    narrow = d["normal"]["52|56|54"]
+    rec("④", "窄值域（52~56，跨度为固定 [0,100] 的 1/25）下镜像与不动点同样成立",
+        abs(narrow - d["midPoint"]) < 1e-9, "rsiToY(54)=%.3f mid=%.3f" % (narrow, d["midPoint"]))
 
     # ── 源码反锚点：三条水平线必须同源、不得硬编码比例、不得沿用 zeroY ──
     draw = fn_src(js, "drawRsi")
     axis = fn_src(js, "drawRsiAxis")
     ratio_hits = re.findall(r"area\.h\s*\*\s*0?\.\d+", draw + axis)
-    rec("④", "drawRsi / drawRsiAxis 里无 area.h * 0.3 / * 0.7 / * 0.5 之类硬编码比例",
+    rec("④", "drawRsi / drawRsiAxis 里无 area.h * 0.2 / * 0.8 / * 0.5 之类硬编码比例",
         not ratio_hits, str(ratio_hits))
-    rec("④", "drawRsi 的三条水平线全部走 rsiToY(v)（30/70 与 50 各 1 次以上）",
-        draw.count("rsiToY(") >= 3 and "[70, 30].forEach" in draw,
-        "rsiToY 调用 %d 次" % draw.count("rsiToY("))
+
+    loop = re.search(r"RSI_REF_VALUES\.forEach\(v => \{(.*?)\n            \}\);",
+                     draw, re.S)
+    rec("④", "三条参考线画在同一个 forEach(RSI_REF_VALUES) 里，且每条的 y 都走 rsiToY(v)",
+        bool(loop) and "rsiToY(v, area, range)" in loop.group(1)
+        and "moveTo(area.x, y)" in loop.group(1)
+        and "[70, 30]" not in draw,
+        "loop=%s rsiToY=%d" % (bool(loop), draw.count("rsiToY(")))
     rec("④", "drawRsiAxis 三档的 y 全部走 rsiToY（不是手写 topVal / botVal 位置）",
         axis.count("rsiToY(") == 3, "rsiToY 调用 %d 次" % axis.count("rsiToY("))
     rec("④", "drawRsiAxis 中间档恒为字符串 \"50\"，且不沿用 MACD 的 zeroY 命名",
@@ -527,6 +555,129 @@ def test_mirror():
 
 
 # ══════════════════════════════════════════════════════════════════
+# ⑤ 观感契约 + ⑥ 值域自适应
+# ══════════════════════════════════════════════════════════════════
+RSI_RANGE_DRIVER = r"""
+%s
+%s
+function _win(n, amp) {
+  return Array.from({ length: n }, (_, i) => ({ rsi: 50 + amp * Math.sin(i / 15) }));
+}
+const full = _win(300, 30);
+const wA = full.slice(0, 40);      // 正弦上升段
+const wB = full.slice(40, 80);     // 正弦下降段
+const peak = full.slice(22, 28);   // 正弦峰顶附近 6 根：真实波动不到 1 点（旧口径下就是直线）
+const out = {
+  empty:    getRsiRange([]),
+  noField:  getRsiRange([{ close: 1 }, { close: 2 }]),
+  allNull:  getRsiRange([{ rsi: null }, { rsi: undefined }]),
+  flat:     getRsiRange([50, 50, 50, 50].map(v => ({ rsi: v }))),
+  trend:    getRsiRange([40, 45, 50, 55, 60].map(v => ({ rsi: v }))),
+  withNull: getRsiRange([{ rsi: null }, { rsi: 30 }, { rsi: 70 }]),
+  winA:     getRsiRange(wA),
+  winB:     getRsiRange(wB),
+  peak:     getRsiRange(peak),
+};
+out.peakSpan = Math.max.apply(null, peak.map(k => k.rsi))
+             - Math.min.apply(null, peak.map(k => k.rsi));
+out.peakFillOld = out.peakSpan / 100;                        // 旧口径：固定 [0,100] 的占屏比
+out.peakFillNew = out.peakSpan / (out.peak.max - out.peak.min);   // 新口径：自适应值域
+process.stdout.write(JSON.stringify(out));
+"""
+
+
+def test_rsi_style_and_range():
+    print("\n⑤ RSI 观感契约（颜色 / 参考线 / chip / 分割线 / 点虚线）")
+    js = read(APP_JS)
+
+    # ① 曲线色 = MACD 白线色；标签数值同色
+    dif = re.search(r"\bdif:\s*\"([^\"]+)\"", js)
+    rsi = re.search(r"\brsi:\s*\"([^\"]+)\"", js)
+    rec("①", "RSI 曲线色 ≡ MACD 白线色（COLORS.rsi 与 COLORS.dif 取同一色值）",
+        bool(dif and rsi and dif.group(1).upper() == rsi.group(1).upper()),
+        "dif=%s rsi=%s" % (dif.group(1) if dif else None, rsi.group(1) if rsi else None))
+    lbl = fn_src(js, "drawRsiSlotLabel")
+    rec("①", "标签数值用 MACD DIF 的白（COLORS.dif），不再用 COLORS.rsi",
+        "ctx.fillStyle = COLORS.dif;" in lbl and "COLORS.rsi" not in lbl, "")
+
+    # ② 参考线 50 / 80 / 20
+    m = re.search(r"const RSI_REF_VALUES = \[([^\]]*)\];", js)
+    got = [int(x) for x in m.group(1).split(",")] if m else []
+    rec("②", "参考线取值 = [50, 80, 20]（中轴 + 超买 80 + 超卖 20，与通达信常见 RSI 副图一致）",
+        got == [50, 80, 20], str(got))
+    draw = strip_comments(fn_src(js, "drawRsi"))
+    rec("②", "旧的 30 / 70 两线硬编码已清零，三条线统一从 RSI_REF_VALUES 取",
+        "[70, 30]" not in draw and "[30, 70]" not in draw and "RSI_REF_VALUES" in draw, "")
+
+    # ⑤ 三条线统一「细点虚线」
+    m = re.search(r"const RSI_REF_DASH = \[([^\]]*)\];", js)
+    dv = [int(x) for x in m.group(1).split(",")] if m else []
+    rec("⑤", "三条线统一「细点虚线」：1px 点 + 3px 空隙（RSI_REF_DASH = [1, 3]）",
+        dv == [1, 3], str(dv))
+    rec("⑤", "参考线与中轴共用同一条线型（不再各自 setLineDash；旧 [4, 4] 已清零）",
+        draw.count("setLineDash(RSI_REF_DASH)") == 1 and "[4, 4]" not in draw
+        and "const midY" not in draw,
+        "dash=%d midY=%s" % (draw.count("setLineDash(RSI_REF_DASH)"),
+                             "const midY" in draw))
+    rec("⑤", "50 中轴也走虚线（三条线全部点虚线，只靠明度区分：中轴 0.2 / 超买超卖 0.15）",
+        "rgba(255,255,255,0.2)" in draw and "rgba(255,255,255,0.15)" in draw, "")
+    rec("⑥", "参考线越界不画（值域自适应后 20 / 80 可能整体落在窗外）",
+        "if (v < range.min || v > range.max) return;" in draw, "")
+
+    # ③ chip 短名
+    rec("③", "chip 短名为 RSI（去掉参数），标签行仍带参数 RSI(12):（与 MACD「chip=MACD /"
+        " 标签=MACD(12,26,9)」同构）",
+        "tabLabel: () => 'RSI'," in js and "tabLabel: () => 'RSI(12)'" not in js
+        and 'ctx.fillText("RSI(12):"' in lbl, "")
+
+    # ④ 槽标签行上沿分割线
+    div = fn_src(js, "drawBottomSlotDivider")
+    rec("④", "新增 drawBottomSlotDivider(i)：画在 getBottomSlotLabelArea(i).y，颜色同网格线",
+        "getBottomSlotLabelArea(i)" in div and "COLORS.grid" in div
+        and ".y" in div, div.replace("\n", " ")[:120])
+    mloop = re.search(r"for \(let si = 1; si < slotCount; si\+\+\) \{[^}]*"
+                      r"drawBottomSlotDivider\(si\);", js)
+    rec("④", "只为 i ≥ 1 的槽补分割线（槽 0 那条已由主图末条网格线给出，避免叠画变亮）",
+        bool(mloop) and js.count("drawBottomSlotDivider(si)") == 1,
+        "calls=%d" % js.count("drawBottomSlotDivider(si)"))
+    rec("④", "分割线在 _renderChart 的槽位绘制段内（底部区单独重绘时也走同一条路径）",
+        bool(re.search(r"drawBottomSlotDivider\(si\);.*?drawBottomSlotLabel\(si, bottomCtx\);",
+                       js, re.S)), "")
+
+    print("\n⑥ RSI 值域自适应（node 真执行 getRsiRange）")
+    drv = RSI_RANGE_DRIVER % (fn_src(js, "rsiOf"), fn_src(js, "getRsiRange"))   # 两个 %s ⇒ 必须给元组
+    d = run_node(drv, "⑥")
+    if d is None:
+        return
+
+    rec("⑥", "空窗口 / 无 rsi 字段 / 全为缺值 → 回落 {min:0,max:100}（不塌陷、不 NaN）",
+        d["empty"] == {"min": 0, "max": 100}
+        and d["noField"] == {"min": 0, "max": 100}
+        and d["allNull"] == {"min": 0, "max": 100},
+        "empty=%s noField=%s allNull=%s" % (d["empty"], d["noField"], d["allNull"]))
+    rec("⑥", "值域 = 可见窗口 rsi 的 min / max 各留 5% 余量（与 getPriceRange 同口径）",
+        abs(d["trend"]["min"] - 39.0) < 1e-9 and abs(d["trend"]["max"] - 61.0) < 1e-9,
+        str(d["trend"]))
+    rec("⑥", "缺值点被跳过，不参与 min / max",
+        abs(d["withNull"]["min"] - 28.0) < 1e-9 and abs(d["withNull"]["max"] - 72.0) < 1e-9,
+        str(d["withNull"]))
+    rec("⑥", "整窗恒等（含恒 50 的平线）→ 窗口不塌陷（span > 0 且含该值）",
+        d["flat"]["max"] - d["flat"]["min"] > 0
+        and d["flat"]["min"] <= 50 <= d["flat"]["max"], str(d["flat"]))
+    rec("⑥", "值域随可见窗口 **变化**（缩放 / 滚动即变；固定 [0,100] 时两者恒等）",
+        d["winA"] != d["winB"]
+        and (d["winA"]["max"] - d["winA"]["min"]) < 100
+        and (d["winB"]["max"] - d["winB"]["min"]) < 100,
+        "A=%s B=%s" % (d["winA"], d["winB"]))
+    rec("⑥", "放大到波动极小的区间：RSI 占屏比由 %.1f%% 升到 %.1f%%（不再被压成直线）"
+        % (d["peakFillOld"] * 100, d["peakFillNew"] * 100),
+        d["peakFillNew"] > 0.85 and d["peakFillNew"] > 50 * d["peakFillOld"],
+        "该窗真实波动 %.3f 点：旧占屏 %.4f / 新占屏 %.4f（%.0f×）"
+        % (d["peakSpan"], d["peakFillOld"], d["peakFillNew"],
+           d["peakFillNew"] / max(d["peakFillOld"], 1e-12)))
+
+
+# ══════════════════════════════════════════════════════════════════
 def main():
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -539,6 +690,7 @@ def main():
     test_rsi_numeric()
     test_chip_and_dblclick()
     test_mirror()
+    test_rsi_style_and_range()
     print("-" * 64)
     if _failed:
         for f in _failed:

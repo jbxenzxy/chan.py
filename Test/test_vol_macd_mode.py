@@ -416,33 +416,84 @@ RSI_LINE_PROBE_JS = r"""
   const h = Math.max(1, Math.round((y1 - y0) * dpr));
   const img = g.getImageData(Math.round(x0 * dpr), Math.round(y0 * dpr), w, h).data;
   const rows = [];
-  let cyanMin = null, cyanMax = null, cyanRows = 0, cyanPix = 0;
+  let whiteMin = null, whiteMax = null, whiteRows = 0, whitePix = 0, cyanPix = 0;
   for (let yy = 0; yy < h; yy++) {
-    let cnt = 0, cy = 0;
+    let cnt = 0, wy = 0, cy = 0;
     for (let xx = 0; xx < w; xx++) {
       const i = (yy * w + xx) * 4;
       const r = img[i], gg = img[i + 1], b = img[i + 2], a = img[i + 3];
       if (a < 8) continue;
       // 水平参考线 / 中轴：底色 #1a1a2e(r=26) 上叠 rgba(255,255,255,0.15~0.2)。
       // ⚠ 下界必须低到 33：1px 线落在半像素处时抗锯齿会把行覆盖拆成 ~0.4 / 0.6，
-      //   峰值 r 只有 40~46 —— 用 48 会把这种行整条滤掉（30% 参考线就是这样丢的）。
+      //   峰值 r 只有 40~46 —— 用 48 会把这种行整条滤掉。
+      // ⚠ 参考线现在统一是「细点虚线」（1px 点 + 3px 空隙）⇒ 同行覆盖率只有实线的
+      //   ~1/4，判据不能再沿用实线口径的 0.20，已下调并由调用方另行量证「点线 vs 实线」。
       if (Math.abs(r - gg) <= 6 && (b - r) >= 4 && (b - r) <= 26
           && r >= 33 && r <= 115) cnt++;
-      // RSI 折线 #22D3EE（青）：g、b 远大于 r
+      // RSI 折线：与 MACD 白线同色 #FFFFFF（r=g=b≈255）—— 靠「近白」与上面那类灰线区分
+      if (r >= 200 && gg >= 200 && b >= 200) wy++;
+      // 旧青蓝 #22D3EE 残留探测（改白之后应为 0）
       if (gg > 100 && b > 100 && r + 40 < gg && r + 40 < b) cy++;
     }
     rows.push(cnt / w);
-    if (cy > 0) {
-      cyanRows++; cyanPix += cy;
+    if (wy > 0) {
+      whiteRows++; whitePix += wy;
       const y = y0 + yy / dpr;
-      if (cyanMin === null || y < cyanMin) cyanMin = y;
-      if (cyanMax === null || y > cyanMax) cyanMax = y;
+      if (whiteMin === null || y < whiteMin) whiteMin = y;
+      if (whiteMax === null || y > whiteMax) whiteMax = y;
     }
+    cyanPix += cy;
   }
-  return { rows, dpr, w, h, cyanMinY: cyanMin, cyanMaxY: cyanMax,
-           cyanRows, cyanPix, area: { x0, y0, x1, y1 } };
+  return { rows, dpr, w, h, whiteMinY: whiteMin, whiteMaxY: whiteMax,
+           whiteRows, whitePix, cyanPix, area: { x0, y0, x1, y1 } };
 }
 """
+
+
+# 槽位分割线探针（要求 ④）：判定「某 css y 处是否有一条**横贯全宽**的分割线」。
+#
+# 实现侧已保证分割线画在**槽内容之后**（见 _renderChart 里的顺序注释）—— 它的 y 同时是
+#   上一槽绘图窗的下沿、柱体基线所在行，画在前面会被柱体盖成断续。所以这里可以只量
+#   「整行覆盖率」：不必再按「上方几行是背景」做位掩码去绕开柱体（那套只能拿到 0.399，
+#   且会把矮柱的描边溢出当成合格列，无法自证）。
+#
+# 线判据 r ∈ [30, 115]（灰阶、比底色 #1a1a2e 的 r=26 亮、远暗于文字/柱体）：
+#   1px 线落在半像素处会把墨迹劈成 0.9 / 0.1 两行 ⇒ 对该 css y 的 floor / ceil 两个
+#   device row 取较优者。
+SLOT_DIVIDER_PROBE_JS = r"""
+(args) => {
+  const c = document.querySelector('#chart-container canvas');
+  if (!c) return { error: 'no canvas' };
+  const dpr = window.devicePixelRatio || 1;
+  const g = c.getContext('2d');
+  const x0 = Math.round(args.x0 * dpr), x1 = Math.round(args.x1 * dpr);
+  const w = Math.max(1, x1 - x0);
+  const isLine = (r, gg, b, a) => a >= 8 && r >= 30 && r <= 115
+        && Math.abs(r - gg) <= 6 && (b - r) >= 4 && (b - r) <= 26;
+  const res = { w: w, dpr: dpr, rows: {} };
+  for (const [tag, yCss] of args.rows) {
+    const rf = yCss * dpr;
+    const cand = Array.from(new Set([Math.floor(rf), Math.ceil(rf)]));
+    let best = { row: null, n: 0, ratio: 0 };
+    for (const row of cand) {
+      if (row < 0 || row >= c.height) continue;
+      const d = g.getImageData(x0, row, w, 1).data;
+      let n = 0;
+      for (let xx = 0; xx < w; xx++) {
+        const k = xx * 4;
+        if (isLine(d[k], d[k + 1], d[k + 2], d[k + 3])) n++;
+      }
+      const ratio = n / w;
+      if (ratio > best.ratio) best = { row: row, n: n, ratio: ratio };
+    }
+    res.rows[tag] = best;
+  }
+  return res;
+}
+"""
+
+
+
 
 
 def _launch_browser(pw):
@@ -639,6 +690,20 @@ def test_real_render(failures):
                        list(store.get("bottomSlots") or [])[:1] == ["rsi"],
                        str(store.get("bottomSlots"))))
 
+        # 槽 1 标签行上沿的分割线（要求 ④）：在**槽 0 = rsi** 的这一刻量。
+        # ⚠ COLORS.grid = rgba(255,255,255,0.04)（4% 不透明）：分隔线只有在**底色之上**才叠出
+        #   可测的 r≈34；压在柱体（深≈10 / 亮≈233）上会落到判据 [30,115] 之外。而该 y 恰好是
+        #   槽 0 绘图窗下沿、柱体基线所在行 ⇒ 槽 0 画成交额柱时只有 ~10% 像素可测（0.104），
+        #   那是量测口径与被测物的相互作用，不是「没画线」。此刻槽 0 = rsi（单线，不落基线）。
+        # x 限定在「无文字区」（chip 与标签文字都在最左 ~150px 内）避免误计。
+        _div_y = s1_plot_top - layout["textH"]        # 标签行上沿 = 上一槽绘图窗下沿
+        div_probe = page.evaluate(SLOT_DIVIDER_PROBE_JS,
+                                  dict(x0=area_x + 400, x1=area_x + area_w - 20,
+                                       rows=[["div", _div_y],
+                                             ["above", _div_y - 3.0],
+                                             ["up2", _div_y - 6.0],
+                                             ["below", _div_y + 3.0]]))
+
         # 双击 chip：不重置视图（§1.5 的核心）；且只前进一位（浏览器先发两次 click，
         # detail>1 的那次被忽略）—— 不得连切两位。
         view_before = page.evaluate("() => ({ off: window.ChanApp.state.viewOffset,"
@@ -661,7 +726,6 @@ def test_real_render(failures):
         bar_stats = page.evaluate(PIXEL_STATS_JS, region0)
         page.locator("#chart-container canvas").screenshot(
             path=os.path.join(shot_dir, "1_bar.png"))
-
         # ── 2) 打开设置抽屉（走真实齿轮按钮）→ 选「类MACD」 ──
         page.click("#btn-settings")
         page.wait_for_timeout(150)
@@ -717,6 +781,35 @@ def test_real_render(failures):
 
         view = page.evaluate("() => ({ off: window.ChanApp.state.viewOffset,"
                              " cnt: window.ChanApp.state.viewCount })")
+
+        # ── 4) 真实 wheel 缩放（要求 ⑥）：放大后 RSI 纵轴值域必须跟着可见窗口变 ──
+        # 走生产路径（canvas 的 wheel 监听 → onWheel → 改 viewCount → render），
+        # 不用 state 直接赋值，免得绕开缩放分支本身。
+        # ⚠ 先关设置抽屉：其背板 #bsp-filter-overlay（z-index 高于画布）会覆盖整屏，
+        #   不关的话 wheel 落在背板上、canvas 的监听一次都收不到（viewCount 纹丝不动）。
+        #   走生产路径关（抽屉右上角 × 就是 closeBspSettings）—— 不用 evaluate 直接调函数。
+        page.click("#bsp-filter-dialog .settings-drawer-close")
+        page.wait_for_timeout(200)
+        _ovl = page.evaluate("() => { const o = document.getElementById('bsp-filter-overlay');"
+                            " return o ? o.classList.contains('show') : null; }")
+        checks.append(("抽屉关闭后背板不再拦截画布（wheel 能落到 canvas 上）",
+                       _ovl is False, "#bsp-filter-overlay.show = %s" % _ovl))
+        page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] * 0.3)
+        page.wait_for_timeout(120)
+        for _ in range(5):
+            page.mouse.wheel(0, -600)      # deltaY < 0 ⇒ 放大（onWheel 每事件一档 1.15×）
+        page.wait_for_timeout(150)
+        # ⚠ 每个 wheel 事件都会触发一次重绘 ⇒ 文字记录会累积 6 份，z_ax[0] 会取到中间态。
+        #   先清空、再单独走最后一次缩放 —— zoom_pos 恰好只含**末次重绘**的刻度。
+        page.evaluate("() => { window.__drawnTexts.length = 0; window.__drawnTextPos.length = 0; }")
+        page.mouse.wheel(0, -600)
+        page.wait_for_timeout(300)
+        zoom_view = page.evaluate("() => ({ off: window.ChanApp.state.viewOffset,"
+                                  " cnt: window.ChanApp.state.viewCount })")
+        zoom_pos = page.evaluate("() => window.__drawnTextPos.slice()")
+        zoom_probe = page.evaluate(RSI_LINE_PROBE_JS,
+                                   dict(x0=area_x, x1=area_x + area_w,
+                                        y0=s1_plot_top, y1=s1_plot_bot))
         # 收尾：先解除 API 打桩再关浏览器 —— 关闭时若恰有被拦截的请求在飞，
         # sync 路由处理器会与 close 互等（详见 TEXT_RECORDER_JS 处的说明）。
         page.unroute_all(behavior="ignore")
@@ -810,86 +903,188 @@ def test_real_render(failures):
                    got_dif == "DIF:" + exp_dif,
                    f"前端标签 {got_dif!r} vs 基准 {'DIF:' + exp_dif!r}"))
 
-    # ── ⑶ 槽 1 = RSI(12)：纵轴三档 = 100/50/0 ↔ 翻转 0/50/100，中间恒 "50" ──
-    # 设计 §2.4.3：MACD 的 0 是**值域内插零线**（位置随数据变、中位是 0）；
-    # RSI 的 0 是**值域端点**、中位是 **50**。照抄 drawMacdAxis 的三段式会得到
-    # 「"0" 画两遍 + 中间缺 "50"」—— 下面的判据专门钉这一点。
-    def _rsi_axis(pos):
-        """槽 1 绘图窗内、内容为 0/50/100 的文字，按 y 升序（上→下）。"""
-        return sorted([p for p in pos
-                       if p[0] in ("0", "50", "100")
-                       and s1_plot_top - 8 <= p[2] <= s1_plot_bot + 8],
-                      key=lambda p: p[2])
+    # ── ⑶ RSI 纵轴：上下档 = 当前可见窗口的**自适应**值域，中间档 = 语义中位 50 ──
+    # 与实现同一条公式：可见窗口 = klines[start : start+viewCount+2]（getVisibleKlines 的 +2），
+    # 值域 = 该窗 rsi 的 min/max 各留 5%。这里用**喂给页面的那份** served 副本现算。
+    def _exp_rsi_span(off, cnt):
+        s = max(0, int(off))
+        e = min(total, s + int(cnt) + 2)
+        rv = [k["rsi"] for k in klines[s:e] if isinstance(k.get("rsi"), (int, float))]
+        return min(rv), max(rv)
 
-    ax_n, ax_m = _rsi_axis(macd_pos), _rsi_axis(mirror_pos)
-    checks.append(("RSI 纵轴三档 = 100 / 50 / 0（自上而下，各一次）",
-                   [p[0] for p in ax_n] == ["100", "50", "0"],
-                   str([(p[0], round(p[2], 1)) for p in ax_n])))
-    checks.append(("翻转后 RSI 纵轴 = 0 / 50 / 100（100 与 0 换位、各一次）",
-                   [p[0] for p in ax_m] == ["0", "50", "100"],
-                   str([(p[0], round(p[2], 1)) for p in ax_m])))
-    checks.append(("RSI 纵轴中间那档恒为 \"50\"（不是 MACD 的零线 \"0\"；"
-                   "照抄 drawMacdAxis 会画成两遍 \"0\"）",
-                   len(ax_n) == 3 and ax_n[1][0] == "50"
-                   and len(ax_m) == 3 and ax_m[1][0] == "50",
-                   str([p[0] for p in ax_n]) + " / " + str([p[0] for p in ax_m])))
+    def _rsi_y_in(v, lo, hi, mirror):
+        """与 rsiToY 同式。值域自适应后不能再按 v/100 折算槽高。"""
+        frac = (v - lo) / (hi - lo)
+        return (s1_plot_top + frac * slotH) if mirror \
+            else (s1_plot_top + slotH - frac * slotH)
+
+    def _axis_texts(pos):
+        """槽 1 绘图窗内的纵轴刻度文字，按 y 升序（上→下）。
+
+        纵轴刻度由 drawRsiAxis 以 fillText(text, x, rsiToY(v) + 4) 绘制 ⇒ 基线 −4 就是刻度 y。
+        必须按「基线 −4 落在绘图窗内」筛、且文本必须是纯数字：标签行的 'RSI(12):' /
+        chip 的 'RSI' / 槽值 '51.40' 画在 y ≈ 槽上沿 − 3（基线只差 3px），只按原始 y 取
+        会把它们混进来（曾因此在本函数下游 _as_num 拿到 'RSI(12):' 而 TypeError）。
+        """
+        out = []
+        for p in pos:
+            if _as_num(p[0]) is None:
+                continue
+            if s1_plot_top - 2.0 <= (p[2] - 4.0) <= s1_plot_bot + 2.0:
+                out.append(p)
+        return sorted(out, key=lambda p: p[2])
+
+    def _as_num(t):
+        try:
+            return float(t)
+        except ValueError:
+            return None
+
+    d_lo, d_hi = _exp_rsi_span(view["off"], view["cnt"])
+    lo_n, hi_n = d_lo - (d_hi - d_lo) * 0.05, d_hi + (d_hi - d_lo) * 0.05
+    has50 = lo_n <= 50 <= hi_n
+    ax_n, ax_m = _axis_texts(macd_pos), _axis_texts(mirror_pos)
+
+
+    checks.append(("RSI 值域已改为自适应：跨度 %.2f（固定口径恒为 100），且 ≡ 数据跨度 ×1.1"
+                   % (hi_n - lo_n),
+                   (hi_n - lo_n) < 100
+                   and abs((hi_n - lo_n) - (d_hi - d_lo) * 1.1) < 1e-9,
+                   "值域=[%.2f, %.2f] 数据跨度=%.2f" % (lo_n, hi_n, d_hi - d_lo)))
+    checks.append(("RSI 纵轴档数 = 3（含中位 50）/ 2（50 落在值域外时省掉中间档）",
+                   len(ax_n) == (3 if has50 else 2) and len(ax_m) == (3 if has50 else 2),
+                   "非翻转 %s / 翻转 %s；50 在窗内=%s" % (
+                       [p[0] for p in ax_n], [p[0] for p in ax_m], has50)))
+    top_n = _as_num(ax_n[0][0]) if ax_n else None
+    bot_n = _as_num(ax_n[-1][0]) if ax_n else None
+    top_m = _as_num(ax_m[0][0]) if ax_m else None
+    bot_m = _as_num(ax_m[-1][0]) if ax_m else None
+    checks.append(("RSI 纵轴上下档 = 可见窗口值域两端（≈min/max ±5%，不再是写死的 0/100）",
+                   None not in (top_n, bot_n, top_m, bot_m)
+                   and abs(top_n - hi_n) <= 0.011 and abs(bot_n - lo_n) <= 0.011
+                   and abs(top_m - lo_n) <= 0.011 and abs(bot_m - hi_n) <= 0.011,
+                   "非翻转 [%s, %s] / 翻转 [%s, %s] vs 期望 [%.2f, %.2f]" % (
+                       top_n, bot_n, top_m, bot_m, lo_n, hi_n)))
+    if has50 and len(ax_n) == 3:
+        checks.append(("RSI 纵轴中间那档恒为 \"50\"（不是 MACD 的零线 \"0\"；"
+                       "照抄 drawMacdAxis 会画成两遍 \"0\"）",
+                       ax_n[1][0] == "50" and ax_m[1][0] == "50",
+                       "%s / %s" % ([p[0] for p in ax_n], [p[0] for p in ax_m])))
+    else:
+        checks.append(("RSI 纵轴中间那档恒为 \"50\"（本样本 50 出窗，本条按档数判据覆盖）",
+                       len(ax_n) == 2 and "50" not in [p[0] for p in ax_n],
+                       "%s / %s" % ([p[0] for p in ax_n], [p[0] for p in ax_m])))
+
+    _pos_ok, _pos_det = True, []
+    for _tag, _axs, _mir in (("未翻转", ax_n, False), ("翻转", ax_m, True)):
+        for _p in _axs:
+            _ey = _rsi_y_in(_as_num(_p[0]), lo_n, hi_n, _mir)
+            _pos_det.append("%s:%s@%.1f(期望%.1f)" % (_tag, _p[0], _p[2] - 4, _ey))
+            if abs((_p[2] - 4) - _ey) > 2.5:
+                _pos_ok = False
+    checks.append(("RSI 每档刻度的 y 都 ≡ rsiToY(该档值)（与折线 / 参考线同一套 y 口径）",
+                   _pos_ok, "; ".join(_pos_det)))
+
     n_by = {p[0]: p[2] - 4 for p in ax_n}
     m_by = {p[0]: p[2] - 4 for p in ax_m}
-    tick50 = {}
-    if len(n_by) == 3 and len(m_by) == 3:
-        checks.append(("翻转是 Y 轴镜像：每档刻度 y 前后之和 ≡ 2×槽上沿 + 槽高",
-                       all(abs((n_by[v] + m_by[v]) - (2 * s1_plot_top + slotH)) <= 4.0
-                           for v in ("100", "50", "0")),
-                       "非翻转=%s 翻转=%s" % (
-                           {k: round(v, 1) for k, v in n_by.items()},
-                           {k: round(v, 1) for k, v in m_by.items()})))
-        checks.append(("RSI 的 50 是翻转不动点（前后同位）",
-                       abs(n_by["50"] - m_by["50"]) <= 4.0,
-                       "%.1f vs %.1f" % (n_by["50"], m_by["50"])))
-        tick50 = {"未翻转": n_by["50"], "翻转": m_by["50"]}
+    _common = sorted(set(n_by) & set(m_by), key=float)
+    checks.append(("翻转是 Y 轴镜像：共有刻度 y 前后之和 ≡ 2×槽上沿 + 槽高",
+                   bool(_common) and all(
+                       abs((n_by[k] + m_by[k]) - (2 * s1_plot_top + slotH)) <= 4.0
+                       for k in _common),
+                   "共有 %d 档 %s；非翻转=%s 翻转=%s" % (
+                       len(_common), _common,
+                       {k: round(v, 1) for k, v in n_by.items()},
+                       {k: round(v, 1) for k, v in m_by.items()})))
+    tick50 = {"未翻转": n_by.get("50"), "翻转": m_by.get("50")}
 
-    # ── ⑷ RSI 三条水平线（30/70 虚线 + 50 中轴）在翻转前后都真的画出来了 ──
+    # ── ⑷ RSI 三条参考线（50 中轴 + 80/20 超买超卖，细点虚线）真的画在 rsiToY(v) 上 ──
     def _line_hit(stats, expect_css, tol=2.5):
         rows = stats.get("rows") or []
         d = stats.get("dpr") or 1
         best, best_ratio = None, 0.0
         for yy, ratio in enumerate(rows):
-            y_css = s1_plot_top + yy / d
+            y_css = stats["area"]["y0"] + yy / d
             if abs(y_css - expect_css) <= tol and ratio > best_ratio:
                 best, best_ratio = y_css, ratio
         return best, best_ratio
 
-    def _rsi_y(v, mirror):
-        return (s1_plot_top + (v / 100.0) * slotH) if mirror \
-            else (s1_plot_top + slotH - (v / 100.0) * slotH)
-
+    _duty = []
     for tag, probe, mirror in (("未翻转", rsi_probe_n, False),
                                ("翻转", rsi_probe_m, True)):
-        hits = {v: _line_hit(probe, _rsi_y(v, mirror)) for v in (70, 50, 30)}
-        checks.append(("RSI %s：30 / 50 / 70 三条水平线都画在 rsiToY(v) 上" % tag,
-                       all(h[0] is not None and h[1] >= 0.20 for h in hits.values()),
-                       str({k: (None if h[0] is None else round(h[0], 1),
-                                round(h[1], 2)) for k, h in hits.items()})))
-        if tag in tick50 and hits[50][0] is not None:
+        expect = [v for v in (50, 80, 20) if lo_n <= v <= hi_n]
+        hits = {v: _line_hit(probe, _rsi_y_in(v, lo_n, hi_n, mirror)) for v in expect}
+        checks.append(("RSI %s：落在值域内的 20 / 50 / 80 参考线都画在 rsiToY(v) 上" % tag,
+                       bool(expect) and all(h[0] is not None and h[1] >= 0.05
+                                            for h in hits.values()),
+                       str({k: (None if h[0] is None else round(h[0], 1), round(h[1], 3))
+                            for k, h in hits.items()})))
+        if expect and hits.get(50, (None,))[0] is not None and tick50[tag] is not None:
             checks.append(("RSI %s：纵轴 \"50\" 刻度与其水平线同位（同一套 y 口径）" % tag,
                            abs(tick50[tag] - hits[50][0]) <= 2.5,
                            "刻度=%.1f 线=%.1f" % (tick50[tag], hits[50][0])))
+        _duty += [h[1] for h in hits.values()]
+    checks.append(("RSI 参考线是「细点虚线」而非实线：实测同行覆盖率 %.3f（实线 ≥0.5）"
+                   % (max(_duty) if _duty else 0.0),
+                   bool(_duty) and max(_duty) <= 0.45,
+                   "各参考线覆盖率=%s" % [round(x, 3) for x in _duty]))
 
-    # ── ⑸ RSI 折线（后端下发的 k.rsi）：真的画出来了，且随翻转镜像 ──
-    checks.append(("RSI 折线已绘制（槽 1 绘图窗内有青色 #22D3EE 像素）",
-                   (rsi_probe_n.get("cyanPix") or 0) > 200
-                   and (rsi_probe_m.get("cyanPix") or 0) > 200,
+    # ── ⑸ RSI 折线（后端下发的 k.rsi）：白色、真的画出来了，且随翻转镜像 ──
+    checks.append(("RSI 折线已绘制（槽 1 绘图窗内有白色像素，与 MACD 白线同色）",
+                   (rsi_probe_n.get("whitePix") or 0) > 200
+                   and (rsi_probe_m.get("whitePix") or 0) > 200,
+                   "白像素数：非翻转=%s 翻转=%s" % (rsi_probe_n.get("whitePix"),
+                                                   rsi_probe_m.get("whitePix"))))
+    checks.append(("RSI 折线不再用旧青蓝 #22D3EE（槽 1 内青像素 = 0）",
+                   (rsi_probe_n.get("cyanPix") or 0) == 0
+                   and (rsi_probe_m.get("cyanPix") or 0) == 0,
                    "青像素数：非翻转=%s 翻转=%s" % (rsi_probe_n.get("cyanPix"),
                                                    rsi_probe_m.get("cyanPix"))))
-    if rsi_probe_n.get("cyanMinY") is not None and rsi_probe_m.get("cyanMinY") is not None:
+    if rsi_probe_n.get("whiteMinY") is not None and rsi_probe_m.get("whiteMinY") is not None:
         _flip = 2 * s1_plot_top + slotH      # Y 轴镜像：y ↦ flip − y
         checks.append(("RSI 折线随翻转镜像：翻转前后 y 的 {min,max} 互换（各自之和 ≡ 2×槽上沿＋槽高）",
-                       abs((rsi_probe_n["cyanMinY"] + rsi_probe_m["cyanMaxY"]) - _flip) <= 3.0
-                       and abs((rsi_probe_n["cyanMaxY"] + rsi_probe_m["cyanMinY"]) - _flip) <= 3.0,
+                       abs((rsi_probe_n["whiteMinY"] + rsi_probe_m["whiteMaxY"]) - _flip) <= 3.0
+                       and abs((rsi_probe_n["whiteMaxY"] + rsi_probe_m["whiteMinY"]) - _flip) <= 3.0,
                        "非翻转 min/max=%.1f/%.1f 翻转=%.1f/%.1f 期望和=%.1f" % (
-                           rsi_probe_n["cyanMinY"], rsi_probe_n["cyanMaxY"],
-                           rsi_probe_m["cyanMinY"], rsi_probe_m["cyanMaxY"], _flip)))
+                           rsi_probe_n["whiteMinY"], rsi_probe_n["whiteMaxY"],
+                           rsi_probe_m["whiteMinY"], rsi_probe_m["whiteMaxY"], _flip)))
 
+    # ── ⑺ 槽 1 标签行上沿的分割线（要求 ④）与 chip 短名（要求 ③） ──
+    # 实现侧已把分割线画在槽内容之后（见 _renderChart 顺序注释）⇒ 恒横贯全宽，
+    #   可直接量整行覆盖率；上下 3px / 6px 三条反证行都必须干净。
+    _dr = div_probe.get("rows") or {}
+    _div = (_dr.get("div") or {}).get("ratio") or 0.0
+    _above = (_dr.get("above") or {}).get("ratio") or 0.0
+    _up2 = (_dr.get("up2") or {}).get("ratio") or 0.0
+    _below = (_dr.get("below") or {}).get("ratio") or 0.0
+    checks.append(("槽 1 标签行上沿有分割线（横贯全宽，与槽 0 那条同源），上下 3px 都无横线",
+                   _div >= 0.95 and max(_above, _up2, _below) <= 0.05,
+                   "上沿=%.3f 上方3px=%.3f 上方6px=%.3f 下方3px=%.3f" % (
+                       _div, _above, _up2, _below)))
+    checks.append(("chip 短名为 'RSI'（不再是 'RSI(12)'）；标签行仍带参数 'RSI(12):'",
+                   "RSI" in macd_texts and "RSI(12)" not in macd_texts
+                   and bool([t for t in macd_texts if t.startswith("RSI(12):")]),
+                   "chip 命中=%s 旧串命中=%s" % ("RSI" in macd_texts,
+                                              "RSI(12)" in macd_texts)))
+
+    # ── ⑻ 真实 wheel 缩放：RSI 纵轴值域必须随可见窗口变化（要求 ⑥ 的端到端证明） ──
+    z_lo, z_hi = _exp_rsi_span(zoom_view["off"], zoom_view["cnt"])
+    z_lo, z_hi = z_lo - (z_hi - z_lo) * 0.05, z_hi + (z_hi - z_lo) * 0.05
+    z_ax = _axis_texts(zoom_pos)
+    z_top = _as_num(z_ax[0][0]) if z_ax else None
+    z_bot = _as_num(z_ax[-1][0]) if z_ax else None
+    checks.append(("wheel 缩放真的生效（viewCount 由 %s 缩到 %s）" % (view["cnt"], zoom_view["cnt"]),
+                   int(zoom_view["cnt"]) < int(view["cnt"]),
+                   "offset=%s→%s" % (view["off"], zoom_view["off"])))
+    checks.append(("放大后 RSI 纵轴值域随新窗口收窄（不再是恒定 0~100 ⇒ 曲线被压平）",
+                   None not in (z_top, z_bot)
+                   and abs(z_top - z_hi) <= 0.011 and abs(z_bot - z_lo) <= 0.011
+                   and (z_hi - z_lo) < (hi_n - lo_n),
+                   "缩放前 [%.2f, %.2f]（跨度 %.2f）→ 缩放后 [%.2f, %.2f]（跨度 %.2f）" % (
+                       lo_n, hi_n, hi_n - lo_n, z_lo, z_hi, z_hi - z_lo)))
+    checks.append(("放大后 RSI 折线仍在槽 1 绘图窗内（值域切换不会静默丢线）",
+                   (zoom_probe.get("whitePix") or 0) > 200,
+                   "缩放后白像素数=%s" % zoom_probe.get("whitePix")))
     # ── ⑹ 标签 RSI(12) 的数值 ≡ calculate_rsi（与上面 DIF 那条同款跨语言闭环） ──
     exp_rsi = "%.2f" % (round(rsi_vals[last_idx], 4) if last_idx < len(rsi_vals) else 0)
     checks.append((f"标签 RSI(12) ≡ calculate_rsi 在末根可见K线(#{last_idx})的值",

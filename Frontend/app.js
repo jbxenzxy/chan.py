@@ -105,8 +105,8 @@
             },
             rsi: {
                 id: 'rsi',
-                tabLabel: () => 'RSI(12)',
-                range: () => getRsiRange(),
+                tabLabel: () => 'RSI',   // chip 用短名（参数写在标签行里，与 MACD 槽同构）
+                range: (klines) => getRsiRange(klines),
                 draw: (area, range, c) => drawRsi(c.klines, area, range, c.barStep, c.subPixelOffset),
                 axis: (area, range) => drawRsiAxis(area, range),
                 label: (textArea, c) => drawRsiSlotLabel(textArea, c),
@@ -122,6 +122,8 @@
 
         const CHIP_PAD_X = 6;                          // chip 内左右留白
         const CHIP_H = MACD_TEXT_HEIGHT;               // chip 高度（与标签行同高）
+        const RSI_REF_VALUES = [50, 80, 20];           // RSI 参考线：中轴 50、超买 80、超卖 20
+        const RSI_REF_DASH = [1, 3];                   // 三条线统一「细点虚线」：1px 点 + 3px 空隙
 
         // 双窗口模式逐窗布局参数（fix#1+#2）：
         // 双窗时每个 canvas 高度被砍半，若沿用单窗的 PADDING/GAP 绝对值与 0.2 占比，
@@ -262,7 +264,7 @@
             crosshair: "rgba(255,255,255,0.3)",
             macdUp: "rgba(255,60,60,0.6)", macdDown: "rgba(0,240,240,0.6)", // 原值: macdUp="rgba(255,68,68,0.6)", macdDown="rgba(0,221,0,0.6)"
             dif: "#FFFFFF", dea: "#F77F00", // 原值: dea="#FFD700"
-            rsi: "#22D3EE", // RSI 折线（青蓝；与红绿涨跌体系不冲突，也不与 vol 槽的柱色撞）
+            rsi: "#FFFFFF", // RSI 折线——与 MACD 白线（COLORS.dif）同色；守卫用例钉住两者相等
         };
 
         // ===== K线倒计时进度条（快期3风格） =====
@@ -1094,6 +1096,18 @@
             return m.L.top + m.netH;
         }
 
+        // 第 i 槽标签行上沿的分割线。槽 0 的标签行上沿与主图下沿**重合**（同一条
+        // y = L.top + chartH），那条线已由 drawGrid 的最后一条网格线给出；所以只对
+        // i > 0 画，免得同一条线被叠画两遍而比其它槽亮一倍。
+        function drawBottomSlotDivider(i) {
+            const label = getBottomSlotLabelArea(i);
+            ctx.strokeStyle = COLORS.grid; ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(label.x, label.y);
+            ctx.lineTo(label.x + label.w, label.y);
+            ctx.stroke();
+        }
+
         // 底部区占比**按槽数翻倍**：底部区总高 = 槽数 × 现在的底部区。
         // 取 n × VOL_RATIO 是唯一能让"每槽绘图窗 = netH×VOL_RATIO − MACD_TEXT_HEIGHT"
         //   与 n 无关的式子 ⇒ 每槽与今天单窗单槽逐像素相同；n = 1 时恒等于 VOL_RATIO。
@@ -1575,17 +1589,25 @@
             ctx.lineTo(area.x, bottomBottomY);
             ctx.stroke();
             const klinesToDraw = klines.slice(0, viewCount);
-            // 底部指标区：先按槽画标签行（含 chip），再按注册表把各槽画进自己的绘图窗。
+            // 底部指标区绘制顺序：① 各槽画进自己的绘图窗 → ② 槽间分割线 → ③ 标签行（含 chip）。
+            // ② 必须在 ① 之后：分割线的 y 同时是**上一槽绘图窗的下沿**，而柱状图的柱体基线
+            //   就压在那一行 —— 空心柱用 strokeRect 描边，描边还会往下溢出约半像素。
+            //   实测该行 1093 px 中 736 px 是柱体像素；画在 ① 之前会被盖成断续锯齿。
+            //   放在最后 ⇒ 分隔线恒横贯全宽，且「标签行上沿有分割线」与上一槽画什么无关。
+            // ③ 也放在 ① 之后：标签行的 chip / 文本同样不该被上一槽的半像素溢出盖住。
             // bottomCtx 供各 draw / label 钩子取值，避免它们各自重算一遍。
             const bottomCtx = {
                 klines: klinesToDraw, barStep: barStep, subPixelOffset: subPixelOffset,
                 barWidth: barWidth, macdBarWidth: MACD_BAR_WIDTH, targetK: null, textX: 0,
             };
             for (let si = 0; si < slotCount; si++) {
-                drawBottomSlotLabel(si, bottomCtx);
+                BOTTOM_INDICATORS[_slotAt(si)].draw(slotAreas[si], slotRanges[si], bottomCtx);
+            }
+            for (let si = 1; si < slotCount; si++) {   // 槽 0 的上沿分割线由主图末条网格线给出
+                drawBottomSlotDivider(si);
             }
             for (let si = 0; si < slotCount; si++) {
-                BOTTOM_INDICATORS[_slotAt(si)].draw(slotAreas[si], slotRanges[si], bottomCtx);
+                drawBottomSlotLabel(si, bottomCtx);
             }
             // 区间选择高亮：绘制起点A的金色标记
             if (_rangeSelect.mode === 'SELECTED_A' && _rangeSelect.startFreq === currentFreq && chartData && _rangeSelect.startSymbol === chartData.meta.symbol) {
@@ -2024,15 +2046,34 @@
         // 数据来自后端：App/AppUtils.calculate_rsi → SSE 逐根下发 k.rsi。
         // 前端**零计算** —— 与 MACD 读 k.dif/dea/macd 完全同构；显示处理也照前端
         // MACD 指标那一套（值域 / 绘制 / 纵轴 / 标签 / 翻转），唯一差别是指标定义
-        // 本身：单线、值域固定 0~100。
+        // 本身：单线，且值域随可见窗口自适应（见 getRsiRange）。
         function rsiOf(k) {
             const v = k ? k.rsi : undefined;
             return (typeof v === 'number' && isFinite(v)) ? v : null;
         }
 
-        // RSI 值域固定 [0,100]（Math/RSI.py 保证），不从数据推 —— 这也正是注册表
-        // 必须带 range() 钩子的原因（getMacdRange / getVolumeRange 都是"从数据算"）。
-        function getRsiRange() { return { min: 0, max: 100 }; }
+        // RSI 值域**随可见窗口自适应**（与 getMacdRange 同机制：只吃 getVisibleKlines()
+        // 那一刀切出来的 klines），不再固定 [0,100]。固定值域会让缩放/滚动对 RSI 曲线
+        // 毫无影响 —— 放大后被压成一条直线（通达信副图是「自动」纵轴：按当前显示区间
+        // 的最大/最小值铺刻度，缩放时范围跟着变；另有「固定」模式才手填上下边界）。
+        // 上下各留 5% 余量（与 getPriceRange 同口径）；整窗无 rsi（全缺值）回落 [0,100]。
+        function getRsiRange(klines) {
+            if (!klines || !klines.length) return { min: 0, max: 100 };
+            let min = Infinity, max = -Infinity;
+            klines.forEach(k => {
+                const v = rsiOf(k);
+                if (v === null) return;
+                if (v < min) min = v;
+                if (v > max) max = v;
+            });
+            if (min === Infinity) return { min: 0, max: 100 };
+            if (max - min < 1e-9) {          // 全等（含整窗恒 50）：给个不塌陷的窗口
+                const d = Math.max(1, Math.abs(max) * 0.05);
+                return { min: min - d, max: max + d };
+            }
+            const margin = (max - min) * 0.05;
+            return { min: min - margin, max: max + margin };
+        }
 
         // 值 → Y。翻转视图只翻 Y 方向，值原样参与计算（与 drawMacd 的 macdToY 同式）。
         function rsiToY(v, area, range) {
@@ -2042,22 +2083,25 @@
                 : area.y + area.h - (v - range.min) / span * area.h;
         }
 
-        // RSI 折线（单线）+ 50 中轴 + 30/70 超买超卖参考线。
-        // 三条水平线的 y **全部走同一个 rsiToY(v)**，禁止手写 area.h * 0.3 / * 0.7 之类
+        // RSI 折线（单线）+ 50 中轴 + 80/20 超买超卖参考线。
+        // 三条水平线的 y **全部走同一个 rsiToY(v)**，禁止手写 area.h * 0.2 / * 0.8 之类
         // 相对比例 —— MACD 那条 0 轴踩过的坑正是"同一条线用两个式子算"。
-        // 翻转视图：三条线整体镜像（70 ↔ 30 互换、50 是不动点）；单线单色
+        // 值域自适应后参考线可能整体出界（放大到趋势段时 20/80 都在窗外）：出界那条
+        //   直接不画 —— 照画会落到相邻区域上（MACD 的 0 轴就有这个隐患）。
+        // 翻转视图：三条线整体镜像（80 ↔ 20 互换、50 是不动点）；单线单色
         //   ⇒ 只翻 Y 位置，不改颜色、不改数值。
         function drawRsi(klines, area, range, barStep, subPixelOffset) {
-            ctx.strokeStyle = "rgba(255,255,255,0.15)"; ctx.lineWidth = 1;
-            ctx.setLineDash([4, 4]);
-            [70, 30].forEach(v => {
+            // 三条线**同一套线型**（细点虚线），只靠明度区分中轴与超买超卖：
+            // 50 中轴略亮（0.2），80/20 略暗（0.15）。
+            ctx.lineWidth = 1;
+            ctx.setLineDash(RSI_REF_DASH);
+            RSI_REF_VALUES.forEach(v => {
+                if (v < range.min || v > range.max) return;   // 出界不画（见函数头说明）
                 const y = rsiToY(v, area, range);
+                ctx.strokeStyle = (v === 50) ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.15)";
                 ctx.beginPath(); ctx.moveTo(area.x, y); ctx.lineTo(area.x + area.w, y); ctx.stroke();
             });
             ctx.setLineDash([]);
-            const midY = rsiToY(50, area, range);
-            ctx.strokeStyle = "rgba(255,255,255,0.2)";
-            ctx.beginPath(); ctx.moveTo(area.x, midY); ctx.lineTo(area.x + area.w, midY); ctx.stroke();
             // 折线：k.rsi 缺失的点不画（与 k.dif 缺失时 ZERO_MACD_VALS 兜底同思路）
             ctx.strokeStyle = COLORS.rsi; ctx.lineWidth = 1;
             ctx.beginPath();
@@ -2249,7 +2293,9 @@
             }
         }
 
-        // RSI 槽的标签行：单值。无 BAR 换色分支 —— 数值含义不随视角变
+        // RSI 槽的标签行：单值。数值用 MACD 的 DIF 白（COLORS.dif）—— 与「RSI 曲线取
+        // MACD 白线色」同源；前缀仍是常规标签色（与 MACD 槽「名字浅色 + 数值亮色」同构）。
+        // 无 BAR 换色分支 —— 数值含义不随视角变。
         function drawRsiSlotLabel(textArea, c) {
             const targetK = c.targetK;
             if (!targetK) return;
@@ -2258,7 +2304,7 @@
             const v = rsiOf(targetK);
             ctx.fillStyle = COLORS.textLight;
             ctx.fillText("RSI(12):", c.textX, lineY);
-            ctx.fillStyle = COLORS.rsi;
+            ctx.fillStyle = COLORS.dif;
             ctx.fillText(v === null ? "--" : v.toFixed(2),
                          c.textX + ctx.measureText("RSI(12): ").width, lineY);
         }
@@ -2890,20 +2936,24 @@
             ctx.fillText("0", volArea.x + volArea.w + 6, volArea.y + volArea.h - 4);
         }
 
-        // RSI 纵轴：固定三档 [100][50][0]（翻转 [0][50][100]）。
-        // ⚠ 不能照抄 drawMacdAxis 的 topVal / zeroY / botVal 三段式：MACD 的 0 是值域
+        // RSI 纵轴：上下两档 = 当前值域的 max / min（随可见窗口自适应，与 drawMacdAxis
+        //   的 topVal / botVal 同机制，数值带两位小数）；中间那档是语义中位 **50**。
+        // ⚠ 不能照抄 drawMacdAxis 的三段式再把中间写成值域中点：MACD 的 0 是值域
         //   **内插的零线**（位置随数据变），而 RSI 的 0 是值域**端点**、中位是 **50**。
         //   照抄会把中间那档写成 "0"（与下沿重合）⇒ "0" 被画两遍、中间缺 "50"。
         //   三档的 y 一样全部走 rsiToY，与折线 / 参考线 / 中轴同源；变量也不叫 zeroY。
+        // 50 落在值域外时**不画**那一档：位置会算到绘图窗外，压上相邻区域。
         function drawRsiAxis(area, range) {
             ctx.fillStyle = COLORS.text; ctx.font = "11px monospace";
             ctx.textBaseline = "alphabetic"; ctx.textAlign = "left";
             const x = area.x + area.w + 6;
             const topVal = _isMirrorMode ? range.min : range.max;
             const botVal = _isMirrorMode ? range.max : range.min;
-            ctx.fillText(String(topVal), x, rsiToY(topVal, area, range) + 4);
-            ctx.fillText("50", x, rsiToY(50, area, range) + 4);
-            ctx.fillText(String(botVal), x, rsiToY(botVal, area, range) + 4);
+            ctx.fillText(topVal.toFixed(2), x, rsiToY(topVal, area, range) + 4);
+            if (range.min <= 50 && 50 <= range.max) {
+                ctx.fillText("50", x, rsiToY(50, area, range) + 4);
+            }
+            ctx.fillText(botVal.toFixed(2), x, rsiToY(botVal, area, range) + 4);
         }
 
 
