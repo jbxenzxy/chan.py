@@ -255,7 +255,17 @@ def calculate_macd(closes, fast=12, slow=26, signal=9):
     return [{"dif": dif[i], "dea": dea[i], "macd": macd[i]} for i in range(len(closes))]
 
 
-def calculate_rsi(closes, period=12):
+# RSI 周期：全项目**单一来源**。四处必须同值，改动其中任一处都要同步其余：
+#   ① `Math/RSI.py` 的 `period` 默认值（核心指标模型）
+#   ② `ChanConfig.CChanConfig` 的 `rsi_cycle` 默认值
+#   ③ `App/AppUtils.RSI_CYCLE`（本常量，展示侧 calculate_rsi / _make_chan_config）
+#   ④ `Backtest/Runner.default_chan_config()` 的覆盖值
+#   ⑤ `Frontend/app.js` 的标签文案 `RSI(12)`
+# 由 `Test/test_bottom_slots.py` 的「RSI 周期同源」护栏逐条校验（只看数字、不看注释）。
+RSI_CYCLE = 12
+
+
+def calculate_rsi(closes, period=RSI_CYCLE):
     """计算 RSI（口径逐字照抄核心 Math/RSI.py，避免两套实现打架）。
 
     与核心的唯一差别是输入形态：核心 `Math/RSI.py` 是逐根 `add(close)`、内部维护
@@ -293,6 +303,106 @@ def calculate_rsi(closes, period=12):
             rs = ups[-1] / downs[-1]
             out.append(100.0 - 100.0 / (1.0 + rs))
     return out
+
+
+def _nsum_add(total, comp, x):
+    """增量复刻 **CPython 3.12+ 的 float `sum()`**（Neumaier 补偿求和）。
+
+    为什么要复刻：`calculate_rsi` 的播种期写的是 `sum(x for x in diff if x > 0)`。
+    CPython 3.12 起对 float 的 `sum()` 不再是朴素累加，而是带补偿项的 Neumaier 求和
+    —— 朴素 `+=` 与它有 ~1e-15 的相对差，于是"增量 ≡ 全量"只能做到"差不多相等"。
+    这里把同一个补偿递推**增量地**走一遍（状态演化与 `sum(同前缀)` 完全一致），
+    逐位差即归零。返回值取 `total + comp`，与 `sum()` 的返回口径相同。
+    """
+    t = total + x
+    if abs(total) >= abs(x):
+        comp += (total - t) + x
+    else:
+        comp += (x - t) + total
+    return t, comp
+
+
+class RsiStream:
+    """RSI 的 **O(1) 增量**状态机 —— 逐根喂 close，口径与 `calculate_rsi` 逐位一致。
+
+    为什么状态是"小"的（这点和早前的注释判断不同，见 `_apply_rsi_full`）：
+    `calculate_rsi` 里那三个 `diff / ups / downs` 列表只是**局部变量**，递推真正
+    依赖的只有：
+      · 播种期（前 `period` 根）：`up_sum` / `down_sum` —— 正/负 diff 的**累加和**，
+        增量时 `+=` 即可，不需要保留每根 diff；
+      · Wilder 期：只需**上一根**的 `up` / `down` 均值。
+    合计 4 个标量（`diff_len` + `up_sum` + `down_sum` + `up`/`down`），与 MACD 增量
+    的 3 个标量（ema12/ema26/dea）同量级 —— 不需要"逐根全长序列"。
+
+    浮点一致性：播种期按同一顺序累加、Wilder 期用同一条表达式递推 ⇒ 与
+    `calculate_rsi` **bit-for-bit 相等**（不是"误差范围内"）。由
+    `Test/test_bottom_slots.py` 的「RSI 增量 ≡ 全量」护栏用 `==` 逐点钉住。
+    """
+
+    __slots__ = ("period", "n", "prev_close", "diff_len",
+                 "up_t", "up_c", "down_t", "down_c", "up", "down")
+
+    def __init__(self, period=RSI_CYCLE):
+        self.period = period
+        self.n = 0            # 已喂根数
+        self.prev_close = None
+        self.diff_len = 0     # = len(diff)：已产生的 diff 个数（n - 1）
+        # 播种期的两个累加和，用 (total, 补偿项) 增量复刻 CPython 的 sum() —— 见 _nsum_add
+        self.up_t = 0.0
+        self.up_c = 0.0
+        self.down_t = 0.0
+        self.down_c = 0.0
+        self.up = 0.0         # 上一根的 up 均值（= ups[-1]）
+        self.down = 0.0       # 上一根的 down 均值（= downs[-1]）
+
+    def feed(self, close):
+        """喂一根 close，返回**该根**的 RSI（与 calculate_rsi 的第 n 项同值）"""
+        if self.n == 0:
+            self.n = 1
+            self.prev_close = close
+            return 50.0
+        d = close - self.prev_close
+        self.prev_close = close
+        self.n += 1
+        self.diff_len += 1
+        if self.diff_len < self.period:
+            # 播种期：非标准的「前 period-1 根用简单平均」
+            if d > 0:
+                self.up_t, self.up_c = _nsum_add(self.up_t, self.up_c, d)
+            elif d < 0:
+                self.down_t, self.down_c = _nsum_add(self.down_t, self.down_c, -d)
+            self.up = (self.up_t + self.up_c) / self.diff_len
+            self.down = (self.down_t + self.down_c) / self.diff_len
+        else:
+            # Wilder 期：只依赖上一根的 up / down
+            upval = d if d > 0 else 0.0
+            downval = -d if d < 0 else 0.0
+            self.up = (self.up * (self.period - 1) + upval) / self.period
+            self.down = (self.down * (self.period - 1) + downval) / self.period
+        if self.down == 0:
+            return 100.0 if self.up > 0 else 0.0
+        rs = self.up / self.down
+        return 100.0 - 100.0 / (1.0 + rs)
+
+    def copy(self):
+        """快照当前状态（tick 路径用它保存「倒数第二根为止」的状态，供末根重算）"""
+        o = RsiStream(self.period)
+        o.n = self.n
+        o.prev_close = self.prev_close
+        o.diff_len = self.diff_len
+        o.up_t = self.up_t
+        o.up_c = self.up_c
+        o.down_t = self.down_t
+        o.down_c = self.down_c
+        o.up = self.up
+        o.down = self.down
+        return o
+
+
+def calculate_rsi_stream(closes, period=RSI_CYCLE):
+    """`RsiStream` 的批量包装（结果与 `calculate_rsi` 应完全一致，供护栏比对）"""
+    s = RsiStream(period)
+    return [s.feed(c) for c in closes]
 
 
 def _inherit_metrics_for_preview_bar(klines_list):
@@ -346,7 +456,7 @@ def _get_freq_label(freq):
 #   Backtest/Test/test_bt02_config_contract.py 钉「逐字段相等」。
 def _make_chan_config():
     """统一的缠论配置，股票和期货共用。除 RSI 开关外单源于 ChanConfig.CChanConfig 默认值"""
-    return CChanConfig({"cal_rsi": True, "rsi_cycle": 12})
+    return CChanConfig({"cal_rsi": True, "rsi_cycle": RSI_CYCLE})
 
 
 # ── 日期格式（freq → 统一日期格式，与 CChan 输出格式一致）──

@@ -1,5 +1,5 @@
 class RSI:
-    def __init__(self, period: int = 14):
+    def __init__(self, period: int = 12):
         super(RSI, self).__init__()
         self.close_arr = []
         self.period = period

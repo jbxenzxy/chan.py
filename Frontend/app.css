@@ -804,8 +804,7 @@
         }
         .bsp-filter-label {
             display: flex; align-items: center; gap: 8px; cursor: pointer;
-            /* 抽屉内容区字号统一为 12px（与「买卖点类型（可多选）」小节标题同档） */
-            font-size: 12px; color: #a8b2d1; padding: 6px 10px; border-radius: 4px;
+            font-size: 13px; color: #a8b2d1; padding: 6px 10px; border-radius: 4px;
             background: #1a1a2e; transition: background 0.2s;
             white-space: nowrap; overflow: visible;
         }

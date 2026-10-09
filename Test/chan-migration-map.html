@@ -282,7 +282,7 @@ footer{border-top:1px solid var(--rule);padding:24px 0 40px;color:var(--muted);f
         <tr><td class="fn">_bi_overlap_range</td><td>1963</td><td>—</td><td>—</td><td><span class="badge b-p0">P0</span></td><td>纯函数</td></tr>
         <tr><td class="fn">_calc_futures_white_hline</td><td>2304</td><td>—</td><td>—</td><td><span class="badge b-p0">P0</span></td><td>纯函数</td></tr>
         <tr><td class="fn">ema</td><td>750</td><td>—</td><td>—</td><td><span class="badge b-p0">P0</span></td><td>纯函数</td></tr>
-        <tr><td class="fn">_inherit_macd_for_preview_bar</td><td>772</td><td>—</td><td>—</td><td><span class="badge b-p0">P0</span></td><td>纯函数</td></tr>
+        <tr><td class="fn">_inherit_metrics_for_preview_bar</td><td>772</td><td>—</td><td>—</td><td><span class="badge b-p0">P0</span></td><td>纯函数</td></tr>
         <tr><td class="fn">_get_stock_market_code</td><td>1588</td><td>—</td><td>VIPDOC_DIR</td><td><span class="badge b-p1">P1</span></td><td><span class="badge b-done">已封装</span> get_stock_market_code</td></tr>
         <tr><td class="fn">_get_market_code</td><td>1676</td><td>_get_stock_market_code</td><td>—</td><td><span class="badge b-p1">P1</span></td><td><span class="badge b-done">已封装</span> get_market_code</td></tr>
         <tr><td class="fn">_find_left_shoulder_time</td><td>1907</td><td>_get_date_fmt</td><td>—</td><td><span class="badge b-p1">P1</span></td><td>—</td></tr>
@@ -508,7 +508,7 @@ footer{border-top:1px solid var(--rule);padding:24px 0 40px;color:var(--muted);f
     <table>
       <thead><tr><th>优先级</th><th>数量</th><th>原则</th><th>代表函数</th></tr></thead>
       <tbody>
-        <tr><td><span class="badge b-p0">P0</span></td><td>10</td><td>无外部依赖的纯函数，零风险，立即迁</td><td>_get_kl_type / _get_freq_label / _bi_overlap_range / _calc_futures_white_hline / ema / _safe_write_json_file / _get_annotation_key / _make_chan_config / _send_windows_notification / _inherit_macd_for_preview_bar</td></tr>
+        <tr><td><span class="badge b-p0">P0</span></td><td>10</td><td>无外部依赖的纯函数，零风险，立即迁</td><td>_get_kl_type / _get_freq_label / _bi_overlap_range / _calc_futures_white_hline / ema / _safe_write_json_file / _get_annotation_key / _make_chan_config / _send_windows_notification / _inherit_metrics_for_preview_bar</td></tr>
         <tr><td><span class="badge b-p1">P1</span></td><td>24</td><td>被依赖最多的工具 / 数据函数，先迁以解除阻塞</td><td>_get_date_fmt / _load_annotations / _calc_zs_confirm_edt_from_bis / _save_annotations / _cache_put / _cache_get / _cache_remove / _load_stock_names_from_cache_file / _load_pe_ttm_cache / _get_pe_ttm / _get_index_belong / _load_float_mc_cache / _update_float_mc_cache / _get_float_mc_from_cache / 选点 / 上次查看 / 标注持久化 / _get_stock_market_code / _get_market_code / _find_left_shoulder_time / calculate_macd / _verify_config_consistency</td></tr>
         <tr><td><span class="badge b-p2">P2</span></td><td>13</td><td>分析引擎核心，依赖 P0/P1 就绪后迁</td><td>analyze_stock / _analyze_stock_internal / _analyze_futures_internal / _extract_main_level_data / _extract_sub_level_data / _extract_realtime_snapshot / init_chan_symbol / compute_red_range_zs / stock_manual_select_point / futures_manual_select_point / _cleanup_all_futures_data</td></tr>
         <tr><td><span class="badge b-p3">P3</span></td><td>7</td><td>获取侧数据拉取 / 刷新</td><td>_get_stock_name / _refresh_stock_names / _fetch_names_from_sina_once / _refresh_pe_ttm / _fetch_index_belong_from_akshare / _fetch_float_mc_from_tencent / _quick_prefilter_pass</td></tr>

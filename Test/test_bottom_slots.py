@@ -37,6 +37,17 @@
      · 值域 = 可见窗口 rsi 的 min/max ± 5%（随放大/滚动而变，不再固定 [0,100]）
      · 空窗 / 无 rsi 字段 / 全缺值 → 回落 [0,100]；整窗恒等 → 不塌陷；缺值点被跳过
      · 量化证明：窗口收窄到波动极小的区间，占屏比从 span/100 升到 span/(span×1.1)
+  ⑦ RSI 周期同源（源码正则 + 真导入）
+     · 五处必须同值：`Math/RSI.py` 默认 period / `ChanConfig.rsi_cycle` 默认 /
+       `App/AppUtils.RSI_CYCLE` / `Backtest/Runner` 覆盖值 / 前端标签 `RSI(12)`
+     · 核心旧默认 14 与展示侧 12 不一致（不报错、只出错值）⇒ 统一为 12 并钉死
+  ⑧ 核心 `klu.rsi` ≡ 展示侧 `calculate_rsi`（真实数据夹具跑一趟 CChan）
+     · 输入同源：`tdx_data_context(records)` 注入的那批 == 展示侧 `closes` 那批
+     · 输出同值：`klu.rsi` 与 `calculate_rsi(closes)` 逐点差 < 1e-9
+  ⑨ RSI 增量 `RsiStream` ≡ 全量 `calculate_rsi`（**逐位 ==**，不是容差内）
+     · 随机 300 组 × 4 个周期 + 边界（首根 / 全平 / 单调 / 样本<period / 切换点）
+     · tick 用法：n−1 处快照 `copy().feed(末根)` ≡ 全量末根，且快照不被污染
+     · 源码反锚点：SSE tick 路径不再有 `calculate_rsi(closes)` 全量调用
 
 零网络、零浏览器、秒级。跑法：python Test/test_bottom_slots.py
 """
@@ -757,6 +768,146 @@ def test_rsi_style_and_range():
         str({w: (d[w]["min"], d[w]["max"]) for w in _wins}))
 
 
+def test_rsi_cycle_ssot():
+    """RSI 周期**单一来源**：五处必须同值，改一处漏其余立刻红。
+
+    起因（2026-10-10）：核心 `Math/RSI.py` 的 `period` 默认与 `ChanConfig.rsi_cycle`
+    的默认都是 **14**，而展示侧（App 层 `calculate_rsi` / 前端 `RSI(12)` 文案）是
+    **12** —— 裸 `CChanConfig()` 会算出 14 日 RSI，图表画的却是 12 日。这种不一致
+    不报错、只出错值，且要同时翻五个文件才看得出来，所以钉成护栏。
+    """
+    print("\n⑦ RSI 周期同源：核心默认 / ChanConfig 默认 / AppUtils 常量 / 回测覆盖 / 前端文案")
+    from App.AppUtils import RSI_CYCLE
+
+    m1 = re.search(r"def\s+__init__\(\s*self\s*,\s*period\s*:\s*int\s*=\s*(\d+)\s*\)",
+                   read(os.path.join(REPO_ROOT, "Math", "RSI.py")))
+    m2 = re.search(r'self\.rsi_cycle\s*=\s*conf\.get\(\s*"rsi_cycle"\s*,\s*(\d+)\s*\)',
+                   read(os.path.join(REPO_ROOT, "ChanConfig.py")))
+    m3 = re.search(r'"rsi_cycle"\s*:\s*(\d+)',
+                   read(os.path.join(REPO_ROOT, "Backtest", "Runner.py")))
+    m4 = re.search(r'"RSI\((\d+)\)', read(APP_JS))     # 实为 "RSI(12):"，末尾带冒号
+
+    got = {
+        "Math/RSI.py 默认 period": int(m1.group(1)) if m1 else None,
+        "ChanConfig rsi_cycle 默认": int(m2.group(1)) if m2 else None,
+        "App/AppUtils.RSI_CYCLE": RSI_CYCLE,
+        "Backtest/Runner 覆盖值": int(m3.group(1)) if m3 else None,
+        "前端标签文案 RSI(n)": int(m4.group(1)) if m4 else None,
+    }
+    rec("⑦", "五处都取到了值（任一处源码形态变了 ⇒ 正则落空 ⇒ 立刻红，不会静默降级）",
+        all(v is not None for v in got.values()), str(got))
+    vals = set(v for v in got.values() if v is not None)
+    rec("⑦", "RSI 周期五处同源（当前取值 %s）" % sorted(vals), len(vals) == 1, str(got))
+    rec("⑦", "周期 = 12（与前端 `RSI(12)` 同口径，不是核心的旧默认 14）", vals == {12}, str(got))
+
+
+def test_core_rsi_same_source():
+    """核心 `klu.rsi`（`Math/RSI.py` 逐根 add）≡ 展示侧 `calculate_rsi`：**输入同源 + 逐点同值**。
+
+    评审 P3-6 留下的尾巴是「核心 klu.rsi 目前零消费，将来启用笔级 RSI 背驰时需再核
+    两端输入序列是否同源」。这条把"将来再核"变成"现在核完 + 钉死"：
+      · 输入：核心走 `tdx_data_context(records)` 注入，展示侧 `closes` 也取自同一批
+        records ⇒ close 序列必须**逐项相等**（任一侧换成过滤前的 full_records 就红）
+      · 输出：`Math/RSI.RSI(rsi_cycle)` 逐根 add ≡ `calculate_rsi(closes)` 逐点同值
+    启用 `macd_algo="rsi"` 时 `Bi.Cal_Rsi` 读的就是这份 `klu.rsi` —— 它必须和图表
+    上画的那条线是同一个数，否则"图上看着超买、算法却判超卖"。
+    """
+    print("\n⑧ 核心 klu.rsi ≡ 展示侧 calculate_rsi（真实数据夹具：输入同源 + 逐点同值）")
+    fix = os.path.join(REPO_ROOT, "Test", "fixtures", "stock_day.json")
+    if not os.path.isfile(fix):
+        rec("⑧", "真实数据夹具存在", False, fix)
+        return
+    from Test.gen_fixtures import load_records
+    from App.AppUtils import calculate_rsi, _make_chan_config
+    from Common.CEnum import KL_TYPE, AUTYPE
+    import Chan
+    import DataAPI.TdxAPI as TdxAPI
+
+    records = load_records(fix)
+    closes = [r["close"] for r in records]
+    disp = calculate_rsi(closes)
+
+    cfg = _make_chan_config()
+    cfg.kl_data_check = False
+    with TdxAPI.tdx_data_context(records):
+        chan = Chan.CChan(code="sz002190", begin_time=None, end_time=None,
+                          data_src="custom:TdxAPI.CTdxAPI", lv_list=[KL_TYPE.K_DAY],
+                          config=cfg, autype=AUTYPE.NONE, market_type="stock")
+        for _ in chan.step_load():
+            pass
+    klus = [klu for merged in chan[0].lst for klu in merged.lst]  # 合并K线 → 原始K线单元
+
+    rec("⑧", "输入同源：records 与 KLine_Unit 根数相等（%d vs %d）"
+        % (len(records), len(klus)), len(records) == len(klus))
+    n = min(len(records), len(klus))
+    rec("⑧", "输入同源：close 序列逐项相等（%d 根）" % n,
+        all(abs(float(closes[i]) - float(klus[i].close)) < 1e-9 for i in range(n)))
+    core = [getattr(k, "rsi", None) for k in klus]
+    rec("⑧", "核心已挂值（`cal_rsi=True` 生效，无 None）—— 否则下面比不了",
+        core and all(v is not None for v in core))
+    if not (core and all(v is not None for v in core)):
+        return
+    md = max(abs(float(core[i]) - disp[i]) for i in range(n))
+    rec("⑧", "输出同值：逐点最大绝对差 < 1e-9（实测 %.3g）" % md, md < 1e-9)
+
+
+def test_rsi_incremental():
+    """RSI 增量状态机 `RsiStream` ≡ 全量 `calculate_rsi`（**逐位相等**，不是容差内）。
+
+    起因：`_apply_rsi_full` 早前注释称「RSI 状态含逐根全长序列，增量不值」—— 按代码
+    事实那是误判（递推只依赖 4 个标量）。现在 tick 路径每帧只续算末根（O(1)），
+    正确性全靠这条护栏：任何一处递推式改错、或播种期 / Wilder 期的分支切错，
+    逐位 `==` 立刻红。
+    """
+    print("\n⑨ RSI 增量 ≡ 全量（逐位 ==，含播种期 / Wilder 期切换点）")
+    import random
+    from App.AppUtils import RsiStream, calculate_rsi, calculate_rsi_stream, RSI_CYCLE
+
+    rnd = random.Random(20261010)
+    cases = [[round(rnd.uniform(1, 100), 2) for _ in range(rnd.randint(1, 60))]
+             for _ in range(300)]
+    cases += [
+        [5.0], [5.0, 5.0], [5.0] * 40,                 # 首根 / 两根 / 全平
+        [float(i) for i in range(1, 40)],              # 单调涨
+        [float(40 - i) for i in range(1, 40)],         # 单调跌
+        [1.0, 2.0], [10.0, 10.0, 10.0, 11.0],          # 样本 < period
+        [3.0] * 11 + [4.0], [3.0] * 12 + [4.0], [3.0] * 13 + [4.0],   # 播种→Wilder 切换点
+    ]
+    bad = []
+    for cs in cases:
+        for p in (2, 5, 12, 26):
+            a = calculate_rsi(cs, p)
+            b = calculate_rsi_stream(cs, p)
+            if len(a) != len(b) or any(x != y for x, y in zip(a, b)):   # 逐位 ==
+                bad.append((p, cs[:6], a[:4], b[:4]))
+    rec("⑨", "增量 ≡ 全量：%d 组序列 × 4 个周期，逐位 ==" % len(cases), not bad, str(bad[:2]))
+
+    # tick 的实际用法：从「n-1 处」的快照复制后喂末根，且快照不被污染
+    bad2 = []
+    for cs in cases:
+        s = RsiStream(RSI_CYCLE)
+        for c in cs[:-1]:
+            s.feed(c)
+        snap = s.copy()
+        want = calculate_rsi(cs, RSI_CYCLE)[-1]
+        got = snap.copy().feed(cs[-1])
+        if got != want:
+            bad2.append((cs[:6], want, got))
+        if snap.copy().feed(cs[-1]) != snap.copy().feed(cs[-1]):
+            bad2.append(("快照被污染", cs[:6]))
+    rec("⑨", "tick 用法：n−1 处快照续算末根 ≡ 全量末根，且快照不被后续污染",
+        not bad2, str(bad2[:2]))
+
+    # 源码反锚点：tick 路径确已切到增量（不再每帧 calculate_rsi(closes)）
+    src = read(APPSSE_PY)
+    # tick 两条路径都走增量；`calculate_rsi(` 只剩 _apply_rsi_full 那一处（快照路径本
+    # 来就是整窗重建，省不掉一次 O(n)）—— 多一处就说明有人又写回了全量。
+    rec("⑨", "SSE tick 路径已切增量：`calculate_rsi(` 只剩 `_apply_rsi_full` 一处",
+        src.count("RsiStream") >= 3 and src.count("calculate_rsi(") == 1,
+        "RsiStream 出现 %d 次 / `calculate_rsi(` 出现 %d 次"
+        % (src.count("RsiStream"), src.count("calculate_rsi(")))
+
+
 # ══════════════════════════════════════════════════════════════════
 def main():
     try:
@@ -771,6 +922,9 @@ def main():
     test_chip_and_dblclick()
     test_mirror()
     test_rsi_style_and_range()
+    test_rsi_cycle_ssot()
+    test_core_rsi_same_source()
+    test_rsi_incremental()
     print("-" * 64)
     if _failed:
         for f in _failed:

@@ -237,7 +237,11 @@ class CChanConfig:
         self.cal_demark = conf.get("cal_demark", False)
         self.cal_rsi = conf.get("cal_rsi", False)
         self.cal_kdj = conf.get("cal_kdj", False)
-        self.rsi_cycle = conf.get("rsi_cycle", 14)
+        # 12 = 展示侧口径（前端 `RSI(12)` 文案 / `App/AppUtils.RSI_CYCLE`）。
+        # 早前这里的默认 14 与展示侧不一致：裸 `CChanConfig()` 会算出 14 日 RSI、
+        # 而图表画的是 12 日 —— 两边不一致。由 `Test/test_bottom_slots.py` 的
+        # 「RSI 周期同源」护栏钉住五处必须相等。
+        self.rsi_cycle = conf.get("rsi_cycle", 12)
         self.kdj_cycle = conf.get("kdj_cycle", 9)
         self.demark_config = conf.get("demark", {
             'demark_len': 9,

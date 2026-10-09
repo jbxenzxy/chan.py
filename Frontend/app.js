@@ -1287,7 +1287,7 @@
         // 成交额/量 类MACD —— 返回 Map<K线对象, {dif, dea, macd}>
         // 尾部占位K线（未形成的预览bar：成交量/成交额恒为 0，只有 OHLC 被填入）
         // **不参与 EMA**：0 会把 EMA 一路拉向 0，末根出现假的深坑；与后端
-        // _inherit_macd_for_preview_bar 同口径，末根继承前一根已算出的结果。
+        // _inherit_metrics_for_preview_bar 同口径，末根继承前一根已算出的结果。
         function calcVolMacdMap(klines, isFutures) {
             const out = new Map();
             if (!klines || !klines.length) return out;

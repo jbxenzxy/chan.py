@@ -27,9 +27,18 @@ import sys
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
-# 行号引用：完整形式 `Config.py:387` / `Engine/Engine.py:1065-1070`，裸形式 `:404`
-PAT_FULL = re.compile(r"([A-Za-z_][\w/]*\.py):(\d+)(?:-(\d+))?")
+# 行号引用：完整形式 `Config.py:387` / `app.js:1057-1059`，裸形式 `:404`
+#
+# 2026-10-10 扩到前端文件（.js/.html/.css）：原正则**只认 .py**，于是
+# `Docs/底部指标区改造设计_单窗双槽位.md` 里 51 处 `app.js:NNNN` **完全不计入棘轮**，
+# 评审时只能靠人工抽样才发现它们已 100% 漂移（文档冻结于首个提交，其后 app.js 净增
+# 353 行）。护栏的口径漏掉整整一类文件 = 护栏对它们**不存在**，必须补上。
+#
+# 排除 `Docs/`：那是「文档引文档」（如 `Docs/xxx.html:249`），不是引用代码。
+PAT_FULL = re.compile(r"(?<![/\w])((?!Docs/)[A-Za-z_][\w/]*\.(?:py|js|html|css)):(\d+)(?:-(\d+))?")
 PAT_BARE = re.compile(r"`:\d+(?:-\d+)?`")
+# 稳定锚点：`app.js::isFuturesMode` / `app.html::annotation-menu-mirror`
+PAT_ANCHOR = re.compile(r"([A-Za-z_][\w/]*\.(?:py|js|html|css))::([A-Za-z_][\w-]*)")
 
 # 基线（2026-09-29 实测）。改造某文档后把对应值调低；调到 0 即永久锁死。
 # 2026-09-29 第二轮：5 份 Docs 存量 317 处行号引用已按 README 那套锚点化完毕，
@@ -79,7 +88,13 @@ BASELINE = {
     # 设计文档快照**（正文里 174 处 `文件:行号` 是"基线 dd8f754 的坐标"，用来逐项
     # 核改动的落点），按上面的约定**登记存量实数**（只减不增）：新增一处行号引用即红。
     # 该文档随本轮改造入库（提交 27cf891），此前漏登记 ⇒ [3] 一直判红。
-    "Docs/底部指标区改造设计_单窗双槽位.md": 174,
+    #
+    # 2026-10-10 下调 174 → 87：该文档里 51 处 `app.js` 行号**全部漂移**（文档冻结于
+    # 首个提交，之后 app.js 净增 353 行），已按铁律 17 改为稳定锚点（`app.js::函数名`，
+    # 由 [6] 逐条校验其存在）。**减少的 87 处全是失效坐标**，不是"删掉了有用信息"。
+    # 基线必须同步下调，否则棘轮会凭空多出 87 处额度（见文件头 [1] 的说明）。
+    # 剩余 87 处是 .py 存量（基线 dd8f754 的坐标），本轮未动。
+    "Docs/底部指标区改造设计_单窗双槽位.md": 87,
 }
 
 # 已锚点化、不许回潮
@@ -123,6 +138,31 @@ def count(rel):
     return len(PAT_FULL.findall(t)) + len(PAT_BARE.findall(t))
 
 
+def resolve_src(fname):
+    """`app.js` / `Frontend/app.js` / `App/AppUtils.py` → 仓库内的真实路径"""
+    p = os.path.join(ROOT, fname)
+    if os.path.isfile(p):
+        return p
+    base = os.path.basename(fname)
+    for dp, dn, fns in os.walk(ROOT):
+        rd = os.path.relpath(dp, ROOT).replace("\\", "/")
+        if any(x in rd.split("/") for x in EXCLUDE_DIRS):
+            continue
+        if base in fns:
+            return os.path.join(dp, base)
+    return None
+
+
+_src_cache = {}
+
+
+def src_has(path, sym):
+    if path not in _src_cache:
+        _src_cache[path] = io.open(path, encoding="utf-8", errors="ignore").read()
+    return re.search(r"(?<![A-Za-z0-9_])" + re.escape(sym) + r"(?![A-Za-z0-9_])",
+                     _src_cache[path]) is not None
+
+
 print("\n[1] 棘轮：行号引用数只减不增（存量改造后请把基线调到 0）")
 missing = []
 for rel in sorted(BASELINE):
@@ -151,6 +191,35 @@ check("无基线外文档含行号引用", new_bad, [])
 print("\n[4] 已锚点化的文档不许回潮")
 for rel in ZERO_FILES:
     check("%s 行号引用 = 0" % rel, count(rel), 0)
+
+print("\n[6] 锚点校验：`文件::符号` 的符号必须在源码里真实存在")
+# 光「数行号个数」抓不到**内容漂移** —— 行号可以一处不动，指向的内容却早换了。
+# 这条才是真正对症的检查：锚点写的是函数名 / 常量名 / DOM id，源码里一旦改名或
+# 删除，这里立刻红。没写锚点、只写文件名的引用无法校验（也就无法保护），
+# 这正是改造时优先写 `app.js::符号` 而不是只写 `app.js` 的原因。
+bad_anchor = []
+n_anchor = 0
+for rel in iter_docs():
+    t = io.open(os.path.join(ROOT, rel), encoding="utf-8", errors="ignore").read()
+    for m in PAT_ANCHOR.finditer(t):
+        n_anchor += 1
+        path = resolve_src(m.group(1))
+        if path is None:
+            bad_anchor.append((rel, m.group(0), "找不到文件 %s" % m.group(1)))
+        elif not src_has(path, m.group(2)):
+            bad_anchor.append((rel, m.group(0), "符号 %s 不在 %s 里" % (m.group(2), m.group(1))))
+check("已登记 %d 个 `文件::符号` 锚点" % n_anchor, n_anchor > 0, True)
+check("全部锚点在源码里存在", bad_anchor, [])
+
+print("\n[7] 本轮改造的设计文档：前端行号已清零，不许回潮")
+# 底部指标区文档那 51 处 `app.js:NNNN` 100% 漂移，已全部锚点化。钉一条口径更窄的
+# 检查：该文档里**任何**指向前端代码的行号都不许再出现（[1] 的棘轮只管总数，
+# 总数降下来后仍可能悄悄往回加前端行号 —— 那条它抓不到）。
+BOTTOM_DOC = "Docs/底部指标区改造设计_单窗双槽位.md"
+if os.path.isfile(os.path.join(ROOT, BOTTOM_DOC)):
+    t = io.open(os.path.join(ROOT, BOTTOM_DOC), encoding="utf-8", errors="ignore").read()
+    fe = [m.group(0) for m in PAT_FULL.finditer(t) if not m.group(1).endswith(".py")]
+    check("%s 前端行号引用 = 0" % BOTTOM_DOC, fe, [])
 
 print("\n[5] 临时豁免不许长期化（评审 P3-7）")
 # 多实例文档那 55 处行号是**临时豁免**：§8.4 自陈「实施前坐标快照……实施后一并

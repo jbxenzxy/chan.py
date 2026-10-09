@@ -40,7 +40,7 @@ PE-TTM（滚动市盈率）在 eltdx 上有**两种取数接口**，**目前项�
 
 ## 二、当前项目接入概览
 
-- **A 股个股 PE-TTM**：`App/AppRefresh.py::_fetch_pe_ttm_live` → `ElTdxAPI.fetch_pe_ttm_single`（7615 单只）。
+- **A 股个股 PE-TTM**：`App/AppEngine.py::_fetch_pe_ttm_live` → `ElTdxAPI.fetch_pe_ttm_single`（7615 单只）。
 - **指数 / 港股 PE-TTM**：同一函数 → `TxAPI.fetch_pe_ttm`（腾讯 `qt.gtimg.cn` 字段 `[39]`；eltdx 统计口径不含指数，指数走 eltdx 必然取空）。
 - **股票扫描**：`AppScan` 传 `include_extra=False`，**不涉及** PE-TTM / 指数归属 / 股东减持——只消费 K 线 / 缠论结果与名称（`AppEngine.py` 三个 meta 字段在 `include_extra=False` 时置空）。
 

@@ -36,7 +36,7 @@ from App.AppUtils import (
     ema,
     _calc_zs_confirm_edt_from_bis, _find_left_shoulder_time,
     _FUTURES_DUAL_FREQ_MAP, _SSE_DEBUG, _inherit_metrics_for_preview_bar,
-    calculate_rsi,
+    calculate_rsi, RsiStream, RSI_CYCLE,
 )
 # 业务数据层（选点/期货子窗缓存；与 AppEngine 同一 app_data 单例）
 from App.AppData import app_data
@@ -471,6 +471,10 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
         tick_count = 0
         step_count = 0
         last_perf_print = time.time()
+        # RSI 增量状态：只缓存「到倒数第二根为止」的状态，供每 tick 续算末根（O(1)）。
+        # 形如 {"main": {"n": 已喂根数, "s": RsiStream}}；长度变了（新根推进）或首次
+        # 进入 ⇒ 重建（重建即全量喂一遍，正确性兜底由「n 必须等于 len(ex)-1」保证）。
+        rsi_tail_state = {}
 
         while True:
             try:
@@ -587,12 +591,19 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
                                         if i < len(dea):
                                             ex[i]['dea'] = round(dea[i], 4)
                                             ex[i]['macd'] = round(2 * (ex[i]['dif'] - ex[i]['dea']), 4)
-                                # ★ RSI 同样实时重算（后端算、前端只读 k.rsi）；
-                                #   RSI 无增量状态，全量重算，口径同 _apply_rsi_full
-                                rsi_vals = calculate_rsi(closes)
-                                for i in range(len(ex)):
-                                    if i < len(rsi_vals):
-                                        ex[i]['rsi'] = round(rsi_vals[i], 4)
+                                # ★ RSI 实时重算（后端算、前端只读 k.rsi）。
+                                #   tick 只改末根 OHLC ⇒ 前面各根的 rsi 不变，
+                                #   只需从「倒数第二根为止」的状态续算一根（O(1)），
+                                #   不必每 tick 全量重算 n 根。状态见 rsi_tail_state。
+                                if ex:
+                                    _st = rsi_tail_state.get("main")
+                                    if _st is None or _st["n"] != len(ex) - 1:
+                                        _s = RsiStream(RSI_CYCLE)
+                                        for _c in closes[:-1]:
+                                            _s.feed(_c)
+                                        _st = {"n": len(ex) - 1, "s": _s.copy()}
+                                        rsi_tail_state["main"] = _st
+                                    ex[-1]['rsi'] = round(_st["s"].copy().feed(closes[-1]), 4)
                                 cached_snapshot['meta']['generated_at'] = now.strftime('%Y-%m-%d %H:%M:%S')
                                 yield _sse_frame("update", cached_snapshot)
                                 t_tick_total += time.time() - t_tick_start
@@ -966,6 +977,10 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
         step_count = 0
         last_perf_print = time.time()
 
+        # RSI 增量状态（按窗口键隔离）：只缓存「到倒数第二根为止」的状态，
+        # 供每 tick 续算末根（O(1)）。长度变了或首次进入 ⇒ 重建（正确性兜底）。
+        rsi_tail_state = {}
+
         # ---- 定义单窗口K线处理函数（避免 continue 跳过另一个窗口） ----
         def _process_one_window(klines, chan, kl_type, freq_sec, freq_label,
                                       cached_snapshot, last_bar_dt_ns, last_processed_dt_ns,
@@ -1077,11 +1092,19 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
                                         if i < len(dea):
                                             ex[i]['dea'] = round(dea[i], 4)
                                             ex[i]['macd'] = round(2 * (ex[i]['dif'] - dea[i]), 4)
-                                # ★ RSI 同样实时重算（后端算、前端只读 k.rsi）
-                                rsi_vals = calculate_rsi(closes)
-                                for i in range(len(ex)):
-                                    if i < len(rsi_vals):
-                                        ex[i]['rsi'] = round(rsi_vals[i], 4)
+                                # ★ RSI 实时重算：tick 只改末根 ⇒ 从「倒数第二根为止」
+                                #   的状态续算一根即可（同 sse_futures_stream_single）。
+                                if ex:
+                                    # 按窗口键隔离状态：本嵌套函数对上/下窗各调一次，
+                                    # 共用一份状态会互相覆盖（长度恰同时还会算错）。
+                                    _st = rsi_tail_state.get(freq_label)
+                                    if _st is None or _st["n"] != len(ex) - 1:
+                                        _s = RsiStream(RSI_CYCLE)
+                                        for _c in closes[:-1]:
+                                            _s.feed(_c)
+                                        _st = {"n": len(ex) - 1, "s": _s.copy()}
+                                        rsi_tail_state[freq_label] = _st
+                                    ex[-1]['rsi'] = round(_st["s"].copy().feed(closes[-1]), 4)
                                 cached_snapshot['meta']['generated_at'] = now.strftime('%Y-%m-%d %H:%M:%S')
                         except Exception as e:
                             log.warning(f"[警告] 异常: {type(e).__name__}: {e}")
@@ -1649,10 +1672,17 @@ def _apply_macd_full(klines_out):
 def _apply_rsi_full(klines_out):
     """全量重算 RSI，就地写入每根K线的 "rsi" 字段（口径同 AppUtils.calculate_rsi）。
 
-    ⚠ 刻意**不做增量版**：MACD 的增量状态只有 3 个标量（ema12/ema26/dea），
-    RSI 是 Wilder 递推、状态含 up/down 两条**逐根全长**序列 —— 增量省下的是
-    一次 O(n) 遍历，却要多维护一套「状态从快照 meta 里存取 + 缺失回退」的路径。
-    收益不值，故两条快照路径（增量 / 全量）都走本函数，口径只有一份。
+    2026-10-10 更正（原结论有误，保留痕迹）：这里原先写「⚠ 刻意不做增量版 ——
+    RSI 是 Wilder 递推、状态含 up/down 两条**逐根全长**序列，收益不值」。
+    **这个判断是错的**：`AppUtils.calculate_rsi` 里那三个 `diff` / `ups` / `downs`
+    列表都只是**局部变量**，递推真正依赖的只有 4 个标量（`diff_len` + `up_sum` +
+    `down_sum` + 上一根的 `up`/`down`）—— 与 MACD 增量的 3 个标量同量级。
+    故已新增 `AppUtils.RsiStream`（O(1) 增量，与全量**逐位相等**），
+    **tick 路径已切过去**（每 tick 只续算末根，不再 O(n) 全量）。
+
+    本函数仍是**快照路径**的全量入口：快照本来就是整窗重建，省不掉那一次 O(n)，
+    走全量反而少一条状态存取路径。两条路径的口径仍只有 `calculate_rsi` 一份 ——
+    由 `Test/test_bottom_slots.py` 的「RSI 增量 ≡ 全量」护栏逐位钉住。
     """
     closes = [k["close"] for k in klines_out]
     rsi_vals = calculate_rsi(closes)
