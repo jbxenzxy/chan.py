@@ -4,10 +4,12 @@
 =====================================================================
 被守护的功能（2026-09-18 新增）：
 
-  底部指标区的「成交额（股票）/ 成交量（期货）」除柱状图外，新增一种显示
-  模式「类MACD」——借用传统 MACD(12,26,9) 算法，把收盘价换成成交额/量，
-  得到黄白线（DIF/DEA）与红绿柱（BAR）。切换入口在右上角「显示设置」抽屉，
-  默认柱状图（与既有行为一致）。
+  底部指标区是**多槽位**（单窗 2 槽 / 双窗 1 槽；2026-10-09 改造），每槽由标签行
+  最左的 chip 点击在 成交额/量 → MACD → RSI(12) 之间循环（BOTTOM_ORDER）。其中
+  「成交额（股票）/ 成交量（期货）」槽除柱状图外，可切为「类MACD」——借用传统
+  MACD(12,26,9) 算法，把收盘价换成成交额/量，得到黄白线（DIF/DEA）与红绿柱
+  （BAR）。该「柱状图 / 类MACD」仍由右上角「显示设置」抽屉决定，默认柱状图
+  （与既有行为一致）。
 
 本用例四层守护：
 
@@ -22,12 +24,16 @@
      附：尾部占位K线（未形成预览bar，量恒为 0）必须**不参与 EMA**（否则末根
      出现假的深坑），与后端 _inherit_macd_for_preview_bar 同口径继承。
   ④ 真渲染对照（无头 Chrome，浏览器不在位时降级 SKIP）：起本地静态服务 +
-     路由打桩喂真实快照 → 双击底部切到成交额/量 → 逐项量像素：
+     路由打桩喂真实快照 → 点槽 0 的 chip 循环到 成交额/量 → 逐项量像素：
         · 柱状图模式：底部无 DIF 白线 / DEA 橙线（≈0），有红/青柱
         · 类MACD模式：白线 + 橙线显著出现，标签文本变成「成交额MACD(12,26,9)」
           （期货为「成交量MACD(12,26,9)」，参数写法与「价格MACD」逐字同构）
         且标签里的 DIF 数值 ≡ Python 侧 calculate_macd 在同一根K线上的结果；
         切回柱状图白线/橙线消失（双向实时）；翻转视图下白线/橙线照常在。
+        另：槽位交互（默认双槽 / chip 单击循环 + 落盘 / 双击不切换且不重置视图）
+        与 RSI 槽的纵轴三档翻转（100/50/0 ↔ 0/50/100、中间恒 "50"）也在本节覆盖；
+        几何不变式与 RSI 两份后端实现的数值对齐另有专门用例
+        Test/test_bottom_slots.py。
 
 运行：python Test/test_vol_macd_mode.py            # 校验（run_all 组件）
       python Test/test_vol_macd_mode.py --update   # 兼容参数（无冻结基线）
@@ -266,23 +272,29 @@ def test_numeric_alignment(failures):
 # ⑤ 渲染分派与画法复用（源码契约）
 # ═══════════════════════════════════════════════════════════════════
 def test_render_dispatch(failures):
-    print("\n⑤ 渲染分派（底部指标区：柱状图 / 类MACD 双分派）")
+    print("\n⑤ 渲染分派（底部指标区：注册表四钩子 + vol 槽内 柱状图/类MACD 双分派）")
     js = read(APP_JS)
-    check(failures, "_volMacdMap = (_showVolume && _volDisplayMode === 'macd')\n"
+    check(failures, "_volMacdMap = (_hasBottomSlot('vol') && _volDisplayMode === 'macd')\n"
                     "                ? calcVolMacdMap(data.klines, "
                     "!!(data.meta && data.meta.market === 'futures'))" in js,
-          "_renderChart 里按当前显示模式算一次类MACD（全序列参与 EMA 预热）")
-    check(failures, "const volMacdRange = _volMacdMap ? getVolumeMacdRange(klines) : { min: -1, max: 1 };" in js,
-          "类MACD 纵轴范围独立计算（口径同 getMacdRange，全 0 兜底 ±1）")
-    check(failures, "drawVolumeMacd(klinesToDraw, volArea, volMacdRange, barStep, MACD_BAR_WIDTH, subPixelOffset);" in js
-          and "drawVolMacdAxis(volArea, volMacdRange);" in js,
-          "底部绘制与纵轴都按 _volDisplayMode 分派到类MACD 分支")
+          "_renderChart 里按「存在 vol 槽 且 模式=macd」算一次类MACD（全序列 EMA 预热）")
+    # ⚠ 赋值必须在槽位值域循环之前：vol 槽的 range() 在 macd 模式下会读 _volMacdMap，
+    #   放到循环之后会读到上一帧的陈旧 Map（vol 槽 y 值域滞后一帧）。
+    _i_map = js.find("_volMacdMap = (_hasBottomSlot('vol')")
+    _i_loop = js.find("slotRanges.push(BOTTOM_INDICATORS[_slotAt(si)].range(klines));")
+    check(failures, _i_map != -1 and _i_loop != -1 and _i_map < _i_loop,
+          "类MACD Map 先于槽位值域循环赋值（否则 vol 槽值域滞后一帧）")
+    check(failures, "range: (klines) => (_volDisplayMode === 'macd' ? getVolumeMacdRange(klines) : getVolumeRange(klines))," in js,
+          "vol 槽值域按显示模式二选一（类MACD 口径同 getMacdRange，全 0 兜底 ±1）")
+    check(failures, "drawVolumeMacd(c.klines, area, range, c.barStep, c.macdBarWidth, c.subPixelOffset);" in js
+          and "else drawVolumeAxis(area, range);" in js,
+          "vol 槽的绘制与纵轴都按 _volDisplayMode 分派到类MACD 分支")
     check(failures, "drawMacd(klines, volArea, macdRange, barStep, barWidth, subPixelOffset, volMacdOf);" in js,
           "drawVolumeMacd 复用 drawMacd 画法（翻转视图/零线/柱宽口径不漂移）")
     check(failures, "function drawMacd(klines, macdArea, macdRange, barStep, barWidth, subPixelOffset, valOf)" in js
           and "const getVals = valOf || function(k) { return k; };" in js,
           "drawMacd 支持可选取值函数，缺省仍取价格MACD（价格MACD行为不变）")
-    check(failures, "if (_showVolume && _volDisplayMode === 'macd') {" in js
+    check(failures, "if (_volDisplayMode === 'macd') {" in js
           and '"MACD(12,26,9)"' in js
           and 'isFuturesMode() ? "成交量" : "成交额"' in js
           and '(isFuturesMode() ? "成交量MACD" : "成交额MACD")' not in js,
@@ -294,12 +306,15 @@ def test_render_dispatch(failures):
     check(failures, "function formatVolMacdVal(v)" in js and "return (v < 0 ? \"-\" : \"\") + formatVolume(Math.abs(v));" in js,
           "类MACD 数值带符号格式化（单位随成交额/量：万/亿 或 手）")
     check(failures, "calcVolMacdMap(data.klines" in js and
-                    js.count("_volMacdMap = (_showVolume && _volDisplayMode === 'macd')") == 1,
+                    js.count("_volMacdMap = (_hasBottomSlot('vol') && _volDisplayMode === 'macd')") == 1,
           "类MACD 只在启用该模式时计算（柱状图模式零额外开销）")
-    # 双击语义未被改动：仍只在「价格MACD ↔ 成交额/量」之间切换
-    check(failures, "_showVolume = !_showVolume;\n                    saveOverlaySettings();" in js
-          and "_subShowVolume = !_subShowVolume;" in js,
-          "双击语义不变（上窗/单窗与双窗下窗各切各的），模式由抽屉决定")
+    # 双击切换已废除：切换入口改为标签行 chip 单击循环（BOTTOM_ORDER）
+    check(failures, "_showVolume = !_showVolume" not in js
+          and "_subShowVolume = !_subShowVolume" not in js,
+          "双击切换已移除（不得残留 _showVolume / _subShowVolume 的翻转赋值）")
+    check(failures, "const BOTTOM_ORDER = ['vol', 'macd', 'rsi'];" in js
+          and "const next = BOTTOM_ORDER[(BOTTOM_ORDER.indexOf(_slotAt(i)) + 1) % BOTTOM_ORDER.length];" in js,
+          "chip 单击按 BOTTOM_ORDER 循环切换该槽指标（替代双击）")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -346,8 +361,10 @@ PIXEL_STATS_JS = r"""
   const L = args.layout;
   const netH = H - L.top - L.bottom - L.gap;
   const chartH = netH * (1 - L.volRatio);
-  const y0 = L.top + chartH + L.textH;
-  const y1 = L.top + chartH + netH * L.volRatio;
+  // 槽位改造后底部区有多个槽：允许外部显式指定要统计的**绘图窗**（y0/y1），
+  // 未指定时回落到"整个底部区"（仅用于不需要区分槽的粗统计）。
+  const y0 = (args.y0 !== undefined) ? args.y0 : L.top + chartH + L.textH;
+  const y1 = (args.y1 !== undefined) ? args.y1 : L.top + chartH + netH * L.volRatio;
   const x0 = L.left, x1 = L.left + (W - L.left - L.right - L.rightGap);
   const g = c.getContext('2d');
   const w = Math.max(1, Math.round((x1 - x0) * dpr));
@@ -380,6 +397,50 @@ PIXEL_STATS_JS = r"""
   }
   return { white, orange, red, cyan, ink, zeroLineY, zeroRatio,
            area: { x0, y0, x1, y1, w, h }, dpr, W, H };
+}
+"""
+
+
+# RSI 槽的水平线探针（**不复用** MACD 零线那套「全宽灰线 + zeroRatio ≥ 0.35」启发式：
+# 设计 §2.4.3-4 明确要求 —— RSI 的参考线是虚线、中轴另色，同一探针会误判/漏判）。
+# 这里按**颜色分类**统计每行的覆盖比例：底色 #1a1a2e 上叠 rgba(255,255,255,0.15~0.2)
+# 的灰（r≈g、b 略大）；RSI 折线 #22D3EE 是青色（g、b 远大于 r），被 |r-g|<=6 排除。
+RSI_LINE_PROBE_JS = r"""
+(args) => {
+  const c = document.querySelector('#chart-container canvas');
+  if (!c) return { error: 'no canvas' };
+  const dpr = window.devicePixelRatio || 1;
+  const g = c.getContext('2d');
+  const x0 = args.x0, x1 = args.x1, y0 = args.y0, y1 = args.y1;
+  const w = Math.max(1, Math.round((x1 - x0) * dpr));
+  const h = Math.max(1, Math.round((y1 - y0) * dpr));
+  const img = g.getImageData(Math.round(x0 * dpr), Math.round(y0 * dpr), w, h).data;
+  const rows = [];
+  let cyanMin = null, cyanMax = null, cyanRows = 0, cyanPix = 0;
+  for (let yy = 0; yy < h; yy++) {
+    let cnt = 0, cy = 0;
+    for (let xx = 0; xx < w; xx++) {
+      const i = (yy * w + xx) * 4;
+      const r = img[i], gg = img[i + 1], b = img[i + 2], a = img[i + 3];
+      if (a < 8) continue;
+      // 水平参考线 / 中轴：底色 #1a1a2e(r=26) 上叠 rgba(255,255,255,0.15~0.2)。
+      // ⚠ 下界必须低到 33：1px 线落在半像素处时抗锯齿会把行覆盖拆成 ~0.4 / 0.6，
+      //   峰值 r 只有 40~46 —— 用 48 会把这种行整条滤掉（30% 参考线就是这样丢的）。
+      if (Math.abs(r - gg) <= 6 && (b - r) >= 4 && (b - r) <= 26
+          && r >= 33 && r <= 115) cnt++;
+      // RSI 折线 #22D3EE（青）：g、b 远大于 r
+      if (gg > 100 && b > 100 && r + 40 < gg && r + 40 < b) cy++;
+    }
+    rows.push(cnt / w);
+    if (cy > 0) {
+      cyanRows++; cyanPix += cy;
+      const y = y0 + yy / dpr;
+      if (cyanMin === null || y < cyanMin) cyanMin = y;
+      if (cyanMax === null || y > cyanMax) cyanMax = y;
+    }
+  }
+  return { rows, dpr, w, h, cyanMinY: cyanMin, cyanMaxY: cyanMax,
+           cyanRows, cyanPix, area: { x0, y0, x1, y1 } };
 }
 """
 
@@ -437,6 +498,15 @@ def test_real_render(failures):
     snap_text = open(SNAP_STOCK, encoding="utf-8").read()
     snap = json.loads(snap_text)
     is_futures = snap["meta"].get("market") == "futures"
+    # RSI 判据不该依赖 fixture 内容（冻结基线会随输出字段演进被重冻）：这里给
+    # **喂给页面的副本**按后端同口径（calculate_rsi）显式算一遍 rsi，即 fixture
+    # 缺该字段也能验「折线已画 + 随翻转镜像」（**不动**冻结文件）。
+    from App.AppUtils import calculate_rsi as _calc_rsi
+    served = json.loads(snap_text)
+    rsi_vals = _calc_rsi([k["close"] for k in served["klines"]])
+    for _i, _k in enumerate(served["klines"]):
+        _k["rsi"] = round(rsi_vals[_i], 4) if _i < len(rsi_vals) else 0
+    served_text = json.dumps(served)
     shot_dir = os.environ.get("VOL_MACD_SHOT_DIR") or tempfile.mkdtemp(prefix="vol_macd_shots_")
     os.makedirs(shot_dir, exist_ok=True)
 
@@ -456,8 +526,17 @@ def test_real_render(failures):
         layout["textH"] = int(m_txt.group(1))
     if m_gap:
         layout["rightGap"] = int(m_gap.group(1))
+    m_slot = re.search(r"const SLOT_GAP = (\d+);", js)
+    if m_slot:
+        layout["slotGap"] = int(m_slot.group(1))
+    # 单窗 = 2 槽 ⇒ 实际底部区占比 = volRatioFor(2) = VOL_RATIO × 2（设计不变式）。
+    # 基线常量名与值都不动，只是**消费方式**从"直接用 VOL_RATIO"变成"×槽数"。
+    slot_count = 2
+    layout["volRatioBase"] = layout.get("volRatio", 0.2)
+    layout["volRatio"] = layout["volRatioBase"] * slot_count
     check(failures,
-          all(k in layout for k in ("top", "bottom", "volRatio", "gap", "left", "textH", "rightGap")),
+          all(k in layout for k in ("top", "bottom", "volRatio", "gap", "left",
+                                    "textH", "rightGap", "slotGap")),
           "布局常量可从源码解析（测试与实现同源，不各写各的魔法数字）", str(layout))
 
     import functools
@@ -489,7 +568,7 @@ def test_real_render(failures):
             if "/api/health" in url:
                 body = json.dumps({"config": {"view_count": 233}})
             elif "analyze" in url:
-                body = snap_text
+                body = served_text
             else:
                 body = "{}"
             route.fulfill(status=200, content_type="application/json", body=body)
@@ -515,23 +594,71 @@ def test_real_render(failures):
         W, H = box["width"], box["height"]
         netH = H - layout["top"] - layout["bottom"] - layout["gap"]
         chartH = netH * (1 - layout["volRatio"])
-        vol_top = layout["top"] + chartH + layout["textH"]
-        vol_bot = layout["top"] + chartH + netH * layout["volRatio"]
+        total = netH * layout["volRatio"]
+        slotH = (total - slot_count * layout["textH"]
+                 - (slot_count - 1) * layout["slotGap"]) / slot_count
+        b_top = layout["top"] + chartH          # 底部区上沿
+        b_bot = layout["top"] + netH            # 底部区下沿（≡ 改造前 volArea 下沿）
+        # 槽 0 = vol、槽 1 = rsi；每槽 = 14px 标签行 + slotH 绘图窗（SLOT_GAP = 0）
+        s0_plot_top = b_top + layout["textH"]
+        s0_plot_bot = s0_plot_top + slotH
+        s1_plot_top = s0_plot_bot + layout["textH"]
+        s1_plot_bot = s1_plot_top + slotH
         area_x = layout["left"]
         area_w = W - layout["left"] - layout["right"] - layout["rightGap"]
 
-        # ── 1) 双击底部指标区 → 切到「成交额」（默认柱状图） ──
-        page.mouse.dblclick(box["x"] + area_x + area_w / 2, box["y"] + (vol_top + vol_bot) / 2)
+        # ── 0) 槽几何不变式（与实现同源，先钉住再谈像素） ──
+        checks.append(("槽几何：每槽绘图窗 ≡ netH×VOL_RATIO − 标签高（与槽数无关）",
+                       abs(slotH - (netH * layout["volRatioBase"] - layout["textH"])) < 1e-6,
+                       f"slotH={slotH:.2f} 期望={netH * layout['volRatioBase'] - layout['textH']:.2f}"))
+        checks.append(("槽几何：四段（label0/plot0/label1/plot1）恰好铺满底部区、无重叠无空隙",
+                       abs(s0_plot_bot - (b_top + layout["textH"] + slotH)) < 1e-6
+                       and abs(s1_plot_bot - b_bot) < 1e-6,
+                       f"s1_plot_bot={s1_plot_bot:.2f} b_bot={b_bot:.2f}"))
+
+        # ── 1) 默认槽位：单窗 2 槽 ['macd','rsi']、双窗下窗 1 槽 ['macd'] ──
+        st0 = page.evaluate("() => ({ slots: window.ChanApp.state._bottomSlots,"
+                            " sub: window.ChanApp.state._subBottomSlots })")
+        checks.append(("单窗默认双槽 ['macd','rsi']（验收 1）",
+                       st0["slots"] == ["macd", "rsi"], str(st0["slots"])))
+        checks.append(("双窗下窗默认单槽 ['macd']",
+                       st0["sub"] == ["macd"], str(st0["sub"])))
+
+        # ── 2) chip 单击循环：槽 0 macd → rsi →（双击只算一次）→ vol ──
+        # chip 几何与实现同源：chip.x = label.x + 2、高 = MACD_TEXT_HEIGHT − 2、
+        # 宽 = measureText(name) + 12 ⇒ 取 label.x + 5 / 标签行竖直中心，必在 chip 内。
+        chip_x = box["x"] + layout["left"] + 5
+        chip0_y = box["y"] + b_top + 7
+        page.mouse.click(chip_x, chip0_y)
         page.wait_for_timeout(250)
-        modes = page.evaluate("() => ({ showVol: window.ChanApp.state._showVolume,"
-                              " mode: window.ChanApp.state._volDisplayMode })")
-        checks.append(("双击底部指标区 → 切到成交额/量（_showVolume=true）",
-                       modes["showVol"] is True, str(modes)))
+        s1 = page.evaluate("() => window.ChanApp.state._bottomSlots")
+        checks.append(("chip 单击：槽 0 macd → rsi（BOTTOM_ORDER 顺序）",
+                       list(s1)[0] == "rsi", str(s1)))
+        store = page.evaluate("() => JSON.parse(localStorage.getItem('chan_overlay_settings') || '{}')")
+        checks.append(("chip 切换后落盘 localStorage.bottomSlots",
+                       list(store.get("bottomSlots") or [])[:1] == ["rsi"],
+                       str(store.get("bottomSlots"))))
+
+        # 双击 chip：不重置视图（§1.5 的核心）；且只前进一位（浏览器先发两次 click，
+        # detail>1 的那次被忽略）—— 不得连切两位。
+        view_before = page.evaluate("() => ({ off: window.ChanApp.state.viewOffset,"
+                                    " cnt: window.ChanApp.state.viewCount })")
+        page.mouse.dblclick(chip_x, chip0_y)
+        page.wait_for_timeout(250)
+        s2 = page.evaluate("() => window.ChanApp.state._bottomSlots")
+        view_after = page.evaluate("() => ({ off: window.ChanApp.state.viewOffset,"
+                                   " cnt: window.ChanApp.state.viewCount })")
+        checks.append(("双击 chip：只前进一位 rsi → vol（不因双击连切两位）",
+                       list(s2)[0] == "vol", str(s2)))
+        checks.append(("双击 chip：不触发「恢复全视图」（viewOffset/viewCount 不变）",
+                       view_after == view_before, f"{view_before} → {view_after}"))
+        checks.append(("双击 chip 不影响槽 1（仍为 rsi）", list(s2)[1] == "rsi", str(s2)))
 
         # 鼠标移出画布后重渲染，让标签取"最后一根"（否则标签跟随 hover 的K线）
         page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] + 60)
         page.wait_for_timeout(200)
-        bar_stats = page.evaluate(PIXEL_STATS_JS, dict(layout=layout))
+        region0 = dict(layout=layout, y0=s0_plot_top, y1=s0_plot_bot)
+        bar_stats = page.evaluate(PIXEL_STATS_JS, region0)
         page.locator("#chart-container canvas").screenshot(
             path=os.path.join(shot_dir, "1_bar.png"))
 
@@ -556,15 +683,24 @@ def test_real_render(failures):
         page.wait_for_timeout(100)
         macd_texts = page.evaluate("() => window.__drawnTexts.slice()")
         macd_pos = page.evaluate("() => window.__drawnTextPos.slice()")
-        macd_stats = page.evaluate(PIXEL_STATS_JS, dict(layout=layout))
+        macd_stats = page.evaluate(PIXEL_STATS_JS, region0)
+        rsi_probe_n = page.evaluate(RSI_LINE_PROBE_JS,
+                                    dict(x0=area_x, x1=area_x + area_w,
+                                         y0=s1_plot_top, y1=s1_plot_bot))
         page.locator("#chart-container canvas").screenshot(
             path=os.path.join(shot_dir, "2_vol_macd.png"))
 
         # ── 2b) 翻转视图下同样成立（类MACD 复用 drawMacd 的镜像路径） ──
+        # 先清空文字记录：mirror_pos 必须是**翻转后重绘**的那一批 —— 否则非翻转的
+        # 文字会一起留下（RSI 纵轴三档同名，会出现两次 ⇒ 三档判据全红）。
+        page.evaluate("() => { window.__drawnTexts.length = 0; window.__drawnTextPos.length = 0; }")
         page.evaluate("() => window.toggleMirrorMode()")
         page.wait_for_timeout(250)
         mirror_pos = page.evaluate("() => window.__drawnTextPos.slice()")
-        mirror_stats = page.evaluate(PIXEL_STATS_JS, dict(layout=layout))
+        mirror_stats = page.evaluate(PIXEL_STATS_JS, region0)
+        rsi_probe_m = page.evaluate(RSI_LINE_PROBE_JS,
+                                    dict(x0=area_x, x1=area_x + area_w,
+                                         y0=s1_plot_top, y1=s1_plot_bot))
         page.locator("#chart-container canvas").screenshot(
             path=os.path.join(shot_dir, "2b_vol_macd_mirror.png"))
         page.evaluate("() => window.toggleMirrorMode()")
@@ -575,7 +711,7 @@ def test_real_render(failures):
         page.click('input[name="vol-display-mode"][value="bar"]')
         page.wait_for_timeout(250)
         bar_texts = page.evaluate("() => window.__drawnTexts.slice()")
-        back_stats = page.evaluate(PIXEL_STATS_JS, dict(layout=layout))
+        back_stats = page.evaluate(PIXEL_STATS_JS, region0)
         page.locator("#chart-container canvas").screenshot(
             path=os.path.join(shot_dir, "3_back_to_bar.png"))
 
@@ -617,7 +753,7 @@ def test_real_render(failures):
         ratio = stats.get("zeroRatio", 0) or 0
         if zy is None or ratio < 0.35:
             return None
-        return vol_top + zy / (stats.get("dpr") or 1)
+        return s0_plot_top + zy / (stats.get("dpr") or 1)
 
     zn, zf = _zero_css(macd_stats), _zero_css(mirror_stats)
     checks.append(("0 轴零线可从像素探测（底部指标区的全宽灰线）",
@@ -626,10 +762,10 @@ def test_real_render(failures):
                        zn, zf, macd_stats.get("zeroRatio", 0) or 0,
                        mirror_stats.get("zeroRatio", 0) or 0)))
     if zn is not None and zf is not None:
-        checks.append(("翻转视图下 0 轴镜像正确（翻转前后零线 y 之和 ≡ 指标区上下沿之和）",
-                       abs((zn + zf) - (vol_top + vol_bot)) <= 4.0,
+        checks.append(("翻转视图下 0 轴镜像正确（翻转前后零线 y 之和 ≡ 槽 0 绘图窗上下沿之和）",
+                       abs((zn + zf) - (s0_plot_top + s0_plot_bot)) <= 4.0,
                        "非翻转=%.1f 翻转=%.1f 和=%.1f 期望=%.1f" % (
-                           zn, zf, zn + zf, vol_top + vol_bot)))
+                           zn, zf, zn + zf, s0_plot_top + s0_plot_bot)))
         for tag, pos, zz in (("未翻转", macd_pos, zn), ("翻转", mirror_pos, zf)):
             zeros = [round(p[2], 1) for p in pos if p[0] == "0"]
             checks.append(("%s时纵轴「0」标签与零线同位（同一根 0 轴，不是两套口径）" % tag,
@@ -673,6 +809,93 @@ def test_real_render(failures):
     checks.append((f"标签 DIF ≡ calculate_macd 在末根可见K线(#{last_idx})的值",
                    got_dif == "DIF:" + exp_dif,
                    f"前端标签 {got_dif!r} vs 基准 {'DIF:' + exp_dif!r}"))
+
+    # ── ⑶ 槽 1 = RSI(12)：纵轴三档 = 100/50/0 ↔ 翻转 0/50/100，中间恒 "50" ──
+    # 设计 §2.4.3：MACD 的 0 是**值域内插零线**（位置随数据变、中位是 0）；
+    # RSI 的 0 是**值域端点**、中位是 **50**。照抄 drawMacdAxis 的三段式会得到
+    # 「"0" 画两遍 + 中间缺 "50"」—— 下面的判据专门钉这一点。
+    def _rsi_axis(pos):
+        """槽 1 绘图窗内、内容为 0/50/100 的文字，按 y 升序（上→下）。"""
+        return sorted([p for p in pos
+                       if p[0] in ("0", "50", "100")
+                       and s1_plot_top - 8 <= p[2] <= s1_plot_bot + 8],
+                      key=lambda p: p[2])
+
+    ax_n, ax_m = _rsi_axis(macd_pos), _rsi_axis(mirror_pos)
+    checks.append(("RSI 纵轴三档 = 100 / 50 / 0（自上而下，各一次）",
+                   [p[0] for p in ax_n] == ["100", "50", "0"],
+                   str([(p[0], round(p[2], 1)) for p in ax_n])))
+    checks.append(("翻转后 RSI 纵轴 = 0 / 50 / 100（100 与 0 换位、各一次）",
+                   [p[0] for p in ax_m] == ["0", "50", "100"],
+                   str([(p[0], round(p[2], 1)) for p in ax_m])))
+    checks.append(("RSI 纵轴中间那档恒为 \"50\"（不是 MACD 的零线 \"0\"；"
+                   "照抄 drawMacdAxis 会画成两遍 \"0\"）",
+                   len(ax_n) == 3 and ax_n[1][0] == "50"
+                   and len(ax_m) == 3 and ax_m[1][0] == "50",
+                   str([p[0] for p in ax_n]) + " / " + str([p[0] for p in ax_m])))
+    n_by = {p[0]: p[2] - 4 for p in ax_n}
+    m_by = {p[0]: p[2] - 4 for p in ax_m}
+    tick50 = {}
+    if len(n_by) == 3 and len(m_by) == 3:
+        checks.append(("翻转是 Y 轴镜像：每档刻度 y 前后之和 ≡ 2×槽上沿 + 槽高",
+                       all(abs((n_by[v] + m_by[v]) - (2 * s1_plot_top + slotH)) <= 4.0
+                           for v in ("100", "50", "0")),
+                       "非翻转=%s 翻转=%s" % (
+                           {k: round(v, 1) for k, v in n_by.items()},
+                           {k: round(v, 1) for k, v in m_by.items()})))
+        checks.append(("RSI 的 50 是翻转不动点（前后同位）",
+                       abs(n_by["50"] - m_by["50"]) <= 4.0,
+                       "%.1f vs %.1f" % (n_by["50"], m_by["50"])))
+        tick50 = {"未翻转": n_by["50"], "翻转": m_by["50"]}
+
+    # ── ⑷ RSI 三条水平线（30/70 虚线 + 50 中轴）在翻转前后都真的画出来了 ──
+    def _line_hit(stats, expect_css, tol=2.5):
+        rows = stats.get("rows") or []
+        d = stats.get("dpr") or 1
+        best, best_ratio = None, 0.0
+        for yy, ratio in enumerate(rows):
+            y_css = s1_plot_top + yy / d
+            if abs(y_css - expect_css) <= tol and ratio > best_ratio:
+                best, best_ratio = y_css, ratio
+        return best, best_ratio
+
+    def _rsi_y(v, mirror):
+        return (s1_plot_top + (v / 100.0) * slotH) if mirror \
+            else (s1_plot_top + slotH - (v / 100.0) * slotH)
+
+    for tag, probe, mirror in (("未翻转", rsi_probe_n, False),
+                               ("翻转", rsi_probe_m, True)):
+        hits = {v: _line_hit(probe, _rsi_y(v, mirror)) for v in (70, 50, 30)}
+        checks.append(("RSI %s：30 / 50 / 70 三条水平线都画在 rsiToY(v) 上" % tag,
+                       all(h[0] is not None and h[1] >= 0.20 for h in hits.values()),
+                       str({k: (None if h[0] is None else round(h[0], 1),
+                                round(h[1], 2)) for k, h in hits.items()})))
+        if tag in tick50 and hits[50][0] is not None:
+            checks.append(("RSI %s：纵轴 \"50\" 刻度与其水平线同位（同一套 y 口径）" % tag,
+                           abs(tick50[tag] - hits[50][0]) <= 2.5,
+                           "刻度=%.1f 线=%.1f" % (tick50[tag], hits[50][0])))
+
+    # ── ⑸ RSI 折线（后端下发的 k.rsi）：真的画出来了，且随翻转镜像 ──
+    checks.append(("RSI 折线已绘制（槽 1 绘图窗内有青色 #22D3EE 像素）",
+                   (rsi_probe_n.get("cyanPix") or 0) > 200
+                   and (rsi_probe_m.get("cyanPix") or 0) > 200,
+                   "青像素数：非翻转=%s 翻转=%s" % (rsi_probe_n.get("cyanPix"),
+                                                   rsi_probe_m.get("cyanPix"))))
+    if rsi_probe_n.get("cyanMinY") is not None and rsi_probe_m.get("cyanMinY") is not None:
+        _flip = 2 * s1_plot_top + slotH      # Y 轴镜像：y ↦ flip − y
+        checks.append(("RSI 折线随翻转镜像：翻转前后 y 的 {min,max} 互换（各自之和 ≡ 2×槽上沿＋槽高）",
+                       abs((rsi_probe_n["cyanMinY"] + rsi_probe_m["cyanMaxY"]) - _flip) <= 3.0
+                       and abs((rsi_probe_n["cyanMaxY"] + rsi_probe_m["cyanMinY"]) - _flip) <= 3.0,
+                       "非翻转 min/max=%.1f/%.1f 翻转=%.1f/%.1f 期望和=%.1f" % (
+                           rsi_probe_n["cyanMinY"], rsi_probe_n["cyanMaxY"],
+                           rsi_probe_m["cyanMinY"], rsi_probe_m["cyanMaxY"], _flip)))
+
+    # ── ⑹ 标签 RSI(12) 的数值 ≡ calculate_rsi（与上面 DIF 那条同款跨语言闭环） ──
+    exp_rsi = "%.2f" % (round(rsi_vals[last_idx], 4) if last_idx < len(rsi_vals) else 0)
+    checks.append((f"标签 RSI(12) ≡ calculate_rsi 在末根可见K线(#{last_idx})的值",
+                   bool(has("RSI(12):", macd_texts)) and exp_rsi in macd_texts,
+                   "期望 %s，画面里 RSI 文本 %s" % (
+                       exp_rsi, [t for t in macd_texts if t.startswith("RSI")][:4])))
 
     for desc, ok, detail in checks:
         check(failures, ok, desc, detail)

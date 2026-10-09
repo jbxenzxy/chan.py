@@ -40,14 +40,18 @@
 
         let _logScale = false; // 坐标系模式：false=普通坐标系+等差网格, true=对数坐标系+等比网格
 
-        let _showVolume = false; // 上窗/单窗 底部区域显示模式：false=MACD, true=成交额（双击切换）
+        // 底部指标区槽位（单窗 2 槽 / 双窗 1 槽）；元素为 BOTTOM_INDICATORS 的 id。
+        // 用数组而不是单个数：数组天然就是"多槽位"的输入，槽数只决定取前几个 ——
+        // 单窗配好的 ['macd','rsi']，切双窗时只渲染第 0 个，切回单窗自动恢复第 2 槽。
+        // 槽位次序固定：[0] 在上、[1] 在下（不做拖拽调序）。两槽允许选同一指标（不做互斥判断）。
+        let _bottomSlots = ['macd', 'rsi'];   // 上窗 / 单窗
 
-        let _subShowVolume = false; // 双窗口下窗 底部区域显示模式（独立，不与上窗联动）
+        let _subBottomSlots = ['macd'];       // 双窗口下窗（独立，不与上窗联动）
 
         // 成交额/量的显示模式：'bar'=柱状图（默认，与既有行为一致）；
         // 'macd'=类MACD（把成交额/量代入传统 MACD(12,26,9)，替代收盘价）。
-        // 由右上角「显示设置」抽屉的单选项切换；双击底部指标区仍然只在
-        // 「价格MACD ↔ 成交额/量」之间切换，不改变本模式。
+        // 由右上角「显示设置」抽屉的单选项切换；只作用于「选中了 vol 的那个槽」，
+        // 与同屏其他槽（macd / rsi）无关。
         let _volDisplayMode = 'bar';
 
         // 频率→秒数映射（后端单一事实源 /api/health 下发，本地常量仅作离线兜底）
@@ -64,6 +68,61 @@
 
         const MACD_TEXT_HEIGHT = 14;
 
+        // ══ 底部指标区槽位（单窗 2 槽 / 双窗 1 槽）══════════════════════════
+        // 候选指标注册表：每个指标四个钩子，渲染层按 id 分派、不再写 if/else 链。
+        //   range(klines)         → 值域 {min, max}
+        //   draw(area, range, c)  → 绘制（c = 渲染上下文，见 _renderChart 的 bottomCtx）
+        //   axis(area, range)     → 纵轴刻度
+        //   label(textArea, c)    → 标签行正文（chip 由渲染层统一画）
+        // 加一个指标 = 加一条记录 + 三个函数，几何与分派都不用再动。
+        // chip（标签行最左那个可点的指标名）用短名：成交额 / 成交量 ——
+        // 数值区前缀仍走既有 getVolLabel()（含 "(手)"），不动它的既有口径。
+        const BOTTOM_INDICATORS = {
+            vol: {
+                id: 'vol',
+                tabLabel: () => (isFuturesMode() ? '成交量' : '成交额'),
+                range: (klines) => (_volDisplayMode === 'macd' ? getVolumeMacdRange(klines) : getVolumeRange(klines)),
+                draw: (area, range, c) => {
+                    if (_volDisplayMode === 'macd') {
+                        drawVolumeMacd(c.klines, area, range, c.barStep, c.macdBarWidth, c.subPixelOffset);
+                    } else {
+                        drawVolume(c.klines, area, range, c.barStep, c.barWidth, c.subPixelOffset);
+                    }
+                },
+                axis: (area, range) => {
+                    if (_volDisplayMode === 'macd') drawVolMacdAxis(area, range);
+                    else drawVolumeAxis(area, range);
+                },
+                label: (textArea, c) => drawVolSlotLabel(textArea, c),
+            },
+            macd: {
+                id: 'macd',
+                tabLabel: () => 'MACD',
+                range: (klines) => getMacdRange(klines),
+                draw: (area, range, c) => drawMacd(c.klines, area, range, c.barStep, c.macdBarWidth, c.subPixelOffset),
+                axis: (area, range) => drawMacdAxis(area, range),
+                label: (textArea, c) => drawMacdSlotLabel(textArea, c),
+            },
+            rsi: {
+                id: 'rsi',
+                tabLabel: () => 'RSI(12)',
+                range: () => getRsiRange(),
+                draw: (area, range, c) => drawRsi(c.klines, area, range, c.barStep, c.subPixelOffset),
+                axis: (area, range) => drawRsiAxis(area, range),
+                label: (textArea, c) => drawRsiSlotLabel(textArea, c),
+            },
+        };
+
+        const BOTTOM_ORDER = ['vol', 'macd', 'rsi'];   // chip 点击的循环顺序
+
+        // 槽数随窗口模式：单窗 2 槽、双窗 1 槽（双窗每窗高度已砍半，放不下第 2 槽）。
+        const SLOT_COUNT = () => (isDualWindow ? 1 : 2);
+
+        const SLOT_GAP = 0;                            // 槽间像素（0 = 靠 14px 标签行做视觉分隔）
+
+        const CHIP_PAD_X = 6;                          // chip 内左右留白
+        const CHIP_H = MACD_TEXT_HEIGHT;               // chip 高度（与标签行同高）
+
         // 双窗口模式逐窗布局参数（fix#1+#2）：
         // 双窗时每个 canvas 高度被砍半，若沿用单窗的 PADDING/GAP 绝对值与 0.2 占比，
         // 固定开销占比放大、MACD 带被严重压扁，波峰波谷难以分辨。
@@ -74,7 +133,7 @@
         function getLayoutParams() {
             return isDualWindow
                 ? DUAL_LAYOUT
-                : { top: PADDING.top, bottom: PADDING.bottom, gap: GAP, volRatio: VOL_RATIO };
+                : { top: PADDING.top, bottom: PADDING.bottom, gap: GAP, volRatio: volRatioFor(SLOT_COUNT()) };
         }
 
         let viewOffset = 0, viewCount = VIEW_COUNT;
@@ -203,6 +262,7 @@
             crosshair: "rgba(255,255,255,0.3)",
             macdUp: "rgba(255,60,60,0.6)", macdDown: "rgba(0,240,240,0.6)", // 原值: macdUp="rgba(255,68,68,0.6)", macdDown="rgba(0,221,0,0.6)"
             dif: "#FFFFFF", dea: "#F77F00", // 原值: dea="#FFD700"
+            rsi: "#22D3EE", // RSI 折线（青蓝；与红绿涨跌体系不冲突，也不与 vol 槽的柱色撞）
         };
 
         // ===== K线倒计时进度条（快期3风格） =====
@@ -349,8 +409,21 @@
                 if (typeof s.showSeg === 'boolean') showSeg = s.showSeg;
                 if (typeof s.showBsp === 'boolean') showBsp = s.showBsp;
                 if (typeof s.showBiIdx === 'boolean') showBiIdx = s.showBiIdx;
-                if (typeof s.showVolume === 'boolean') _showVolume = s.showVolume;
-                if (typeof s.showSubVolume === 'boolean') _subShowVolume = s.showSubVolume;
+                // 槽位：新键优先；旧键（布尔 showVolume / showSubVolume）保留迁移 ——
+                // 第 1 槽沿用旧选择（false → 'macd'、true → 'vol'），第 2 槽补 'rsi'，
+                // 使升级后"原来在看的那个指标还在原位"，同时直接获得同屏 RSI 的能力。
+                if (Array.isArray(s.bottomSlots)) {
+                    const validSlots = s.bottomSlots.filter(id => BOTTOM_INDICATORS[id]).slice(0, 2);
+                    if (validSlots.length) _bottomSlots = validSlots;
+                } else if (typeof s.showVolume === 'boolean') {
+                    _bottomSlots = [s.showVolume ? 'vol' : 'macd', 'rsi'];
+                }
+                if (Array.isArray(s.subBottomSlots)) {
+                    const validSub = s.subBottomSlots.filter(id => BOTTOM_INDICATORS[id]).slice(0, 2);
+                    if (validSub.length) _subBottomSlots = validSub;
+                } else if (typeof s.showSubVolume === 'boolean') {
+                    _subBottomSlots = [s.showSubVolume ? 'vol' : 'macd'];
+                }
                 if (s.volDisplayMode === 'bar' || s.volDisplayMode === 'macd') _volDisplayMode = s.volDisplayMode;
                 if (s.bspFilter && typeof s.bspFilter === 'object') {
                     for (var k in s.bspFilter) { bspFilter[k] = s.bspFilter[k]; }
@@ -368,8 +441,8 @@
                 const s = {
                     showBi: showBi, showFx: showFx,
                     showZs: showZs, showSeg: showSeg, showBsp: showBsp, showBiIdx: showBiIdx,
-                    showVolume: _showVolume,
-                    showSubVolume: _subShowVolume,
+                    bottomSlots: _bottomSlots,
+                    subBottomSlots: _subBottomSlots,
                     volDisplayMode: _volDisplayMode,
                     bspFilter: bspFilter,
                     maPeriods: maPeriods,
@@ -678,27 +751,35 @@
             canvas.addEventListener("mouseup", onMouseUp);
             canvas.addEventListener("mouseleave", onMouseLeave);
             canvas.addEventListener("contextmenu", onContextMenu);
+            // 底部指标区槽位 chip：单击沿 BOTTOM_ORDER 切换该槽的指标
+            canvas.addEventListener("click", function(e) {
+                if (!chartData) return;
+                // 双击的第二次点击（click.detail > 1）不重复切换 —— 浏览器必然先发
+                // 两次 click 才发 dblclick；不看 detail 会让双击 chip 连切两位。
+                if (e.detail > 1) return;
+                const rect = canvas.getBoundingClientRect();
+                const slot = hitBottomSlotChip(e.clientX - rect.left, e.clientY - rect.top);
+                if (slot >= 0) cycleBottomSlot(slot);
+            });
             canvas.addEventListener("dblclick", function(e) {
                 if (!chartData) return;
                 const rect = canvas.getBoundingClientRect();
                 const clickX = e.clientX - rect.left;
                 const clickY = e.clientY - rect.top;
                 const area = getChartArea();
-                const volArea = getVolArea();
-                const macdTextArea = getMacdTextArea();
-                // 0. 底部区域（MACD/成交额标签+图表区）双击切换显示模式
-                const bottomTop = macdTextArea.y;
-                const bottomBottom = volArea.y + volArea.h;
+                // 0. 底部指标区（各槽标签行 + 绘图窗）只做**命中拦截**：
+                //    切换入口已改为标签行 chip（cycleBottomSlot），双击不再切换指标，
+                //    但这一层拦截必须留着 —— 否则会落到底下的"双击空白处 → 恢复全视图"。
+                const bottomTop = getBottomSlotLabelArea(0).y;
+                const bottomBottom = getBottomAreaBottomY();
                 if (clickX >= area.x && clickX <= area.x + area.w &&
                     clickY >= bottomTop && clickY <= bottomBottom) {
-                    _showVolume = !_showVolume;
-                    saveOverlaySettings();
-                    render();
                     return;
                 }
-                // 1. 只在K线主图区域内有效
+                // 1. 只在K线主图区域内有效（下沿用 >= ：主图下沿恰好等于底带上沿，
+                //    交给上面那段处理，不让它去参与K线命中测试）
                 if (clickX < area.x || clickX > area.x + area.w ||
-                    clickY < area.y || clickY > area.y + area.h) {
+                    clickY < area.y || clickY >= area.y + area.h) {
                     return;
                 }
                 // 2. 计算当前可见K线和参数
@@ -974,28 +1055,107 @@
             return { x: PADDING.left, y: L.top, w: totalW - rightGap, h: chartH };
         }
 
-        function getVolArea() {
-            const w = canvas.clientWidth, h = canvas.clientHeight;
+        // ══ 底部指标区槽位几何（单窗 2 槽 / 双窗 1 槽）══════════════════════
+        // 硬不变式：slotH(n) = netH × VOL_RATIO − MACD_TEXT_HEIGHT，**与槽数 n 无关**
+        //   ⇒ 单窗双槽的每个槽，与改造前的单窗单槽逐像素相同（H=820 时 136.4px）；
+        //   ⇒ n = 1 时两个几何函数与改造前的 getVolArea() / getMacdTextArea() 逐像素等价
+        //      —— 这就是"双窗零回归"的来源。
+        // n = 2 时 label(0) ∪ plot(0) ∪ label(1) ∪ plot(1) 恰好铺满
+        //   [L.top + chartH, L.top + chartH + total]，无重叠无空隙。
+        function _bottomSlotMetrics() {
             const L = getLayoutParams();
-            const netH = h - L.top - L.bottom - L.gap;
+            const netH = canvas.clientHeight - L.top - L.bottom - L.gap;
             const chartH = netH * (1 - L.volRatio);
-            const totalMacdH = netH * L.volRatio;
-            const macdChartH = totalMacdH - MACD_TEXT_HEIGHT;
-            const totalW = w - PADDING.left - PADDING.right;
-            const rightGap = 55;
-            return { x: PADDING.left, y: L.top + chartH + MACD_TEXT_HEIGHT,
-                     w: totalW - rightGap, h: macdChartH };
+            const total = netH * L.volRatio;          // 底部区总高（volRatioFor 已按槽数翻倍）
+            const n = SLOT_COUNT();
+            return { L: L, netH: netH, chartH: chartH, total: total, n: n,
+                     slotH: (total - n * MACD_TEXT_HEIGHT - (n - 1) * SLOT_GAP) / n };
         }
 
-        function getMacdTextArea() {
-            const w = canvas.clientWidth, h = canvas.clientHeight;
-            const L = getLayoutParams();
-            const netH = h - L.top - L.bottom - L.gap;
-            const chartH = netH * (1 - L.volRatio);
-            const totalW = w - PADDING.left - PADDING.right;
+        function getBottomSlotLabelArea(i) {       // 第 i 槽的标签行
+            const m = _bottomSlotMetrics();
+            const totalW = canvas.clientWidth - PADDING.left - PADDING.right;
             const rightGap = 55;
-            return { x: PADDING.left, y: L.top + chartH,
+            return { x: PADDING.left,
+                     y: m.L.top + m.chartH + i * (MACD_TEXT_HEIGHT + m.slotH + SLOT_GAP),
                      w: totalW - rightGap, h: MACD_TEXT_HEIGHT };
+        }
+
+        function getBottomSlotPlotArea(i) {        // 第 i 槽的绘图窗
+            const label = getBottomSlotLabelArea(i);
+            const m = _bottomSlotMetrics();
+            return { x: label.x, y: label.y + MACD_TEXT_HEIGHT, w: label.w, h: m.slotH };
+        }
+
+        // 整个底部区的下沿（十字光标竖线 / 日期轴的定位基准）。
+        // ≡ L.top + chartH + total，与改造前的 volArea.y + volArea.h 同值。
+        function getBottomAreaBottomY() {
+            const m = _bottomSlotMetrics();
+            return m.L.top + m.netH;
+        }
+
+        // 底部区占比**按槽数翻倍**：底部区总高 = 槽数 × 现在的底部区。
+        // 取 n × VOL_RATIO 是唯一能让"每槽绘图窗 = netH×VOL_RATIO − MACD_TEXT_HEIGHT"
+        //   与 n 无关的式子 ⇒ 每槽与今天单窗单槽逐像素相同；n = 1 时恒等于 VOL_RATIO。
+        // 别写成"更大的常数"（0.30 / 0.36 / 0.40 硬编码都算）：那会让每槽高度随窗口模式
+        //   与槽数漂移，就没法再用"与现单槽逐像素相同"来验收了。
+        function volRatioFor(slotCount) { return VOL_RATIO * slotCount; }
+
+        // 当前渲染目标用的槽位数组：双窗下窗用 _subBottomSlots，其余（单窗 / 双窗上窗）
+        // 用 _bottomSlots。_renderChart 会在渲染下窗时把 chartData 换成 dualSubData。
+        function _bottomSlotList() {
+            return (chartData && chartData === dualSubData) ? _subBottomSlots : _bottomSlots;
+        }
+
+        // 第 i 槽当前选中的指标 id；越界 / 数组被清空时回落到 'macd'，
+        // 避免"标签行空了、指标窗没内容"的空状态（槽数本身由窗口模式决定，不随内容变）。
+        function _slotAt(i) {
+            const list = _bottomSlotList();
+            return (list && BOTTOM_INDICATORS[list[i]]) ? list[i] : 'macd';
+        }
+
+        function _setSlotAt(i, id) {
+            const list = _bottomSlotList();
+            if (!list || list[i] === undefined || !BOTTOM_INDICATORS[id]) return;
+            list[i] = id;
+        }
+
+        // 当前渲染的槽里是否有某个指标（vol 槽的类MACD 只在此时才算，柱状图模式零开销）
+        function _hasBottomSlot(id) {
+            const n = SLOT_COUNT();
+            for (let i = 0; i < n; i++) { if (_slotAt(i) === id) return true; }
+            return false;
+        }
+
+        // chip 点击：该槽在 BOTTOM_ORDER 内往后跳一位（macd → rsi → vol → macd）
+        function cycleBottomSlot(i) {
+            const next = BOTTOM_ORDER[(BOTTOM_ORDER.indexOf(_slotAt(i)) + 1) % BOTTOM_ORDER.length];
+            _setSlotAt(i, next);
+            saveOverlaySettings();
+            if (window._isRenderingBottom) renderBottom(); else render();
+        }
+
+        // 第 i 槽 chip 的矩形（标签行最左）。只依赖几何与文本宽度，不读鼠标状态。
+        function getBottomSlotChipRect(i) {
+            const label = getBottomSlotLabelArea(i);
+            const name = BOTTOM_INDICATORS[_slotAt(i)].tabLabel();
+            ctx.save();
+            ctx.font = "11px monospace";
+            const tw = ctx.measureText(name).width;
+            ctx.restore();
+            return { x: label.x + 2, y: label.y + 1,
+                     w: tw + CHIP_PAD_X * 2, h: CHIP_H - 2, text: name };
+        }
+
+        // chip 命中测试（返回槽号，未命中 -1）。命中区仅限标签行左侧，
+        // 不触碰 K 线区单击语义（选点走双击）。
+        function hitBottomSlotChip(x, y) {
+            const n = SLOT_COUNT();
+            for (let i = 0; i < n; i++) {
+                const r = getBottomSlotChipRect(i);
+                if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) return i;
+            }
+            return -1;
         }
 
         function getVisibleKlines() {
@@ -1296,13 +1456,13 @@
             const _savedMouseX = mouseX, _savedMouseY = mouseY;
             const _savedCurrentFreq = currentFreq;
             const _savedChartData = chartData;
-            const _savedShowVolume = _showVolume;
+            const _savedBottomSlots = _bottomSlots;
             viewOffset = vOffset; viewCount = vCount;
             mouseX = mX; mouseY = mY;
             currentFreq = freq;
             chartData = data;
-            // 双窗口模式：下窗使用独立的 _subShowVolume，不与上窗联动
-            if (data === dualSubData) _showVolume = _subShowVolume;
+            // 双窗口模式：下窗使用独立的槽位数组，不与上窗联动
+            if (data === dualSubData) _bottomSlots = _subBottomSlots;
             const w = canvas.clientWidth, h = canvas.clientHeight;
             ctx.fillStyle = COLORS.bg; ctx.fillRect(0, 0, w, h);
             const klines = getVisibleKlines();
@@ -1311,18 +1471,25 @@
                 mouseX = _savedMouseX; mouseY = _savedMouseY;
                 currentFreq = _savedCurrentFreq;
                 chartData = _savedChartData;
-                _showVolume = _savedShowVolume;
+                _bottomSlots = _savedBottomSlots;
                 return;
             }
-            const area = getChartArea(), volArea = getVolArea();
-            const macdTextArea = getMacdTextArea();
-            const priceRange = getPriceRange(klines), macdRange = getMacdRange(klines), volRange = getVolumeRange(klines);
-            // 成交额/量 类MACD：仅在启用该显示模式时计算（全序列参与 EMA 预热），
-            // 结果按K线对象索引，供底部绘制 / 标签 / 纵轴同源取值。
-            _volMacdMap = (_showVolume && _volDisplayMode === 'macd')
+            const area = getChartArea();
+            const priceRange = getPriceRange(klines);
+            // 成交额/量 类MACD：只在「某个槽选中了 vol 且显示模式为 macd」时计算
+            // （全序列参与 EMA 预热），结果按K线对象索引，供绘制 / 标签 / 纵轴同源取值。
+            // 必须先于下面的槽位值域循环赋值：vol.range() 在 macd 模式下会读 _volMacdMap。
+            _volMacdMap = (_hasBottomSlot('vol') && _volDisplayMode === 'macd')
                 ? calcVolMacdMap(data.klines, !!(data.meta && data.meta.market === 'futures'))
                 : null;
-            const volMacdRange = _volMacdMap ? getVolumeMacdRange(klines) : { min: -1, max: 1 };
+            // 槽位：按槽数取绘图窗与值域。值域一律走各指标的 range() 钩子
+            // （rsi 固定 [0,100]、vol 与 macd 从数据推），渲染层不再 per-指标 分支。
+            const slotCount = SLOT_COUNT();
+            const slotAreas = [], slotRanges = [];
+            for (let si = 0; si < slotCount; si++) {
+                slotAreas.push(getBottomSlotPlotArea(si));
+                slotRanges.push(BOTTOM_INDICATORS[_slotAt(si)].range(klines));
+            }
             const effectiveCount = klines.length < viewCount ? klines.length : viewCount;
             const barWidth = Math.max(1, (area.w / effectiveCount) * 0.7);
             const barStep = area.w / effectiveCount;
@@ -1397,25 +1564,28 @@
                 }
             }
             drawGrid(area, priceRange);
+            const bottomBottomY = getBottomAreaBottomY();
             ctx.strokeStyle = COLORS.grid; ctx.lineWidth = 1;
             ctx.beginPath();
             ctx.moveTo(area.x + area.w, area.y);
-            ctx.lineTo(area.x + area.w, volArea.y + volArea.h);
+            ctx.lineTo(area.x + area.w, bottomBottomY);
             ctx.stroke();
             ctx.beginPath();
             ctx.moveTo(area.x, area.y);
-            ctx.lineTo(area.x, volArea.y + volArea.h);
+            ctx.lineTo(area.x, bottomBottomY);
             ctx.stroke();
             const klinesToDraw = klines.slice(0, viewCount);
-            drawMacdLabel(macdTextArea, klinesToDraw, barStep, subPixelOffset);
-            if (_showVolume) {
-                if (_volDisplayMode === 'macd') {
-                    drawVolumeMacd(klinesToDraw, volArea, volMacdRange, barStep, MACD_BAR_WIDTH, subPixelOffset);
-                } else {
-                    drawVolume(klinesToDraw, volArea, volRange, barStep, barWidth, subPixelOffset);
-                }
-            } else {
-                drawMacd(klinesToDraw, volArea, macdRange, barStep, MACD_BAR_WIDTH, subPixelOffset);
+            // 底部指标区：先按槽画标签行（含 chip），再按注册表把各槽画进自己的绘图窗。
+            // bottomCtx 供各 draw / label 钩子取值，避免它们各自重算一遍。
+            const bottomCtx = {
+                klines: klinesToDraw, barStep: barStep, subPixelOffset: subPixelOffset,
+                barWidth: barWidth, macdBarWidth: MACD_BAR_WIDTH, targetK: null, textX: 0,
+            };
+            for (let si = 0; si < slotCount; si++) {
+                drawBottomSlotLabel(si, bottomCtx);
+            }
+            for (let si = 0; si < slotCount; si++) {
+                BOTTOM_INDICATORS[_slotAt(si)].draw(slotAreas[si], slotRanges[si], bottomCtx);
             }
             // 区间选择高亮：绘制起点A的金色标记
             if (_rangeSelect.mode === 'SELECTED_A' && _rangeSelect.startFreq === currentFreq && chartData && _rangeSelect.startSymbol === chartData.meta.symbol) {
@@ -1465,16 +1635,10 @@
             drawAnnotations(klinesToDraw, area, priceRange, barStep, subPixelOffset);
             drawViewportHighLow(klinesToDraw, area, priceRange, barStep, subPixelOffset);
             _overlayData = null;
-            drawCrosshair(klinesToDraw, area, priceRange, volArea, _showVolume ? volRange : macdRange, barStep, macdTextArea, subPixelOffset);
+            drawCrosshair(klinesToDraw, area, priceRange, bottomBottomY, barStep, subPixelOffset);
             drawPriceAxis(area, priceRange);
-            if (_showVolume) {
-                if (_volDisplayMode === 'macd') {
-                    drawVolMacdAxis(volArea, volMacdRange);
-                } else {
-                    drawVolumeAxis(volArea, volRange);
-                }
-            } else {
-                drawMacdAxis(volArea, macdRange);
+            for (let si = 0; si < slotCount; si++) {
+                BOTTOM_INDICATORS[_slotAt(si)].axis(slotAreas[si], slotRanges[si]);
             }
             drawDateAxis(klinesToDraw, barStep, subPixelOffset);
             drawCountdownBar(area);
@@ -1575,7 +1739,7 @@
             mouseX = _savedMouseX; mouseY = _savedMouseY;
             currentFreq = _savedCurrentFreq;
             chartData = _savedChartData;
-            _showVolume = _savedShowVolume;
+            _bottomSlots = _savedBottomSlots;
             // 只在主窗口（上面窗口或单窗口）更新统计
             if (data === _savedChartData || !isDualWindow) {
                 generateStats();
@@ -1856,6 +2020,61 @@
             drawMacd(klines, volArea, macdRange, barStep, barWidth, subPixelOffset, volMacdOf);
         }
 
+        // ══ RSI 槽（RSI(12)）════════════════════════════════════════════════
+        // 数据来自后端：App/AppUtils.calculate_rsi → SSE 逐根下发 k.rsi。
+        // 前端**零计算** —— 与 MACD 读 k.dif/dea/macd 完全同构；显示处理也照前端
+        // MACD 指标那一套（值域 / 绘制 / 纵轴 / 标签 / 翻转），唯一差别是指标定义
+        // 本身：单线、值域固定 0~100。
+        function rsiOf(k) {
+            const v = k ? k.rsi : undefined;
+            return (typeof v === 'number' && isFinite(v)) ? v : null;
+        }
+
+        // RSI 值域固定 [0,100]（Math/RSI.py 保证），不从数据推 —— 这也正是注册表
+        // 必须带 range() 钩子的原因（getMacdRange / getVolumeRange 都是"从数据算"）。
+        function getRsiRange() { return { min: 0, max: 100 }; }
+
+        // 值 → Y。翻转视图只翻 Y 方向，值原样参与计算（与 drawMacd 的 macdToY 同式）。
+        function rsiToY(v, area, range) {
+            const span = range.max - range.min;
+            return _isMirrorMode
+                ? area.y + (v - range.min) / span * area.h
+                : area.y + area.h - (v - range.min) / span * area.h;
+        }
+
+        // RSI 折线（单线）+ 50 中轴 + 30/70 超买超卖参考线。
+        // 三条水平线的 y **全部走同一个 rsiToY(v)**，禁止手写 area.h * 0.3 / * 0.7 之类
+        // 相对比例 —— MACD 那条 0 轴踩过的坑正是"同一条线用两个式子算"。
+        // 翻转视图：三条线整体镜像（70 ↔ 30 互换、50 是不动点）；单线单色
+        //   ⇒ 只翻 Y 位置，不改颜色、不改数值。
+        function drawRsi(klines, area, range, barStep, subPixelOffset) {
+            ctx.strokeStyle = "rgba(255,255,255,0.15)"; ctx.lineWidth = 1;
+            ctx.setLineDash([4, 4]);
+            [70, 30].forEach(v => {
+                const y = rsiToY(v, area, range);
+                ctx.beginPath(); ctx.moveTo(area.x, y); ctx.lineTo(area.x + area.w, y); ctx.stroke();
+            });
+            ctx.setLineDash([]);
+            const midY = rsiToY(50, area, range);
+            ctx.strokeStyle = "rgba(255,255,255,0.2)";
+            ctx.beginPath(); ctx.moveTo(area.x, midY); ctx.lineTo(area.x + area.w, midY); ctx.stroke();
+            // 折线：k.rsi 缺失的点不画（与 k.dif 缺失时 ZERO_MACD_VALS 兜底同思路）
+            ctx.strokeStyle = COLORS.rsi; ctx.lineWidth = 1;
+            ctx.beginPath();
+            let started = false;
+            klines.forEach((k, i) => {
+                const v = rsiOf(k);
+                if (v === null) { started = false; return; }
+                const x = area.x + barStep * i + barStep / 2 - subPixelOffset;
+                const y = rsiToY(v, area, range);
+                if (started) ctx.lineTo(x, y);
+                else { ctx.moveTo(x, y); started = true; }
+            });
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
+
+
         function drawVolume(klines, volArea, volRange, barStep, barWidth, subPixelOffset) {
             // 底部柱状图（股票=成交额，期货=成交量）：与K线风格一致
             //   红柱（涨）= 空心，颜色 #FF3C3C，与阳K线一致
@@ -1924,79 +2143,124 @@
             ctx.setLineDash([]);
         }
 
-        function drawMacdLabel(textArea, klines, barStep, subPixelOffset) {
+        // ══ 底部指标区标签行（chip + 正文）══════════════════════════════════
+        // chip：标签行最左那个显示当前指标名的小方块，可点击切换（见 cycleBottomSlot）
+        function drawBottomSlotChip(chip) {
+            ctx.font = "11px monospace"; ctx.textAlign = "left";
+            ctx.fillStyle = "rgba(255,255,255,0.08)";
+            ctx.fillRect(chip.x, chip.y, chip.w, chip.h);
+            ctx.strokeStyle = "rgba(255,255,255,0.18)"; ctx.lineWidth = 1;
+            ctx.strokeRect(chip.x + 0.5, chip.y + 0.5, chip.w - 1, chip.h - 1);
+            ctx.fillStyle = COLORS.textLight;
+            ctx.fillText(chip.text, chip.x + CHIP_PAD_X, chip.y + chip.h - 2);
+        }
+
+        // 画第 i 槽的标签行：chip + 该指标的正文（正文起点接在 chip 右侧）。
+        // hover 命中该标签行 → 取指向的K线；否则末根兜底（与改造前的 drawMacdLabel 同规则）。
+        function drawBottomSlotLabel(i, c) {
+            const textArea = getBottomSlotLabelArea(i);
+            const chip = getBottomSlotChipRect(i);
+            drawBottomSlotChip(chip);
             let targetK = null;
             if (mouseX >= textArea.x && mouseX <= textArea.x + textArea.w) {
-                const idx = Math.floor((mouseX - textArea.x + subPixelOffset) / barStep);
-                targetK = klines[Math.min(idx, klines.length - 1)];
+                const idx = Math.floor((mouseX - textArea.x + c.subPixelOffset) / c.barStep);
+                targetK = c.klines[Math.min(idx, c.klines.length - 1)];
             }
-            if (!targetK) targetK = klines[klines.length - 1];
-            if (targetK) {
-                ctx.font = "11px monospace"; ctx.textAlign = "left";
-                const lineY = textArea.y + 11;
-                if (_showVolume && _volDisplayMode === 'macd') {
-                    // 成交额/量 类MACD：标签与价格MACD同构（黄白线 + 红绿柱）。
-                    // 左标签去掉「成交额MACD/成交量MACD」前缀，只留 MACD(12,26,9)（与价格MACD同构）；
-                    // 品种口径「成交额/成交量」改置指标区右上角（见下方右对齐绘制）。
-                    // 数值单位随成交额/量。
-                    const vmacd = volMacdOf(targetK);
-                    const vlabel = "MACD(12,26,9)";
-                    ctx.fillStyle = COLORS.textLight;
-                    ctx.fillText(vlabel, textArea.x + 4, lineY);
-                    let vxPos = textArea.x + 4 + ctx.measureText(vlabel + " ").width;
-                    ctx.fillStyle = COLORS.dif;
-                    ctx.fillText("DIF:" + formatVolMacdVal(vmacd.dif), vxPos, lineY);
-                    vxPos += ctx.measureText("DIF:" + formatVolMacdVal(vmacd.dif) + " ").width;
-                    ctx.fillStyle = COLORS.dea;
-                    ctx.fillText("DEA:" + formatVolMacdVal(vmacd.dea), vxPos, lineY);
-                    vxPos += ctx.measureText("DEA:" + formatVolMacdVal(vmacd.dea) + " ").width;
-                    // 翻转视图：BAR颜色对调，与翻转后的类MACD柱一致
-                    const vBarIsUp = _isMirrorMode ? (vmacd.macd < 0) : (vmacd.macd >= 0);
-                    ctx.fillStyle = vBarIsUp ? "#FF3C3C" : "#00F0F0";
-                    ctx.fillText("BAR:" + formatVolMacdVal(vmacd.macd), vxPos, lineY);
-                    // 指标区右上角：成交额/成交量 前缀（从原左标签移除，保留品种口径区分）
-                    ctx.textAlign = "right";
-                    ctx.fillStyle = COLORS.textLight;
-                    ctx.fillText(isFuturesMode() ? "成交量" : "成交额", textArea.x + textArea.w - 4, lineY);
-                    ctx.textAlign = "left";
-                } else if (_showVolume) {
-                    // 底部柱状指标模式：股票显示成交额，期货显示成交量（文字灰色，数字红/绿）
-                    // 翻转视图：颜色对调，与翻转后的成交量柱一致
-                    const volIsRise = _isMirrorMode ? (targetK.close < targetK.open) : (targetK.close > targetK.open);
-                    const volColor = volIsRise ? "#FF3C3C" : "#00F0F0";
-                    const vLabel = getVolLabel();
-                    ctx.fillStyle = "#a8b2d1";
-                    ctx.fillText(vLabel + ":", textArea.x + 4, lineY);
-                    let xPos = textArea.x + 4 + ctx.measureText(vLabel + ":").width;
-                    ctx.fillStyle = volColor;
-                    const val = getVolMetric(targetK);
-                    const valLabel = isFuturesMode()
-                        ? (val >= 10000 ? (val / 10000).toFixed(2) + "万" : Math.round(val).toString())
-                        : (val >= 100000000 ? (val / 100000000).toFixed(2) + "亿" :
-                           val >= 10000 ? (val / 10000).toFixed(2) + "万" : val.toFixed(2));
-                    ctx.fillText(valLabel, xPos, lineY);
-                } else {
-                    ctx.fillStyle = COLORS.textLight;
-                    ctx.fillText("MACD(12,26,9)", textArea.x + 4, lineY);
-                    let xPos = textArea.x + 4 + ctx.measureText("MACD(12,26,9) ").width;
-                    // 防御：K线数据可能缺少MACD字段（dif/dea/macd），缺失时跳过标签避免 toFixed 崩溃
-                    if (targetK.dif !== undefined && targetK.dea !== undefined && targetK.macd !== undefined) {
-                        ctx.fillStyle = COLORS.dif;
-                        ctx.fillText("DIF:" + targetK.dif.toFixed(2), xPos, lineY);
-                        xPos += ctx.measureText("DIF:" + targetK.dif.toFixed(2) + " ").width;
-                        ctx.fillStyle = COLORS.dea;
-                        ctx.fillText("DEA:" + targetK.dea.toFixed(2), xPos, lineY);
-                        xPos += ctx.measureText("DEA:" + targetK.dea.toFixed(2) + " ").width;
-                        // 翻转视图：BAR颜色对调，与翻转后的MACD柱一致
-                        const barIsUp = _isMirrorMode ? (targetK.macd < 0) : (targetK.macd >= 0);
-                        ctx.fillStyle = barIsUp ? "#FF3C3C" : "#00F0F0";
-                        ctx.fillText("BAR:" + targetK.macd.toFixed(2), xPos, lineY);
-                    } else {
-                        ctx.fillStyle = "#888";
-                        ctx.fillText("MACD数据缺失", xPos, lineY);
-                    }
-                }
+            c.targetK = targetK || c.klines[c.klines.length - 1] || null;
+            c.textX = chip.x + chip.w + 6;
+            BOTTOM_INDICATORS[_slotAt(i)].label(textArea, c);
+        }
+
+        // 成交额/量 槽的标签行：柱状图模式显示数值；类MACD 模式与价格MACD同构
+        // （黄白线 + 红绿柱），品种口径「成交额/成交量」置于指标区右上角。
+        function drawVolSlotLabel(textArea, c) {
+            const targetK = c.targetK;
+            if (!targetK) return;
+            ctx.font = "11px monospace"; ctx.textAlign = "left";
+            const lineY = textArea.y + 11;
+            if (_volDisplayMode === 'macd') {
+                // 成交额/量 类MACD：标签与价格MACD同构（黄白线 + 红绿柱）。
+                // 左标签去掉「成交额MACD/成交量MACD」前缀，只留 MACD(12,26,9)；
+                // 品种口径「成交额/成交量」改置指标区右上角（见下方右对齐绘制）。
+                // 数值单位随成交额/量。
+                const vmacd = volMacdOf(targetK);
+                const vlabel = "MACD(12,26,9)";
+                ctx.fillStyle = COLORS.textLight;
+                ctx.fillText(vlabel, c.textX, lineY);
+                let vxPos = c.textX + ctx.measureText(vlabel + " ").width;
+                ctx.fillStyle = COLORS.dif;
+                ctx.fillText("DIF:" + formatVolMacdVal(vmacd.dif), vxPos, lineY);
+                vxPos += ctx.measureText("DIF:" + formatVolMacdVal(vmacd.dif) + " ").width;
+                ctx.fillStyle = COLORS.dea;
+                ctx.fillText("DEA:" + formatVolMacdVal(vmacd.dea), vxPos, lineY);
+                vxPos += ctx.measureText("DEA:" + formatVolMacdVal(vmacd.dea) + " ").width;
+                // 翻转视图：BAR颜色对调，与翻转后的类MACD柱一致
+                const vBarIsUp = _isMirrorMode ? (vmacd.macd < 0) : (vmacd.macd >= 0);
+                ctx.fillStyle = vBarIsUp ? "#FF3C3C" : "#00F0F0";
+                ctx.fillText("BAR:" + formatVolMacdVal(vmacd.macd), vxPos, lineY);
+                // 指标区右上角：成交额/成交量 前缀（从原左标签移除，保留品种口径区分）
+                ctx.textAlign = "right";
+                ctx.fillStyle = COLORS.textLight;
+                ctx.fillText(isFuturesMode() ? "成交量" : "成交额", textArea.x + textArea.w - 4, lineY);
+                ctx.textAlign = "left";
+            } else {
+                // 柱状指标模式：股票显示成交额，期货显示成交量（文字灰色，数字红/绿）
+                // 翻转视图：颜色对调，与翻转后的成交量柱一致
+                const volIsRise = _isMirrorMode ? (targetK.close < targetK.open) : (targetK.close > targetK.open);
+                const volColor = volIsRise ? "#FF3C3C" : "#00F0F0";
+                const vLabel = getVolLabel();
+                ctx.fillStyle = "#a8b2d1";
+                ctx.fillText(vLabel + ":", c.textX, lineY);
+                let xPos = c.textX + ctx.measureText(vLabel + ":").width;
+                ctx.fillStyle = volColor;
+                const val = getVolMetric(targetK);
+                const valLabel = isFuturesMode()
+                    ? (val >= 10000 ? (val / 10000).toFixed(2) + "万" : Math.round(val).toString())
+                    : (val >= 100000000 ? (val / 100000000).toFixed(2) + "亿" :
+                       val >= 10000 ? (val / 10000).toFixed(2) + "万" : val.toFixed(2));
+                ctx.fillText(valLabel, xPos, lineY);
             }
+        }
+
+        // 价格 MACD 槽的标签行：MACD(12,26,9) + DIF/DEA/BAR（BAR 颜色随翻转对调）
+        function drawMacdSlotLabel(textArea, c) {
+            const targetK = c.targetK;
+            if (!targetK) return;
+            ctx.font = "11px monospace"; ctx.textAlign = "left";
+            const lineY = textArea.y + 11;
+            ctx.fillStyle = COLORS.textLight;
+            ctx.fillText("MACD(12,26,9)", c.textX, lineY);
+            let xPos = c.textX + ctx.measureText("MACD(12,26,9) ").width;
+            // 防御：K线数据可能缺少MACD字段（dif/dea/macd），缺失时跳过标签避免 toFixed 崩溃
+            if (targetK.dif !== undefined && targetK.dea !== undefined && targetK.macd !== undefined) {
+                ctx.fillStyle = COLORS.dif;
+                ctx.fillText("DIF:" + targetK.dif.toFixed(2), xPos, lineY);
+                xPos += ctx.measureText("DIF:" + targetK.dif.toFixed(2) + " ").width;
+                ctx.fillStyle = COLORS.dea;
+                ctx.fillText("DEA:" + targetK.dea.toFixed(2), xPos, lineY);
+                xPos += ctx.measureText("DEA:" + targetK.dea.toFixed(2) + " ").width;
+                // 翻转视图：BAR颜色对调，与翻转后的MACD柱一致
+                const barIsUp = _isMirrorMode ? (targetK.macd < 0) : (targetK.macd >= 0);
+                ctx.fillStyle = barIsUp ? "#FF3C3C" : "#00F0F0";
+                ctx.fillText("BAR:" + targetK.macd.toFixed(2), xPos, lineY);
+            } else {
+                ctx.fillStyle = "#888";
+                ctx.fillText("MACD数据缺失", xPos, lineY);
+            }
+        }
+
+        // RSI 槽的标签行：单值。无 BAR 换色分支 —— 数值含义不随视角变
+        function drawRsiSlotLabel(textArea, c) {
+            const targetK = c.targetK;
+            if (!targetK) return;
+            ctx.font = "11px monospace"; ctx.textAlign = "left";
+            const lineY = textArea.y + 11;
+            const v = rsiOf(targetK);
+            ctx.fillStyle = COLORS.textLight;
+            ctx.fillText("RSI(12):", c.textX, lineY);
+            ctx.fillStyle = COLORS.rsi;
+            ctx.fillText(v === null ? "--" : v.toFixed(2),
+                         c.textX + ctx.measureText("RSI(12): ").width, lineY);
         }
 
         function drawFxMarkers(klines, area, priceRange, barStep, subPixelOffset) {
@@ -2373,7 +2637,7 @@
             drawOne(minLow, minLowIdx, _isMirrorMode ? true : false);    // 低点：上边沿贴合
         }
 
-        function drawCrosshair(klines, area, priceRange, volArea, volRange, barStep, macdTextArea, subPixelOffset) {
+        function drawCrosshair(klines, area, priceRange, bottomBottomY, barStep, subPixelOffset) {
             let idx, k, cx;
             if (mouseX < area.x || mouseX > area.x + area.w) {
                 idx = klines.length - 1;
@@ -2389,7 +2653,7 @@
                 k = klines[Math.min(idx, klines.length - 1)];
                 if (!k) return;
                 cx = area.x + barStep * idx + barStep / 2 - subPixelOffset;
-                const crosshairEndY = volArea.y + volArea.h;
+                const crosshairEndY = bottomBottomY;
                 ctx.strokeStyle = COLORS.crosshair; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
                 ctx.beginPath(); ctx.moveTo(cx, area.y); ctx.lineTo(cx, crosshairEndY); ctx.stroke();
                 if (mouseY >= area.y && mouseY <= crosshairEndY) {
@@ -2626,6 +2890,23 @@
             ctx.fillText("0", volArea.x + volArea.w + 6, volArea.y + volArea.h - 4);
         }
 
+        // RSI 纵轴：固定三档 [100][50][0]（翻转 [0][50][100]）。
+        // ⚠ 不能照抄 drawMacdAxis 的 topVal / zeroY / botVal 三段式：MACD 的 0 是值域
+        //   **内插的零线**（位置随数据变），而 RSI 的 0 是值域**端点**、中位是 **50**。
+        //   照抄会把中间那档写成 "0"（与下沿重合）⇒ "0" 被画两遍、中间缺 "50"。
+        //   三档的 y 一样全部走 rsiToY，与折线 / 参考线 / 中轴同源；变量也不叫 zeroY。
+        function drawRsiAxis(area, range) {
+            ctx.fillStyle = COLORS.text; ctx.font = "11px monospace";
+            ctx.textBaseline = "alphabetic"; ctx.textAlign = "left";
+            const x = area.x + area.w + 6;
+            const topVal = _isMirrorMode ? range.min : range.max;
+            const botVal = _isMirrorMode ? range.max : range.min;
+            ctx.fillText(String(topVal), x, rsiToY(topVal, area, range) + 4);
+            ctx.fillText("50", x, rsiToY(50, area, range) + 4);
+            ctx.fillText(String(botVal), x, rsiToY(botVal, area, range) + 4);
+        }
+
+
         // 成交额/量 类MACD 的数值格式化：带符号，绝对值交给 formatVolume
         // （股票 万/亿、期货 手/万），与柱状模式的纵轴/标签同一套单位口径。
         function formatVolMacdVal(v) {
@@ -2646,8 +2927,8 @@
 
         function drawDateAxis(klines, barStep, subPixelOffset) {
             ctx.fillStyle = COLORS.text; ctx.font = "11px monospace";
-            const area = getChartArea(), volArea = getVolArea();
-            const dateY = volArea.y + volArea.h + 28;
+            const area = getChartArea();
+            const dateY = getBottomAreaBottomY() + 28;
 
             // 测量样本日期文本宽度，用于计算最小像素间距
             let sampleDate;
@@ -3196,6 +3477,21 @@
                 subCanvas.addEventListener("mousemove", onSubMouseMove);
                 subCanvas.addEventListener("mouseup", onSubMouseUp);
                 subCanvas.addEventListener("mouseleave", onSubMouseLeave);
+                // 底部指标区槽位 chip：单击切指标（与双击同一套上下文切换）
+                subCanvas.addEventListener("click", function(e) {
+                    if (!dualSubData) return;
+                    // 同单窗：双击的第二次点击不重复切换
+                    if (e.detail > 1) return;
+                    const rect = subCanvas.getBoundingClientRect();
+                    const _scCanvas = canvas, _scCtx = ctx, _scChartData = chartData;
+                    canvas = subCanvas; ctx = subCtx; chartData = dualSubData;
+                    try {
+                        const slot = hitBottomSlotChip(e.clientX - rect.left, e.clientY - rect.top);
+                        if (slot >= 0) cycleBottomSlot(slot);
+                    } finally {
+                        canvas = _scCanvas; ctx = _scCtx; chartData = _scChartData;
+                    }
+                });
                 subCanvas.addEventListener("dblclick", function(e) {
                     if (!dualSubData) return;
                     const rect = subCanvas.getBoundingClientRect();
@@ -3210,16 +3506,11 @@
                     chartData = dualSubData; currentFreq = dualSubFreq;
                     try {
                     const area = getChartArea();
-                    const volArea = getVolArea();
-                    const macdTextArea = getMacdTextArea();
-                    // 底部区域双击切换显示模式
-                    const bottomTop = macdTextArea.y;
-                    const bottomBottom = volArea.y + volArea.h;
+                    // 底部指标区：切换入口是标签行 chip，这里只做命中拦截
+                    const bottomTop = getBottomSlotLabelArea(0).y;
+                    const bottomBottom = getBottomAreaBottomY();
                     if (clickX >= area.x && clickX <= area.x + area.w &&
                         clickY >= bottomTop && clickY <= bottomBottom) {
-                        _subShowVolume = !_subShowVolume;
-                        saveOverlaySettings();
-                        renderBottom();
                         return;
                     }
                     const klines = getVisibleKlines();
@@ -8943,9 +9234,9 @@
                 bspFilter: { get: function(){ return bspFilter; }, set: function(v){ bspFilter = v; } },
                 maPeriods: { get: function(){ return maPeriods; }, set: function(v){ maPeriods = v; } },
                 _logScale: { get: function(){ return _logScale; }, set: function(v){ _logScale = v; } },
-                _showVolume: { get: function(){ return _showVolume; }, set: function(v){ _showVolume = v; } },
+                _bottomSlots: { get: function(){ return _bottomSlots; }, set: function(v){ _bottomSlots = v; } },
                 _volDisplayMode: { get: function(){ return _volDisplayMode; }, set: function(v){ _volDisplayMode = v; } },
-                _subShowVolume: { get: function(){ return _subShowVolume; }, set: function(v){ _subShowVolume = v; } },
+                _subBottomSlots: { get: function(){ return _subBottomSlots; }, set: function(v){ _subBottomSlots = v; } },
                 currentFreq: { get: function(){ return currentFreq; }, set: function(v){ currentFreq = v; } },
                 lastStockFreq: { get: function(){ return lastStockFreq; }, set: function(v){ lastStockFreq = v; } },
                 lastFuturesFreq: { get: function(){ return lastFuturesFreq; }, set: function(v){ lastFuturesFreq = v; } },

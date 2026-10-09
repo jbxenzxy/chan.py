@@ -318,7 +318,7 @@ def test_cache_bust(failures):
 # ═══════════════════════════════════════════════════════════════════════
 STATE_LAYER_VARS = [
     "chartData", "showBi", "showFx", "showZs", "showSeg", "showBsp", "showBiIdx",
-    "bspFilter", "maPeriods", "_logScale", "_showVolume", "_subShowVolume",
+    "bspFilter", "maPeriods", "_logScale", "_bottomSlots", "_subBottomSlots",
     "_volDisplayMode",
     "currentFreq", "lastStockFreq", "lastFuturesFreq", "isDualWindow",
     "dualSubData", "dualSubFreq", "viewOffset", "viewCount", "isRealtimeMode",

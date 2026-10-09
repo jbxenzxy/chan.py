@@ -35,7 +35,8 @@ from App.AppUtils import (
     _make_chan_config, _get_kl_type, _get_kl_type_by_sec, _get_freq_label, _get_date_fmt,
     ema,
     _calc_zs_confirm_edt_from_bis, _find_left_shoulder_time,
-    _FUTURES_DUAL_FREQ_MAP, _SSE_DEBUG, _inherit_macd_for_preview_bar,
+    _FUTURES_DUAL_FREQ_MAP, _SSE_DEBUG, _inherit_metrics_for_preview_bar,
+    calculate_rsi,
 )
 # 业务数据层（选点/期货子窗缓存；与 AppEngine 同一 app_data 单例）
 from App.AppData import app_data
@@ -429,8 +430,8 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
                             'high': round(float(_lr.get('high', 0) or 0), 3),
                             'low': round(float(_lr.get('low', 0) or 0), 3),
                             'close': round(float(_lr.get('close', 0) or 0), 3),
-                            'vol': 0, 'amount': 0, 'dif': 0, 'dea': 0, 'macd': 0})
-                        _inherit_macd_for_preview_bar(_ex)
+                            'vol': 0, 'amount': 0, 'dif': 0, 'dea': 0, 'macd': 0, 'rsi': 0})
+                        _inherit_metrics_for_preview_bar(_ex)
                         init_data['meta']['kline_count'] = len(_ex)
             # 计算白色横虚线（初始快照，K线已确认状态）
             _kl_list = chan[kl_type]
@@ -586,6 +587,12 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
                                         if i < len(dea):
                                             ex[i]['dea'] = round(dea[i], 4)
                                             ex[i]['macd'] = round(2 * (ex[i]['dif'] - ex[i]['dea']), 4)
+                                # ★ RSI 同样实时重算（后端算、前端只读 k.rsi）；
+                                #   RSI 无增量状态，全量重算，口径同 _apply_rsi_full
+                                rsi_vals = calculate_rsi(closes)
+                                for i in range(len(ex)):
+                                    if i < len(rsi_vals):
+                                        ex[i]['rsi'] = round(rsi_vals[i], 4)
                                 cached_snapshot['meta']['generated_at'] = now.strftime('%Y-%m-%d %H:%M:%S')
                                 yield _sse_frame("update", cached_snapshot)
                                 t_tick_total += time.time() - t_tick_start
@@ -664,8 +671,8 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
                     _next_c = round(cl, 3)
                     _ex.append({'date': _next_ds, 'timestamp': int(_next_dt.timestamp() * 1000),
                         'open': _next_c, 'high': _next_c, 'low': _next_c, 'close': _next_c,
-                        'vol': 0, 'amount': 0, 'dif': 0, 'dea': 0, 'macd': 0})
-                    _inherit_macd_for_preview_bar(_ex)
+                        'vol': 0, 'amount': 0, 'dif': 0, 'dea': 0, 'macd': 0, 'rsi': 0})
+                    _inherit_metrics_for_preview_bar(_ex)
                     update_data['meta']['kline_count'] = len(_ex)
                 # K线确认后，计算白色横虚线（不在tick推送路径计算）
                 _kl_list = chan[kl_type]
@@ -895,8 +902,8 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
                         'high': round(float(_lr.get('high', 0) or 0), 3),
                         'low': round(float(_lr.get('low', 0) or 0), 3),
                         'close': round(float(_lr.get('close', 0) or 0), 3),
-                        'vol': 0, 'amount': 0, 'dif': 0, 'dea': 0, 'macd': 0})
-                    _inherit_macd_for_preview_bar(_ex)
+                        'vol': 0, 'amount': 0, 'dif': 0, 'dea': 0, 'macd': 0, 'rsi': 0})
+                    _inherit_metrics_for_preview_bar(_ex)
                     main_snapshot['meta']['kline_count'] = len(_ex)
         # 下窗
         if _sub_klines_for_init is not None and len(_sub_klines_for_init) > 0:
@@ -911,8 +918,8 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
                         'high': round(float(_lr.get('high', 0) or 0), 3),
                         'low': round(float(_lr.get('low', 0) or 0), 3),
                         'close': round(float(_lr.get('close', 0) or 0), 3),
-                        'vol': 0, 'amount': 0, 'dif': 0, 'dea': 0, 'macd': 0})
-                    _inherit_macd_for_preview_bar(_ex)
+                        'vol': 0, 'amount': 0, 'dif': 0, 'dea': 0, 'macd': 0, 'rsi': 0})
+                    _inherit_metrics_for_preview_bar(_ex)
                     sub_snapshot['meta']['kline_count'] = len(_ex)
         if _SSE_DEBUG:
             log.info(f"[{display_key}] 初始快照提取: {time.time()-t_snap:.3f}s")
@@ -1070,6 +1077,11 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
                                         if i < len(dea):
                                             ex[i]['dea'] = round(dea[i], 4)
                                             ex[i]['macd'] = round(2 * (ex[i]['dif'] - dea[i]), 4)
+                                # ★ RSI 同样实时重算（后端算、前端只读 k.rsi）
+                                rsi_vals = calculate_rsi(closes)
+                                for i in range(len(ex)):
+                                    if i < len(rsi_vals):
+                                        ex[i]['rsi'] = round(rsi_vals[i], 4)
                                 cached_snapshot['meta']['generated_at'] = now.strftime('%Y-%m-%d %H:%M:%S')
                         except Exception as e:
                             log.warning(f"[警告] 异常: {type(e).__name__}: {e}")
@@ -1143,8 +1155,8 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
                     _next_c = round(cl, 3)
                     _ex.append({'date': _next_ds, 'timestamp': int(_next_dt.timestamp() * 1000),
                         'open': _next_c, 'high': _next_c, 'low': _next_c, 'close': _next_c,
-                        'vol': 0, 'amount': 0, 'dif': 0, 'dea': 0, 'macd': 0})
-                    _inherit_macd_for_preview_bar(_ex)
+                        'vol': 0, 'amount': 0, 'dif': 0, 'dea': 0, 'macd': 0, 'rsi': 0})
+                    _inherit_metrics_for_preview_bar(_ex)
                     snapshot['meta']['kline_count'] = len(_ex)
                 if is_main:
                     _kl_list = chan[kl_type]
@@ -1541,6 +1553,9 @@ def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_se
                 })
         ema_state = _apply_macd_full(klines_out)
 
+    # RSI 无增量版：两条路径都全量重算（见 _apply_rsi_full 的说明）
+    _apply_rsi_full(klines_out)
+
     # 统一结构元素提取（bis/fxs/segs/zs/zs_stars/bsps，与期货分析共用）
     bis, fxs, segs, zs_list, zs_stars, bsps = _extract_chan_structure(kl_list, chan, _date_fmt)
 
@@ -1629,6 +1644,20 @@ def _apply_macd_full(klines_out):
     for k in klines_out:
         k["dif"] = 0; k["dea"] = 0; k["macd"] = 0
     return None
+
+
+def _apply_rsi_full(klines_out):
+    """全量重算 RSI，就地写入每根K线的 "rsi" 字段（口径同 AppUtils.calculate_rsi）。
+
+    ⚠ 刻意**不做增量版**：MACD 的增量状态只有 3 个标量（ema12/ema26/dea），
+    RSI 是 Wilder 递推、状态含 up/down 两条**逐根全长**序列 —— 增量省下的是
+    一次 O(n) 遍历，却要多维护一套「状态从快照 meta 里存取 + 缺失回退」的路径。
+    收益不值，故两条快照路径（增量 / 全量）都走本函数，口径只有一份。
+    """
+    closes = [k["close"] for k in klines_out]
+    rsi_vals = calculate_rsi(closes)
+    for i in range(len(klines_out)):
+        klines_out[i]["rsi"] = round(rsi_vals[i], 4) if i < len(rsi_vals) else 0
 
 
 def _apply_macd_incremental(klines_out, changed_idx, prev_ema_state):

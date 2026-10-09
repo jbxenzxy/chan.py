@@ -6,7 +6,7 @@
 （monkeypatch 互不干扰），任一失败即整体退出码非 0（可直接接入
 CI / 迁移每阶段的验收门禁）。
 
-组件（按依赖顺序；1~33 为历史阶段组件，其后的分组见 COMPONENTS 内联注释）：
+组件（按依赖顺序；1~34 为历史阶段组件，其后的分组见 COMPONENTS 内联注释）：
   1. fixtures 完整性   gen_fixtures.py --check      冻结输入未被手改
   2. 核心快照回归      snapshot_runner.py --all     笔/段/中枢/买卖点 7 维度（股票+期货）
   3. trigger_step 回放 test_trigger_step_replay.py  逐步回放收敛一致性
@@ -86,6 +86,12 @@ CI / 迁移每阶段的验收门禁）。
                                                      一侧为空→最大单笔报 0/
                                                      金额口径 = net_cash（含双边
                                                      手续费，毛盈净亏算亏损笔）
+ 34. 底部指标区双槽+RSI test_bottom_slots.py 槽位几何不变式（双窗零回归/四段
+                                                     铺满/每槽高与槽数无关）/
+                                                     RSI 两份后端实现逐点对齐/
+                                                     chip 单击循环+双击拦截/
+                                                     翻转下 rsiToY 镜像不变式
+                                                     （中间档恒 50，非零线 0）
 每组件独立子进程执行，超时 300s 按失败终止（防死循环挂死）。
 
 登记在 `CLEAN_CREDENTIALS_COMPONENTS` 的组件（当前 p20 / p60）额外**清空凭据
@@ -305,6 +311,12 @@ COMPONENTS = [
     # + 真渲染对照（无头 Chrome 截图量像素，浏览器不在位时降级 SKIP）。
     ("vol_macd_mode",
      [sys.executable, os.path.join("Test", "test_vol_macd_mode.py")]),
+    # 底部指标区「单窗双槽位 + RSI」（2026-10-09）：槽位几何不变式（双窗零回归 /
+    # 四段铺满 / 每槽高与槽数无关）+ RSI 两份**后端**实现逐点对齐 + chip 单击循环与
+    # 双击拦截（不落到底下的"恢复全视图"）+ 翻转视图下 rsiToY 的镜像 / 不动点 /
+    # 70·30 互换，以及「纵轴中间档恒 50（不是 MACD 的零线 0）」。
+    ("bottom_slots",
+     [sys.executable, os.path.join("Test", "test_bottom_slots.py")]),
     # 统计面板字段：期货品种只显品种键 / 平均每笔盈利-亏损（后半截不重复）/
     # 期望值数值带「 元/笔」/
     # 最大单笔盈-亏合成一行且不显示时间 / 删「按出场原因」与「曲线口径」/

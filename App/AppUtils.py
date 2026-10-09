@@ -232,7 +232,7 @@ def _get_market_code(code):
 #   - 纯函数/常量零业务状态，不触碰 app_data 实例字段；
 #   - 周期/日期/配置相关常量单源于此，消除 AppEngine/AppSSE 双来源。
 
-# ── MACD 计算（纯函数）──
+# ── MACD / RSI 计算（纯函数）──
 def ema(data, period):
     """计算EMA"""
     result = []
@@ -255,17 +255,62 @@ def calculate_macd(closes, fast=12, slow=26, signal=9):
     return [{"dif": dif[i], "dea": dea[i], "macd": macd[i]} for i in range(len(closes))]
 
 
-def _inherit_macd_for_preview_bar(klines_list):
-    """让预览K线（列表最后一根）继承前一根已确认K线的MACD值，避免跳变。
+def calculate_rsi(closes, period=12):
+    """计算 RSI（口径逐字照抄核心 Math/RSI.py，避免两套实现打架）。
+
+    与核心的唯一差别是输入形态：核心 `Math/RSI.py` 是逐根 `add(close)`、内部维护
+    `close_arr`；这里一次性喂完整序列，故用局部列表复刻同一套分支 —— 含
+    「前 period-1 根用**简单平均**」这个**非标准**播种口径（标准 Wilder 是
+    「前 period 根 SMA 做种子」）。首根恒 50.0；down == 0 时按 up 是否 > 0 给 100 / 0。
+
+    改这里的分支必须同步改 `Math/RSI.py`（反之亦然）—— 两者由
+    `Test/test_bottom_slots.py` 的「RSI 数值对齐」护栏逐点钉住。
+    """
+    diff = []
+    ups = []
+    downs = []
+    out = []
+    for i, close in enumerate(closes):
+        if i == 0:
+            out.append(50.0)
+            continue
+        diff.append(close - closes[i - 1])
+        if len(diff) < period:
+            up_sum = sum(x for x in diff if x > 0)
+            down_sum = sum(-x for x in diff if x < 0)
+            ups.append(up_sum / len(diff))
+            downs.append(down_sum / len(diff))
+        else:
+            if diff[-1] > 0:
+                upval, downval = diff[-1], 0.0
+            else:
+                upval, downval = 0.0, -diff[-1]
+            ups.append((ups[-1] * (period - 1) + upval) / period)
+            downs.append((downs[-1] * (period - 1) + downval) / period)
+        if downs[-1] == 0:
+            out.append(100.0 if ups[-1] > 0 else 0.0)
+        else:
+            rs = ups[-1] / downs[-1]
+            out.append(100.0 - 100.0 / (1.0 + rs))
+    return out
+
+
+def _inherit_metrics_for_preview_bar(klines_list):
+    """让预览K线（列表最后一根）继承前一根已确认K线的指标值，避免跳变。
+
     预览K线的close是假数据（壁钟触发时用冻结K线的close填充），
-    重算全序列MACD反而引入误差，不如直接继承前一根的值，
-    等后续真实tick到来时再由tick路径用真实数据重算覆盖。"""
+    重算全序列指标反而引入误差，不如直接继承前一根的值，
+    等后续真实tick到来时再由tick路径用真实数据重算覆盖。
+
+    继承字段 = SSE 下发给前端的全部指标（dif / dea / macd + rsi）。
+    """
     if len(klines_list) < 2:
         return
     prev = klines_list[-2]
     klines_list[-1]['dif'] = prev.get('dif', 0)
     klines_list[-1]['dea'] = prev.get('dea', 0)
     klines_list[-1]['macd'] = prev.get('macd', 0)
+    klines_list[-1]['rsi'] = prev.get('rsi', 0)
 
 
 # ── 周期映射（秒数 → KL_TYPE；取数唯一来源）──
@@ -290,10 +335,18 @@ def _get_freq_label(freq):
     return row[2] if row and row[2] else "日线"
 
 
-# ── 缠论配置（统一构造；配置值单源于 ChanConfig.CChanConfig 默认值）──
+# ── 缠论配置（统一构造）──
+# 取值口径：除下面显式打开的两项外，一律单源于 ChanConfig.CChanConfig 的默认值。
+#   显式项 = RSI 指标（`cal_rsi=True` + `rsi_cycle=12`）：核心默认关，此处打开，
+#   使 `klu.rsi` 可供笔级背驰 / 买卖点使用
+#   （Math/RSI.py → KLine_Unit 逐根挂值 → Bi.Cal_Rsi）。
+#   只覆盖"入口工厂"、不改 ChanConfig 的默认值 —— 改默认会波及 Chan.py / main.py
+#   等所有裸 `CChanConfig()` 调用方（那是另一件事，需要单独议）。
+#   Backtest/Runner.default_chan_config() 必须同传这两项：两边由
+#   Backtest/Test/test_bt02_config_contract.py 钉「逐字段相等」。
 def _make_chan_config():
-    """统一的缠论配置，股票和期货共用。配置值单源于 ChanConfig.CChanConfig 默认值"""
-    return CChanConfig()
+    """统一的缠论配置，股票和期货共用。除 RSI 开关外单源于 ChanConfig.CChanConfig 默认值"""
+    return CChanConfig({"cal_rsi": True, "rsi_cycle": 12})
 
 
 # ── 日期格式（freq → 统一日期格式，与 CChan 输出格式一致）──

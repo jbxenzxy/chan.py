@@ -61,7 +61,7 @@ from App.AppUtils import (
     _get_stock_name, _get_stock_market_code, _get_market_code,
     _infer_bare_code_market, is_index,
     _get_kl_type, _get_freq_label,
-    _make_chan_config, calculate_macd,
+    _make_chan_config, calculate_macd, calculate_rsi,
     INTRADAY_FREQS, _get_date_fmt,
     _calc_zs_confirm_edt_from_bis, _find_left_shoulder_time,
 )
@@ -942,9 +942,10 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
     t0 = time.time()
     kl_list = chan[_get_kl_type(freq)]
 
-    # 1. K线数据（含MACD）
+    # 1. K线数据（含MACD / RSI）
     closes = [r["close"] for r in records]
     macd_list = calculate_macd(closes)
+    rsi_list = calculate_rsi(closes)
     date_fmt = _get_date_fmt(freq)
     kline_data = []
     for i, row in enumerate(records):
@@ -958,6 +959,7 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
             "dif": round(macd["dif"], 4),
             "dea": round(macd["dea"], 4),
             "macd": round(macd["macd"], 4),
+            "rsi": round(rsi_list[i], 4) if i < len(rsi_list) else 0,
         })
 
     # 双窗口模式：为每根K线添加 sub_kl_times（灰框定位用，时间分桶合成）
@@ -1308,9 +1310,10 @@ def _extract_sub_level_data(chan, sub_freq, code, market):
                 "amount": round(klu.trade_info.metric.get("turnover", 0) or 0, 2),
             })
 
-    # 2. 计算 MACD
+    # 2. 计算 MACD / RSI
     closes = [r["close"] for r in raw_records]
     macd_list = calculate_macd(closes)
+    rsi_list = calculate_rsi(closes)
 
     # 3. 构建 kline_data
     kline_data = []
@@ -1325,6 +1328,7 @@ def _extract_sub_level_data(chan, sub_freq, code, market):
             "dif": round(macd["dif"], 4),
             "dea": round(macd["dea"], 4),
             "macd": round(macd["macd"], 4),
+            "rsi": round(rsi_list[i], 4) if i < len(rsi_list) else 0,
         })
 
     # 4. 构建 bi_data

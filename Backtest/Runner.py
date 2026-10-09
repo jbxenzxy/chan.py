@@ -48,15 +48,21 @@ from .State import State, next_state
 def default_chan_config():
     """回测侧自持的缠论配置（P0-2 方案 B）。
 
-    = `CChanConfig()` 全默认 = 页面 `App/AppUtils._make_chan_config()`。
-    由 `Test/test_bt02_config_contract.py` 钉住"逐字段相等" —— 哪天 `App/` 侧
+    = 页面 `App/AppUtils._make_chan_config()`（**逐字段**）。由
+    `Test/test_bt02_config_contract.py` 钉住"逐字段相等" —— 哪天 `App/` 侧
     给它加了一条覆盖，契约测试立刻变红，而不是让回测静默用另一套口径。
+
+    当前相对 `CChanConfig()` 全默认只有一处覆盖：RSI 指标打开
+    （`cal_rsi=True` + `rsi_cycle=12`）。页面侧开它是为了 `klu.rsi`
+    （笔级背驰 / 买卖点用），回测必须同开 —— 否则两边不是同一个分析口径，
+    而"回测数字与页面不一致"是那种不报错、只出错值的问题。
+    该覆盖不改任何买卖点结果：默认 `macd_algo` 不是 `rsi`，`Bi.Cal_Rsi` 不被调用。
 
     ⚠ 必须带 `trigger_step=True`（`CChanConfig` 默认即真）：`CChan.step_load()`
       首行就是 `assert self.conf.trigger_step`。改成 False 会在第一帧就断言失败。
     """
     from ChanConfig import CChanConfig
-    return CChanConfig()
+    return CChanConfig({"cal_rsi": True, "rsi_cycle": 12})
 
 
 def kl_type_of(freq: str):
