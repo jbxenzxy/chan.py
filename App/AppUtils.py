@@ -331,8 +331,13 @@ class RsiStream:
       · 播种期（前 `period` 根）：`up_sum` / `down_sum` —— 正/负 diff 的**累加和**，
         增量时 `+=` 即可，不需要保留每根 diff；
       · Wilder 期：只需**上一根**的 `up` / `down` 均值。
-    合计 4 个标量（`diff_len` + `up_sum` + `down_sum` + `up`/`down`），与 MACD 增量
-    的 3 个标量（ema12/ema26/dea）同量级 —— 不需要"逐根全长序列"。
+    即语义状态 **4 组 / 6 个数值**（`diff_len`、`up_sum`、`down_sum`、上一根 `up`/`down`；
+    另加 `prev_close` 才能算出当根 `d`）—— 与 MACD 增量的 3 个标量（ema12/ema26/dea）
+    同量级，**不随 K 线根数 n 增长**，故不需要"逐根全长序列"。
+
+    口径说明：`__slots__` 共 10 个字段，比上面多出来的 4 个不是递推状态 ——
+    `period` 是常量、`n` 只用于「状态是否落后于当前序列」的自检、
+    `up_c` / `down_c` 是 `_nsum_add` 的补偿项（为逐位复刻 `sum()` 而存在）。
 
     浮点一致性：播种期按同一顺序累加、Wilder 期用同一条表达式递推 ⇒ 与
     `calculate_rsi` **bit-for-bit 相等**（不是"误差范围内"）。由

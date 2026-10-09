@@ -1675,8 +1675,9 @@ def _apply_rsi_full(klines_out):
     2026-10-10 更正（原结论有误，保留痕迹）：这里原先写「⚠ 刻意不做增量版 ——
     RSI 是 Wilder 递推、状态含 up/down 两条**逐根全长**序列，收益不值」。
     **这个判断是错的**：`AppUtils.calculate_rsi` 里那三个 `diff` / `ups` / `downs`
-    列表都只是**局部变量**，递推真正依赖的只有 4 个标量（`diff_len` + `up_sum` +
-    `down_sum` + 上一根的 `up`/`down`）—— 与 MACD 增量的 3 个标量同量级。
+    列表都只是**局部变量**（播种期过后 `diff` 永不回看，`ups`/`downs` 每次只取 `[-1]`），
+    递推真正依赖的只有 4 组状态量（`diff_len` + `up_sum` + `down_sum` + 上一根的
+    `up`/`down`）—— 与 MACD 增量的 3 个标量（ema12/ema26/dea）同量级，都不随 n 增长。
     故已新增 `AppUtils.RsiStream`（O(1) 增量，与全量**逐位相等**），
     **tick 路径已切过去**（每 tick 只续算末根，不再 O(n) 全量）。
 
