@@ -15,6 +15,17 @@
   · P2-3：退出弹窗读顶层 `log_tail`，退出的不是"最近一次操作"的那个实例时
     正文退化成"（日志文件不存在或为空）"+"完整日志：（未知）"。
 
+补充（2026-10-09 用户反馈：「自动下单开着时选复盘，弹出『交易引擎已退出!』，
+日志却说『文件不存在或为空』，可引擎其实还在跑、刷新页面又显示开启」）：
+复盘重连的 SSE init 会重解析 `realtimeSymbol`，而**品种键**只在
+`refreshAutoOrderTradable()` 里更新 ⇒ 头几拍 `autoOrderPageKey()` 为空 ⇒
+`matchAutoOrderInstance` 兜底失效 ⇒ `bound=null` ⇒ `running` 假 false ⇒
+既假弹退出框（实例投影缺失 → 正文退化），又让 §3.3「引擎运行中禁止复盘」
+守卫静默放行。故退出探测抽出为 `_detectAutoOrderExit()`，加两条防线：
+① 品种键为空的一拍不作结论（不计数也不撤膛）；②「上膛（本页绑定曾是运行中）
+→ 连续两拍不在跑」才提示，报后撤膛只报一次。用户主动起停（onAutoOrderToggle
+成功路径）把上膛标志复位为 null ⇒ 主动关闭绝不被报成异常退出。
+
 前端是零构建原生 JS、仓库里没有浏览器运行时用例，故本文件用
 **源码抽取 + node 真执行** 钉住这三条行为 —— 不做子串包含断言：这些词在
 注释里就有，子串断言会恒绿（`test_frontend_ao_off_symbol` 已踩过这个坑）。
@@ -104,7 +115,11 @@ ANCHOR_MATCH = "function matchAutoOrderInstance("
 ANCHOR_RC = "function _rcHint("
 ANCHOR_ALERTS = "function handleAutoOrderAlerts("
 ANCHOR_TOASTS = "function handleAutoOrderToasts("
-ANCHOR_EXIT = "if (autoOrderPrevRunning === true && !running && !autoOrderBusy)"
+ANCHOR_EXIT = "function _detectAutoOrderExit("
+# ⑤ 本页绑定重算 + §3.3「引擎运行中」拦截（2026-10-09 假弹退出框的另一半根因）
+ANCHOR_INIT = "function connectRealtimeInit("
+ANCHOR_DUAL = "function connectRealtimeDual("
+ANCHOR_GOTO = "window.gotoDate = function()"
 
 
 def _collect(failures):
@@ -324,66 +339,267 @@ console.log(JSON.stringify(OUT));
 
 
 # ══════════════════════════════════════════════════════════════════
-# ④ 退出弹窗取"本页实例"的日志尾部（P2-3）+ 退出码人话
+# ④ 异常退出探测：误报防线 + 复核两拍 + 只报一次 + 日志取本页实例
+#    （P2-3 / 2026-10-09 用户反馈「选复盘时假弹『交易引擎已退出!』」）
 # ══════════════════════════════════════════════════════════════════
-def test_exit_popup(src, failures):
-    if not src["exit"] or not src["rc"]:
-        return
-    harness = """
+def _exit_harness(rc_src, exit_src):
+    """构造 ④ 的 node 脚本。rc_src/exit_src 分开传 ⇒ 变异自证可只换 exit 源码。"""
+    return """
 'use strict';
 const SRC_RC = %s;
 const SRC_EXIT = %s;
-function run(pageInst, bound, data) {
+// 每个 mkr() = 一个"页面"（模块级状态 autoOrderPrevRunning /
+// autoOrderNotRunningStreak / autoOrderBusy 都是页面私有的）。返回的
+// fire/armed/streak 闭包住这些状态 ⇒ 能真跑多拍、且能看内部状态迁移。
+function mkr() {
   const shown = [];
-  new Function(
-    'autoOrderPrevRunning', 'running', 'autoOrderBusy', 'pageInst', 'bound',
-    'data', 'showAlert', 'console',
-    SRC_RC + '\\n' + SRC_EXIT
-  )(true, false, false, pageInst, bound, data,
-    function (m) { shown.push(m); },
+  const api = new Function(
+    'showAlert', 'console',
+    'let autoOrderPrevRunning = null;'
+    + 'let autoOrderNotRunningStreak = 0;'
+    + 'let autoOrderBusy = false;'
+    + SRC_RC + '\\n' + SRC_EXIT + '\\n'
+    + 'return {'
+    + '  fire: function (r, pi, b, d, k) { return _detectAutoOrderExit(r, pi, b, d, k); },'
+    + '  busy: function (v) { autoOrderBusy = v; },'
+    + '  armed: function () { return autoOrderPrevRunning; },'
+    + '  streak: function () { return autoOrderNotRunningStreak; }'
+    + '};'
+  )(function (m) { shown.push(m); },
     { warn: function () {}, error: function () {}, log: function () {} });
-  return shown.join('\\n');
+  api.shown = shown;
+  return api;
 }
+const IF = { running: true, instance_key: 'IF', symbol: 'KQ.m@CFFEX.IF',
+             log_file: '/s/IF/gateway.log', log_tail: 'RuntimeError: boom',
+             exit_rc: 3221225477 };
+const NODATA = { log_tail: null, log_file: null };
+const TOP = { log_tail: 'top-tail', log_file: '/s/AU/gateway.log' };
 const OUT = {};
+
+// a) 误报防线：上膛后品种键未就位（key=''）→ 连续三拍都不得作结论，
+//    且不得撤膛（否则键恢复后真崩溃会漏报）。若删掉 !pageKey 短路，
+//    第 2 拍起就会假弹 ⇒ 本组转红。
+const ma = mkr();
+ma.fire(true, IF, IF, NODATA, 'IF');
+OUT.a_armed = ma.armed();
+ma.fire(false, null, null, NODATA, '');
+ma.fire(false, null, null, NODATA, '');
+ma.fire(false, null, null, NODATA, '');
+OUT.a_shown = ma.shown.length;
+OUT.a_armed_after = ma.armed();
+OUT.a_streak = ma.streak();
+
+// b) 复核两拍：单拍瞬态（后端读库瞬时失败 / 绑定空窗）不报；第 2 拍才报，
+//    正文取本页实例的 log_tail / exit_rc / log_file。
+const mb = mkr();
+mb.fire(true, IF, IF, NODATA, 'IF');
+mb.fire(false, IF, null, NODATA, 'IF');
+OUT.b_shown1 = mb.shown.length;
+mb.fire(false, IF, null, NODATA, 'IF');
+OUT.b_shown2 = mb.shown.length;
+OUT.b_text = mb.shown.join('\\n');
+OUT.b_armed_after = mb.armed();
+
+// c) 只报一次：已报过（撤膛）后继续不在跑，不再弹。
+mb.fire(false, IF, null, NODATA, 'IF');
+mb.fire(false, IF, null, NODATA, 'IF');
+OUT.c_shown = mb.shown.length;
+
+// d) 未上膛（= 用户主动关闭后 onAutoOrderToggle 复位为 null）→ 连续不在跑
+//    也不许报成"异常退出"。
+const md = mkr();
+md.fire(false, IF, null, NODATA, 'IF');
+md.fire(false, IF, null, NODATA, 'IF');
+md.fire(false, IF, null, NODATA, 'IF');
+OUT.d_shown = md.shown.length;
+
+// e) 运行 → 回落 → 又运行 → 再回落：回到运行必须清零复核计数，
+//    重启后的第一次回落仍要重新攒满两拍。
+const me = mkr();
+me.fire(true, IF, IF, NODATA, 'IF');
+me.fire(false, IF, null, NODATA, 'IF');
+me.fire(true, IF, IF, NODATA, 'IF');
+OUT.e_streak_reset = me.streak();
+me.fire(false, IF, null, NODATA, 'IF');
+OUT.e_shown1 = me.shown.length;
+me.fire(false, IF, null, NODATA, 'IF');
+OUT.e_shown2 = me.shown.length;
+
+// f) busy（用户正在起停，状态切换中）→ 一拍也不报。
+const mf = mkr();
+mf.fire(true, IF, IF, NODATA, 'IF');
+mf.busy(true);
+mf.fire(false, IF, null, NODATA, 'IF');
+mf.fire(false, IF, null, NODATA, 'IF');
+mf.fire(false, IF, null, NODATA, 'IF');
+OUT.f_shown = mf.shown.length;
+
+// g) 实例投影缺失（旧后端 / 已出注册表）→ 退回顶层，保持改造前行为。
+const mg = mkr();
+mg.fire(true, null, null, TOP, 'IF');
+mg.fire(false, null, null, TOP, 'IF');
+mg.fire(false, null, null, TOP, 'IF');
+OUT.g_text = mg.shown.join('\\n');
+
+// rc 定性（人话映射不受本次改造影响）
 OUT.rc0 = (function () {
   const f = new Function(SRC_RC + '\\nreturn _rcHint;')();
   return [f(0), f(3221225477), f(3221225781), f(-1073741819), f(null), f('')];
 })();
-// 崩的是本页品种那个实例，顶层 log_tail 为空（退出的不是"最近一次操作"的那个）
-OUT.byInst = run({ log_tail: 'RuntimeError: boom', log_file: '/s/IF/gateway.log',
-                   exit_rc: 3221225477 }, null,
-                 { log_tail: null, log_file: null });
-// 实例投影缺失（旧后端 / 已出注册表）→ 退回顶层，保持改造前行为
-OUT.byTop = run(null, null,
-                { log_tail: 'top-tail', log_file: '/s/AU/gateway.log' });
 console.log(JSON.stringify(OUT));
-""" % (json.dumps(src["rc"]), json.dumps(src["exit"]))
+""" % (json.dumps(rc_src), json.dumps(exit_src))
 
-    ok, out = _node_run(harness)
+
+def test_exit_popup(src, failures):
+    if not src["exit"] or not src["rc"]:
+        return
+    ok, out = _node_run(_exit_harness(src["rc"], src["exit"]))
     if ok is None:
-        print("  [SKIP] ④ 退出弹窗: " + out)
+        print("  [SKIP] ④ 退出探测: " + out)
         return
     if not ok:
         failures.append("④ node 执行失败")
         print("[FAIL] ④ node 执行失败:\n" + out[:800])
         return
     d = json.loads(out.strip().splitlines()[-1])
-    rc = d["rc0"]
-    _check(failures, "[12] rc=0 → 干净返回", "干净返回" in rc[0], True)
-    _check(failures, "[13] rc=0xC0000005 能定性", "0xC0000005" in rc[1], True)
-    _check(failures, "[14] rc=0xC0000135 能定性", "0xC0000135" in rc[2], True)
-    _check(failures, "[15] 负号形态的 0xC0000005 同样能定性",
-           "0xC0000005" in rc[3], True)
-    _check(failures, "[16] rc 未知 → 空串，不猜", (rc[4], rc[5]), ("", ""))
-    _check(failures, "[17] 弹窗正文用本页实例的日志尾部",
-           "RuntimeError: boom" in d["byInst"], True)
-    _check(failures, "[18] 弹窗带出退出码定性",
-           "0xC0000005" in d["byInst"], True)
-    _check(failures, "[19] 用本页实例的完整日志路径",
-           "/s/IF/gateway.log" in d["byInst"], True)
-    _check(failures, "[20] 实例投影缺失时退回顶层（不回归）",
-           ("top-tail" in d["byTop"], "/s/AU/gateway.log" in d["byTop"]),
+
+    print("-- 误报防线 / 复核两拍 / 只报一次 --")
+    _check(failures, "[12] 上膛后 armed=true", d["a_armed"], True)
+    _check(failures, "[13] 品种键未就位：连续三拍都不作结论（不弹）",
+           d["a_shown"], 0)
+    _check(failures, "[14] 品种键未就位：不得撤膛（键恢复后仍能报警）",
+           d["a_armed_after"], True)
+    _check(failures, "[15] 品种键未就位：不计数复核", d["a_streak"], 0)
+    _check(failures, "[16] 单拍不在跑（瞬态）→ 不弹", d["b_shown1"], 0)
+    _check(failures, "[17] 第 2 拍不在跑 → 弹（真崩溃照常报）",
+           d["b_shown2"], 1)
+    _check(failures, "[18] 弹后撤膛（防每拍重复弹）", d["b_armed_after"], False)
+    _check(failures, "[19] 已报过再继续不在跑 → 不再弹", d["c_shown"], 1)
+    _check(failures, "[20] 未上膛（用户主动关闭）→ 不报异常退出",
+           d["d_shown"], 0)
+    _check(failures, "[21] 回到运行 → 复核计数清零", d["e_streak_reset"], 0)
+    _check(failures, "[22] 重启后第一次回落仍要重新两拍（1 拍不弹）",
+           d["e_shown1"], 0)
+    _check(failures, "[23] 重启后第二次回落 → 弹", d["e_shown2"], 1)
+    _check(failures, "[24] busy（起停切换中）→ 不弹", d["f_shown"], 0)
+
+    print("-- 弹窗正文取材（P2-3）--")
+    _check(failures, "[25] 正文用本页实例的日志尾部",
+           "RuntimeError: boom" in d["b_text"], True)
+    _check(failures, "[26] 正文带出退出码定性",
+           "0xC0000005" in d["b_text"], True)
+    _check(failures, "[27] 用本页实例的完整日志路径",
+           "/s/IF/gateway.log" in d["b_text"], True)
+    _check(failures, "[28] 实例投影缺失时退回顶层（不回归）",
+           ("top-tail" in d["g_text"], "/s/AU/gateway.log" in d["g_text"]),
            (True, True))
+
+    print("-- 退出码人话 --")
+    rc = d["rc0"]
+    _check(failures, "[29] rc=0 → 干净返回", "干净返回" in rc[0], True)
+    _check(failures, "[30] rc=0xC0000005 能定性", "0xC0000005" in rc[1], True)
+    _check(failures, "[31] rc=0xC0000135 能定性", "0xC0000135" in rc[2], True)
+    _check(failures, "[32] 负号形态的 0xC0000005 同样能定性",
+           "0xC0000005" in rc[3], True)
+    _check(failures, "[33] rc 未知 → 空串，不猜", (rc[4], rc[5]), ("", ""))
+
+
+def test_exit_guard_discriminating_power(src, failures):
+    """判别力自证：两条防线各做一次单点变异，对应用例必须转红。
+
+    否则「全都通过」可能只是因为用例根本没踩到分支（恒绿）。
+      · 变异 A：`autoOrderNotRunningStreak < 2` → `< 1`（取消复核两拍）
+        ⇒ 单拍瞬态也会弹，[16] 必转红。
+      · 变异 B：`if (!pageKey) {` → `if (false) {`（取消"绑定未知不作结论"）
+        ⇒ 品种键空窗第 2 拍就假弹，[13] 必转红。
+    """
+    if not src["exit"] or not src["rc"]:
+        return
+    print("-- 判别力自证（变异：单点拆掉一条防线）--")
+
+    cases = [
+        ("streak", "autoOrderNotRunningStreak < 2", "autoOrderNotRunningStreak < 1",
+         "取消复核两拍", "b_shown1", 1),
+        ("pagekey", "if (!pageKey) {", "if (false) {",
+         "取消绑定未知防线", "a_shown", 1),
+    ]
+    for name, needle, repl, label, key, want in cases:
+        if needle not in src["exit"]:
+            failures.append("⑨-" + name + " 未找到变异锚点: " + needle)
+            print("[FAIL] 未找到变异锚点（防漂移）: " + needle)
+            continue
+        mutant = src["exit"].replace(needle, repl, 1)
+        ok, out = _node_run(_exit_harness(src["rc"], mutant))
+        if ok is None:
+            print("  [SKIP] 判别力自证 " + name + ": " + out)
+            return
+        if not ok:
+            failures.append("⑨-" + name + " 变异版 node 执行失败")
+            print("[FAIL] 变异版执行失败:\n" + out[:800])
+            continue
+        d = json.loads(out.strip().splitlines()[-1])
+        _check(failures, "[⑨-" + name + "] 变异（" + label + "）→ " + key,
+               d[key], want)
+
+
+# ══════════════════════════════════════════════════════════════════
+# ⑤ 本页绑定在 init 后必须重算 + §3.3「引擎运行中」拦截可达
+#    （2026-10-09 用户反馈：假弹「交易引擎已退出!」且守卫静默放行）
+# ══════════════════════════════════════════════════════════════════
+def _ordered(blk, first, second):
+    """blk 中 first 出现在 second 之前（两者都必须在）。second 取**最后一次**出现。"""
+    i, j = blk.find(first), blk.rfind(second)
+    return i >= 0 and j >= 0 and i < j
+
+
+def test_binding_recompute_and_replay_guard(failures):
+    """两条接线断言（源码抽取，按函数名锚点，不锚行号）。
+
+    ① `connectRealtimeInit`/`connectRealtimeDual` 的 SSE init 处理器改写
+       `realtimeSymbol` 之后，必须**跟着**重算品种键（`syncAutoOrderWrap()`）。
+       init 重解析出的完整代码与页面变量 `autoOrderTradableFor` 一开始不等 ⇒
+       `autoOrderPageKey()` 空串 ⇒ `matchAutoOrderInstance` 兜底失效 ⇒
+       `bound=null` ⇒ `running` 假 false。漏了这一拍，既假弹退出框、又让
+       §3.3「引擎运行中禁止选点/复盘/取消」四类守卫静默放行（引擎仍在跑）。
+    ② `window.gotoDate`（选点/复盘写入点）：引擎运行中必须先 showAlert 拦下，
+       且**不得**顺手调用关引擎的接口/开关 —— 用户明确要求「提示让用户自己去关，
+       无需自动关闭交易引擎」。
+    """
+    js = _read(APP_JS)
+    checks = {
+        "init": _extract(js, ANCHOR_INIT),
+        "dual": _extract(js, ANCHOR_DUAL),
+        "goto": _extract(js, ANCHOR_GOTO),
+    }
+    for k, blk in checks.items():
+        if not blk:
+            failures.append("[34] 抽取失败（锚点不可定位）: " + k)
+            print("[FAIL] 抽取失败（锚点不可定位）: " + k)
+            return
+
+    print("-- 本页绑定重算接线（init 改写 symbol 后必须补一拍）--")
+    _check(failures, "[34] 单窗 init：改写 realtimeSymbol 后重算品种键",
+           _ordered(checks["init"], "realtimeSymbol = resolvedSymbol",
+                    "syncAutoOrderWrap()"), True)
+    _check(failures, "[35] 双窗 init：同上（下窗也要能绑回本页实例）",
+           _ordered(checks["dual"], "realtimeSymbol = resolvedSymbol",
+                    "syncAutoOrderWrap()"), True)
+
+    print("-- §3.3 拦截：提示而非自动关引擎 --")
+    _check(failures, "[36] 复盘分支：引擎运行中先拦截",
+           "'交易引擎运行中，请先关闭，再复盘'" in checks["goto"], True)
+    _check(failures, "[37] 取消复盘分支：同样拦截",
+           "'交易引擎运行中，请先关闭，再取消复盘'" in checks["goto"], True)
+    _check(failures, "[38] 拦截在复盘 SSE 连接之前（不是连完再提示）",
+           _ordered(checks["goto"], "'交易引擎运行中，请先关闭，再复盘'",
+                    "connectRealtimeInit("), True)
+    _check(failures, "[39] 双窗复盘分支同样在连接之前",
+           _ordered(checks["goto"], "'交易引擎运行中，请先关闭，再复盘'",
+                    "connectRealtimeDual("), True)
+    _off = [s for s in ("/api/trader/auto-order/off", "onAutoOrderToggle(",
+                        "autoOrderToggle(") if s in checks["goto"]]
+    _check(failures, "[40] 选点/复盘路径不得自动关闭交易引擎", _off, [])
 
 
 def main():
@@ -394,6 +610,8 @@ def main():
     test_alerts(src, failures)
     test_toasts(src, failures)
     test_exit_popup(src, failures)
+    test_exit_guard_discriminating_power(src, failures)
+    test_binding_recompute_and_replay_guard(failures)
     print()
     if failures:
         print("===== 结果: 失败 {} 项 =====".format(len(failures)))

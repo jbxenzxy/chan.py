@@ -45,10 +45,15 @@ APP_JS = os.path.join(REPO_ROOT, "Frontend", "app.js")
 ANCHOR_CALC = "function _calcCountdownState("
 ANCHOR_DRAW = "function drawCountdownBar("
 ANCHOR_REDRAW = "function _redrawCountdown("
+ANCHOR_INIT = "function connectRealtimeInit("
+ANCHOR_DUAL = "function connectRealtimeDual("
+ANCHOR_DISCONNECT = "function disconnectRealtime()"
 
 # 变更前判据（判别力自证用）：把新判据改回旧写法，② 必须转红
 JUDGE_NOW = "if (!isRealtimeMode) return null;"
 JUDGE_PRE_FIX = "if (!isRealtimeMode || realtimeStartTime) return null;"
+# 复盘挂起护条（判别力自证用）：抽掉它，⑩b 必须转红（复现「把剩余秒数走完」）
+JUDGE_PENDING = "if (replayPending) return null;"
 
 
 def _read(path):
@@ -122,6 +127,7 @@ HARNESS = r"""
 // ── 桩：app.js 的模块级状态（被测函数闭包读取）──
 var isRealtimeMode = false;
 var realtimeStartTime = null;
+var replayPending = false;   // 复盘挂起（点下复盘 → 复盘数据落地之间）
 var currentFreq = '1m';
 var chartData = null;
 var FREQ_SEC_MAP_JS = {'15s':15,'1m':60,'5m':300,'15m':900,'30m':1800,'d':86400,'w':604800};
@@ -221,6 +227,23 @@ drawCountdownBar({x: 0, y: 0, w: 100, h: 100});
 OUT.b_live = (_countdownBounds !== null && _subCountdownBounds === null
               && _countdownBounds.w === 3);
 
+// ⑩ 复盘挂起（点下复盘 → 复盘数据落地之间，2026-10-09 用户反馈）
+//   此时 chartData 还是**实时那份**、末根正在走，但 R 已指向复盘点 ⇒ 必须立即消失
+//   （报障原状：倒计时照样把剩余 15 秒走完才不见）
+isRealtimeMode = true; realtimeStartTime = null; currentFreq = '1m';
+chartData = {klines: _klineRunning()};
+replayPending = false;
+OUT.c10_live = _shown(_calcCountdownState());
+replayPending = true;
+OUT.c10_pending = _shown(_calcCountdownState());
+//   ⑩b 挂起期间每秒定时器零空转（不会把残留进度条继续画）
+_countdownBounds = null; _subCountdownBounds = null; renderCount = 0;
+_redrawCountdown(); _redrawCountdown();
+OUT.t_pending = renderCount;
+//   ⑩c 挂起解除（数据落地）→ 判据回到「末根是否正在走」
+replayPending = false;
+OUT.c10_resumed = _shown(_calcCountdownState());
+
 console.log(JSON.stringify(OUT));
 """
 
@@ -280,7 +303,41 @@ def test_display_judgement(src, failures):
     _check(failures, "[⑧b] 下窗焦点 + 状态为 null → 只归下窗边界",
            res["b_null_sub"], True)
     _check(failures, "[⑧c] 状态非 null → 只写焦点窗边界", res["b_live"], True)
+
+    print("-- 复盘挂起（2026-10-09 用户反馈：点下复盘必须立即消失）--")
+    _check(failures, "[⑩a] 挂起前（实时态、末根在走）→ 显示", res["c10_live"], True)
+    _check(failures, "[⑩b] 复盘挂起（数据未落地）→ 立即不显示",
+           res["c10_pending"], False)
+    _check(failures, "[⑩c] 挂起期间每秒定时器零空转", res["t_pending"], 0)
+    _check(failures, "[⑩d] 挂起解除（数据落地）→ 判据恢复", res["c10_resumed"], True)
     return res
+
+
+def test_replay_pending_reset_paths(failures):
+    """replayPending 的置位/复位路径（缺一条 = 倒计时永久隐藏或挂起不生效）。
+
+    置位：两个 connect（单窗/双窗）在带 end_time（复盘）时置位；
+    复位：数据落地（两个 init 处理器）、disconnectRealtime、SSE onerror。
+    抽取 connect*/disconnectRealtime 整块来断言（不锚行号）。
+    """
+    js = _read(APP_JS)
+    checks = [
+        (ANCHOR_INIT, "单窗复盘置位（connectRealtimeInit 带 end_time）",
+         "replayPending = !!endTime"),
+        (ANCHOR_DUAL, "双窗复盘置位（connectRealtimeDual 带 end_time）",
+         "replayPending = !!endTime"),
+        (ANCHOR_INIT, "单窗数据落地复位（init 处理器）", "replayPending = false"),
+        (ANCHOR_DUAL, "双窗数据落地复位（init 处理器）", "replayPending = false"),
+        (ANCHOR_DISCONNECT, "离开实时链复位（disconnectRealtime）",
+         "replayPending = false"),
+    ]
+    for anchor, label, needle in checks:
+        blk = _extract(js, anchor)
+        if not blk:
+            failures.append("[⑪ ] 抽取失败: " + anchor)
+            print("[FAIL] 抽取失败（锚点不可定位）: " + anchor)
+            continue
+        _check(failures, "[⑪ ] " + label, needle in blk, True)
 
 
 def test_discriminating_power(src, failures, real):
@@ -301,6 +358,22 @@ def test_discriminating_power(src, failures, real):
     _check(failures, "[⑨a] 变异版：② 选点态被隐藏（复现事故原状）", res["c2"], False)
     _check(failures, "[⑨b] 变异版：① 实时态仍显示（变异只碰选点态）", res["c1"], True)
 
+    # 第二处判别力自证：抽掉复盘挂起护条 ⇒ ⑩b 必须转红（复现「走完剩余秒数」）
+    if JUDGE_PENDING not in src["calc"]:
+        failures.append("[⑫ ] 未在抽取源码中找到复盘挂起锚点: " + JUDGE_PENDING)
+        print("[FAIL] 未找到复盘挂起锚点，无法做变异自证")
+        return
+    mutant2 = src["calc"].replace(JUDGE_PENDING, "", 1)
+    res2, err2 = _run(src, mutant2)
+    if res2 is None or res2 is False:
+        failures.append("[⑫ ] 挂起变异版本 node 执行失败")
+        print("[FAIL] 挂起变异版本执行失败:\n" + str(err2)[:800])
+        return
+    _check(failures, "[⑫a] 变异版：挂起期间倒计时照样显示（复现报障原状）",
+           res2["c10_pending"], True)
+    _check(failures, "[⑫b] 变异版：挂起前后判据不受影响",
+           (res2["c10_live"], res2["c10_resumed"]), (True, True))
+
 
 def main():
     print("===== 倒计时显示判据（源码抽取 + node 真执行） =====")
@@ -312,6 +385,9 @@ def main():
             print(" -", x)
         return False
     real = test_display_judgement(src, failures)
+    print()
+    print("-- 复盘挂起置位/复位路径（缺一条 = 永久隐藏 或 挂起不生效）--")
+    test_replay_pending_reset_paths(failures)
     test_discriminating_power(src, failures, real)
     print()
     if failures:

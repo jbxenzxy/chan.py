@@ -185,6 +185,13 @@
         let realtimeStartTime = null;     // 实时模式下选点起始时间
 
         let realtimeEndTime = null;       // 复盘软断开边界（end_time）
+        // 复盘挂起（2026-10-09 用户反馈）：点下复盘 → SSE init 落地之前，chartData 还是
+        // **上一份（实时）数据**，末根仍覆盖「现在」⇒ 按数据算出来的倒计时会继续把剩余
+        // 秒数走完才消失（实测「还剩 15 秒时选复盘，倒计时照样走到 0 才不见」）。
+        // 置 true 期间 `_calcCountdownState` 直接给 null ⇒ **点下复盘即消失**。
+        // 复位路径（三条，缺一条就会永久隐藏）：数据落地（两个 init 处理器）、
+        // disconnectRealtime（含 init 报错分支）、SSE onerror。
+        let replayPending = false;
 
         let realtimeEventSource = null;   // SSE EventSource 对象
 
@@ -2772,6 +2779,9 @@
             freq = freq || currentFreq;
             data = data || chartData;
             if (!isRealtimeMode) return null;
+            // 复盘挂起（replayPending）：块注释见声明处 —— 点下复盘到复盘数据落地之间，
+            // R 已指向复盘点，倒计时必须立刻消失，而不是拿还在走的旧末根算完剩余秒数。
+            if (replayPending) return null;
             const freqSec = FREQ_SEC_MAP_JS[freq];
             if (!freqSec || freqSec >= 86400) return null;
             if (!data || !data.klines || data.klines.length === 0) return null;
@@ -7663,8 +7673,13 @@
             realtimeFreq = freq;
             realtimeStartTime = startTime || null;
             realtimeEndTime = endTime || null; // 复盘软断开边界
+            replayPending = !!endTime;         // 复盘挂起（声明处有完整说明）
             isRealtimeMode = true;
             startCountdownTimer();
+            // 复盘挂起要**立即**消失：stopCountdownTimer（disconnectRealtime 内）只把
+            // 边界归 null，上一秒画在画布上的进度条像素还在 —— 补一次整图重绘擦掉它；
+            // 此后每秒零空转（判据 null + 边界 null ⇒ _redrawCountdown 直接 return）。
+            if (replayPending) render();
             const badge = document.getElementById('realtime-badge');
             badge.classList.add('visible');
             badge.classList.remove('stopped');
@@ -7699,11 +7714,21 @@
                         }
                         // 全量初始数据
                         chartData = data;
+                        // 复盘数据已落地 ⇒ 解除挂起（判据回到「末根是否正在走」：
+                        // 复盘态末根冻结在复盘点 ⇒ 仍不显示；回实时/取消复盘 ⇒ 正常显示）
+                        replayPending = false;
                         // 用后端解析后的完整代码保存历史，避免别名导致历史记录不一致
                         const resolvedSymbol = data.meta.symbol || symbol;
                         saveHistory(resolvedSymbol, data.meta.name);
                         // 同步 realtimeSymbol 为解析后的完整代码
                         realtimeSymbol = resolvedSymbol;
+                        // ⚠️ realtimeSymbol 变了必须跟着重算品种键（2026-10-09 用户反馈）：
+                        //   autoOrderTradableFor 只在 syncAutoOrderWrap →
+                        //   refreshAutoOrderTradable 里随 realtimeSymbol 更新。init 改写
+                        //   symbol 后不补这一拍，autoOrderPageKey() 会一直返回空串 ⇒ 本页
+                        //   绑定失效 ⇒ running 假 false：① 弹假的「交易引擎已退出!」；
+                        //   ② §3.3「请先关闭，再复盘/选点」守卫静默放行（引擎仍在跑）。
+                        syncAutoOrderWrap();
                         // 更新输入框为解析后的完整代码
                         document.getElementById("stock-code-input").value = resolvedSymbol;
                         updateRestartBtn();
@@ -7750,6 +7775,7 @@
                 realtimeEventSource.onerror = function() {
                     // 立即关闭EventSource，阻止浏览器自带重连
                     realtimeEventSource.close();
+                    replayPending = false;   // 断线 ⇒ 解除复盘挂起，绝不永久隐藏倒计时
                     realtimeConnected = false;
                     badge.classList.add('stopped');
                     badge.textContent = '● 断开';
@@ -7778,8 +7804,10 @@
             dualSubFreq = subFreq;
             realtimeStartTime = startTime || null;
             realtimeEndTime = endTime || null; // 复盘软断开边界
+            replayPending = !!endTime;         // 复盘挂起（声明处有完整说明）
             isRealtimeMode = true;
             startCountdownTimer();
+            if (replayPending) render();       // 立即擦掉上一秒画的进度条（同单窗）
             const badge = document.getElementById('realtime-badge');
             badge.classList.add('visible');
             badge.classList.remove('stopped');
@@ -7813,9 +7841,13 @@
                         }
                         if (data.main) {
                             chartData = data.main;
+                            replayPending = false;   // 复盘数据已落地 ⇒ 解除挂起（同单窗）
                             const resolvedSymbol = chartData.meta.symbol || symbol;
                             saveHistory(resolvedSymbol, chartData.meta.name);
                             realtimeSymbol = resolvedSymbol;
+                            // 品种键随 realtimeSymbol 重算（同单窗：不补这一拍会让
+                            // autoOrderPageKey() 恒空 ⇒ 绑丢 ⇒ 假「已退出」+ 守卫放行）
+                            syncAutoOrderWrap();
                             updateRestartBtn();
                             updateDualBtn();
                             const freqMap = {'15秒':'15s','1分钟':'1m','5分钟':'5m','30分钟':'30m','15分钟':'15m','日线':'d','周线':'w'};
@@ -7873,6 +7905,7 @@
                 realtimeEventSource.onerror = function() {
                     // 立即关闭EventSource，阻止浏览器自带重连
                     realtimeEventSource.close();
+                    replayPending = false;   // 断线 ⇒ 解除复盘挂起，绝不永久隐藏倒计时
                     realtimeConnected = false;
                     badge.classList.add('stopped');
                     badge.textContent = '● 断开';
@@ -7927,6 +7960,7 @@
                 realtimeEventSource.onerror = function() {
                     // 立即关闭EventSource，阻止浏览器自带重连
                     realtimeEventSource.close();
+                    replayPending = false;   // 断线 ⇒ 解除复盘挂起，绝不永久隐藏倒计时
                     realtimeConnected = false;
                     badge.classList.add('stopped');
                     badge.textContent = '● 断开';
@@ -7946,6 +7980,7 @@
 
         function disconnectRealtime() {
             stopCountdownTimer();
+            replayPending = false;   // 离开实时链 ⇒ 解除复盘挂起（复位路径之一）
             isRealtimeMode = false;
             realtimeSymbol = null;
             realtimeFreq = null;
@@ -9172,7 +9207,12 @@
         let autoOrderBusy = false;        // 请求进行中（防连点）
         let autoOrderPollTimer = null;
         let autoOrderWorker = null;       // 轮询 Worker（后台标签不被节流；创建失败回退主线程定时器）
-        let autoOrderPrevRunning = null;  // 上次轮询的进程状态（用于探测异常退出）
+        // 异常退出探测的「上膛」标志（2026-10-09 明确语义）：true = 本页绑定**曾是**
+        // 运行中 ⇒ 之后连续两拍不在跑才提示；null = 撤膛（用户主动起停、或已提示过一次）。
+        // 由 _detectAutoOrderExit 与 onAutoOrderToggle 维护；调用方不要再用 running 覆盖。
+        let autoOrderPrevRunning = null;
+        // 连续「不在跑」拍数（2026-10-09 加）：异常退出提示的复核计数，防单拍瞬态假报
+        let autoOrderNotRunningStreak = 0;
         let autoOrderLastLog = null;      // 引擎日志路径（异常退出提示用）
         let autoOrderLastOn = null;       // 上次轮询的开关态（状态变化时打控制台）
         let autoOrderRunning = false;     // 引擎进程是否运行中（切换合约/周期的 guard 依据）
@@ -9401,6 +9441,53 @@
             return null;
         }
 
+        // 异常退出探测（2026-10-09 从 applyAutoOrderStatus 内联块抽成独立函数）：
+        //   ① 误报防线（用户反馈「选复盘时弹『交易引擎已退出!』，可引擎还在跑、
+        //      刷新页面又显示开启」）：本页绑定靠**品种键**（pageKey 入参）。
+        //      init 重解析 symbol / 换代码后的头几拍，autoOrderTradableFor !==
+        //      realtimeSymbol ⇒ 键为空串 ⇒ bound 必为 null ⇒ running 假 false。
+        //      故：键为空的一拍**不作结论**（只 console 记一笔）；且必须
+        //      「本页绑定曾是运行中（上膛）→ 连续两拍不在跑」才提示 —— 单拍瞬态
+        //      （绑定空窗 / 后端读库瞬时失败）不再假报。真崩溃会持续「不在跑」，
+        //      照常提示，判别力未削弱。
+        //   ② 状态语义（随之明确）：autoOrderPrevRunning = **上膛**（本页绑定曾是
+        //      运行中），不再是「上一拍的原值」—— 后者每拍被覆盖，复核计数永远到不了
+        //      2，真崩溃会被漏报。用户主动起停（onAutoOrderToggle 成功路径）复位为
+        //      null = 撤膛，所以主动关闭绝不会被报成异常退出。
+        //   ③ 抽成函数后门禁可按**函数名**锚点抽取 + node 真执行（见
+        //      Test/test_ao_multi_instance_frontend.py），不再锚在一行内联条件上。
+        function _detectAutoOrderExit(running, pageInst, bound, data, pageKey) {
+            if (running) {                    // 本页绑定运行中 → 上膛
+                autoOrderPrevRunning = true;
+                autoOrderNotRunningStreak = 0;
+                return false;
+            }
+            if (!pageKey) {                   // 绑定未知 ⇒ 结论不可信，不计数也不撤膛
+                console.warn('[auto-order] 本页绑定未知（品种键未就位），本轮不作退出判断');
+                return false;
+            }
+            autoOrderNotRunningStreak += 1;
+            if (autoOrderBusy || autoOrderPrevRunning !== true
+                    || autoOrderNotRunningStreak < 2) {
+                return false;
+            }
+            autoOrderPrevRunning = false;     // 只报一次，避免每拍重复弹
+            // 日志来源 = **本页品种那个实例**自己的逐实例投影（§3.2 instances[]）。
+            // 不能只用顶层 log_tail：顶层那份只覆盖"最近一次操作"的那个实例，
+            // 退出的不是它时（多实例：后启的 AU 在跑、IF 崩了）正文会退化成
+            // "（日志文件不存在或为空）"+"完整日志：（未知）"，等于没提示。
+            const _pi = pageInst || bound || null;
+            const tail = (_pi && _pi.log_tail) || data.log_tail || '';
+            const lf = (_pi && _pi.log_file) || data.log_file || null;
+            const rcTxt = _rcHint(_pi ? _pi.exit_rc : undefined);
+            console.warn('[auto-order] 交易引擎已退出，日志尾部:\n' + tail);
+            showAlert('交易引擎已退出！\n\n交易引擎日志尾部（末 12 行）：\n'
+                + (tail || '（本轮未取到日志内容：逐实例投影缺失，日志文件本身见下方路径）')
+                + (rcTxt ? '\n\n子进程退出码：' + rcTxt : '')
+                + '\n\n完整日志：' + (lf || '（未知）'));
+            return true;
+        }
+
         function applyAutoOrderStatus(data) {
             const checkbox = document.getElementById('auto-order-checkbox');
             if (!checkbox) return;
@@ -9531,24 +9618,15 @@
                     render();
                 }
             });
-            // 异常退出探测：上次在跑、这次停了、且不是用户主动关闭 → 提示 + 日志尾部
-            if (autoOrderPrevRunning === true && !running && !autoOrderBusy) {
-                // 日志来源 = **本页品种那个实例**自己的逐实例投影（§3.2 instances[]）。
-                // 不能只用顶层 log_tail：顶层那份只覆盖"最近一次操作"的那个实例，
-                // 退出的不是它时（多实例：后启的 AU 在跑、IF 崩了）正文会退化成
-                // "（日志文件不存在或为空）"+"完整日志：（未知）"，等于没提示。
-                const _pi = pageInst || bound || null;
-                const tail = (_pi && _pi.log_tail) || data.log_tail || '';
-                const lf = (_pi && _pi.log_file) || data.log_file || null;
-                const rcTxt = _rcHint(_pi ? _pi.exit_rc : undefined);
-                console.warn('[auto-order] 交易引擎已退出，日志尾部:\n' + tail);
-                showAlert('交易引擎已退出！\n\n交易引擎日志尾部（前 12 行）：\n'
-                    + (tail || '（日志文件不存在或为空）')
-                    + (rcTxt ? '\n\n子进程退出码：' + rcTxt : '')
-                    + '\n\n完整日志：' + (lf || '（未知）'));
-            }
+            // 异常退出探测：独立函数（含「绑定未知不作结论 + 连续两拍复核」防线，
+            // 见 _detectAutoOrderExit 定义处）。用 _aoSafe 包住：探测内部抛错不能
+            // 拖垮后面几段（账本/保护价线）。⚠️ autoOrderPrevRunning 由该函数自己
+            // 维护（上膛/撤膛语义），调用方**不要**再用 running 覆盖它。
+            _aoSafe('退出探测', function () {
+                _detectAutoOrderExit(running, pageInst, bound, data,
+                    autoOrderPageKey());
+            });
             if (running) autoOrderLastLog = (bound && bound.log_file) || null;
-            autoOrderPrevRunning = running;
         }
 
         // ── 引擎账本面板（C，2026-09-18）：持仓，随轮询刷新 ──
@@ -10521,7 +10599,11 @@
                 if (!resp.ok) {
                     throw new Error(detail || ('HTTP ' + resp.status));
                 }
-                if (on) autoOrderPrevRunning = null; // 重新探测：首次轮询即运行中
+                // 起停成功后复位探测基线（2026-10-09 用户反馈）：开启 → 首次轮询即
+                // 运行中；**关闭** → 用户主动关闭绝不能被判成「异常退出」而弹
+                // 「交易引擎已退出!」（原实现只在 on 分支复位，关闭路径一旦那一拍
+                // poll 没落地，下一轮 5s 轮询就会把主动关闭报成异常退出）。
+                autoOrderPrevRunning = null;
                 await pollAutoOrderStatus();
             } catch (err) {
                 // 失败回弹 + 提示（实盘安全闸门 / 配置缺失等 AppError → detail）
