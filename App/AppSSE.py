@@ -347,7 +347,7 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
         #   · 起止倒挂（start ≥ end）→ 报错中止本次连接，**不静默回退**：
         #     与股票 `_analyze_stock_internal` 同判据（`>=`）、同文案，前端
         #     收到 init 错误帧后弹窗告知用户（需求⑼/⑽ 的兜底归一，见
-        #     Docs/选点&复盘方案v1.15.md §3.5）；
+        #     Docs/选点&复盘方案v1.16.md §3.5）；
         #   · 非复盘：start_time 缺失时从 CSV 恢复（B 操作/冷启动，原语义）。
         # meta.saved_selection_date 恒回显 CSV 真值（与股票同规则）：
         # A 复盘的 start=A左 不会冒充选点，复盘态选点/取消选点驱动前端菜单。
@@ -793,7 +793,7 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
             # **任一窗倒挂即中止**（对齐越界判定口径「任一窗越界即拦/回」），不再
             # 静默丢弃该窗 start、回退默认窗口——与 `_sse_single_gen`、股票
             # `_analyze_stock_internal` 同判据（`>=`）、同文案前缀
-            # （需求⑼/⑽ 的兜底归一，见 Docs/选点&复盘方案v1.15.md §3.5）。
+            # （需求⑼/⑽ 的兜底归一，见 Docs/选点&复盘方案v1.16.md §3.5）。
             if end_time:
                 _e_dt2 = _parse_flex_time(end_time)
                 if _e_dt2 is not None:

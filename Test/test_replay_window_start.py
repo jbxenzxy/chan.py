@@ -16,7 +16,7 @@ Test/test_replay_window_start.py —— 股票复盘窗口 [L, R] 的 start_time
   2. start_time ≥ end_date → 返回 error（兜底改严：原「不筛也不截」静默
      放行已删除）。判据**含相等**——相等时窗口退化为单根、任何周期都建不出
      结构；该判据与期货侧（`_sse_single_gen` / `_sse_dual_gen` 报错帧）
-     逐字一致，见 Docs/选点&复盘方案v1.15.md §3.5；
+     逐字一致，见 Docs/选点&复盘方案v1.16.md §3.5；
   3. start_time 无法解析 → 返回 error（同上）；
   4. 复盘 + start_time → meta.saved_selection_date 回显 CSV 真值
      （隔离环境 CSV 空 → meta 空；A 复盘的 start=A左 不会冒充选点）；

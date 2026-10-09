@@ -13,7 +13,7 @@ Test/test_futures_replay_window.py —— 期货单窗复盘窗口 [L, R]（二�
      - 无 end_time + CSV 有 → start_time=CSV（B 操作/冷启动恢复，现状回归保护）；
      - start ≥ end（倒挂）→ **报错中止**本次连接（init 错误帧 → 前端 showAlert），
        不再静默回退；与股票 `_analyze_stock_internal` 同判据 `>=`、同文案，见
-       Docs/选点&复盘方案v1.15.md §3.5；
+       Docs/选点&复盘方案v1.16.md §3.5；
   3. meta.saved_selection_date 恒回显 CSV 真值：A 复盘（start=A左 显式传入、
      CSV 空）→ 快照收到空串，start 不冒充选点；
   4. 期货选点 end_date 透传链（P0 回归）：漏斗层 → RAW 薄壳 → AppSSE 三段

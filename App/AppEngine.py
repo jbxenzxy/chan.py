@@ -641,7 +641,7 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, sub_
             # 「不筛也不截」的全量窗口，行为不可预期，故直接报错。
             # 判据取 `>=`（含相等）：相等时窗口退化为单根，任何周期都建不出结构；
             # 该判据与期货侧逐字一致（需求⑼/⑽ 的倒挂兜底归一，见
-            # Docs/选点&复盘方案v1.15.md §3.5）。
+            # Docs/选点&复盘方案v1.16.md §3.5）。
             if start_dt is None:
                 return {"error": f"复盘起始时间无法解析: {start_time}"}
             if start_dt >= target_dt:
