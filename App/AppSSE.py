@@ -1735,15 +1735,18 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0", end_date=None):
         src.connect()
         log.info(f"[{display_key}] ⓪ 临时连接天勤(选点): 耗时 {time.time()-t_conn:.1f}s")
 
-        # 定位窗口与前端复盘视图同源（2026-10-03 四期复盘态选点）：end_date 有值
-        # 时按 [CSV(freq 列) 旧选点, end_date] 拉取建 chan——笔列表与前端复盘视图
-        # 的 bis 同源，bi_idx 才能对位（全量拉取的笔列表与复盘窗口笔列表不同，
-        # bi_idx 会指错笔）。start 传 CSV 值时 init 内部按墙钟估算拉取。
-        locate_start = None
-        if end_date:
-            _col_loc = app_data.freq_to_col(freq) or ""
-            if _col_loc:
-                locate_start = _get_saved_point(symbol, freq) or None
+        # 定位窗口必须与前端当前视图**同源**（前端视图左边界 L = CSV 选点（有）
+        # 或该周期默认回看 N 根（无）：复盘态视图 = [CSV, end]、非复盘态
+        # = [CSV, 最新]）——两种情形都按 CSV 取 locate_start，让定位窗口与前端
+        # 视图是同一个窗口，笔列表逐根对齐，前端传来的 bi_idx 才指到同一根笔。
+        # 原实现只在 end_date 有值时对齐，非复盘态退回 init 的默认窗口
+        # （FUTURES_LOOKBACK_CONFIG[freq]，1m=1200 根）⇒ 笔列表远长于前端视图、
+        # bi_idx 整体错位：2026-10-09 IM 1m 实测 前端视图 [09/29 13:37, 最新]
+        # 40 笔 vs 定位窗口 86 笔，双击 10/08 09:43（前端 bi_idx=23）被套到定位
+        # 窗口 bi[23] → 左肩错到 09/28 13:27（早于前端视图左边界）。
+        # start 传 CSV 值时 init 内部按墙钟估算拉取。
+        _col_loc = app_data.freq_to_col(freq) or ""
+        locate_start = (_get_saved_point(symbol, freq) or None) if _col_loc else None
         loc_result = init_chan_symbol(src, symbol, name, freq_sec, freq_label, locate_start, end_date)
         if loc_result is None:
             raise DataFetchError("选点定位失败（无数据或网络异常）")

@@ -526,6 +526,133 @@ def test_select_point_rebuild_passes_num_bars():
     print("[PASS] 期货选点重建 fetch_kline 显式传 num_bars（不截断）")
 
 
+# ═════════ futures_manual_select_point：定位窗口必须与前端视图同源 ═════════
+# 2026-10-09 缺陷（IM 1m 实测）：非复盘态选点的「定位窗口」取的是 init 的默认
+# 窗口（FUTURES_LOOKBACK_CONFIG[freq]，1m=1200 根），而前端当前视图的左边界
+# 是 CSV 里已有的选点（视图 = [CSV, 最新]）⇒ 两份笔列表长度不同（实测 86 笔 vs
+# 40 笔），前端传来的 bi_idx 被套到定位窗口的笔列表上**整体错位** —— 双击
+# 2026/10/08 09:43（前端 bi_idx=23）算出的左肩落到 2026/09/28 13:27，
+# 早于前端视图左边界 2026/09/29 13:37（若两窗口相同则不可能）。
+# 修法 = 两种情形都按 CSV 取 locate_start（股票侧天然同源：stock_manual_select_point
+# 直接读当前视图的缓存 chan；期货无缓存、必须显式对齐）。
+
+def _frontend_view_left(csv_point):
+    """前端当前视图左边界 L 的口径，与 `_sse_single_gen` / `_sse_dual_gen`
+    的 start 恢复规则同源：有 CSV 选点 → CSV 真值；无 → None（方式C 默认窗口）。"""
+    return csv_point or None
+
+
+def _run_select_point(csv_point, end_date, captured):
+    """离线驱动 futures_manual_select_point（全桩），捕获**定位窗口**的 start/end。
+
+    定位窗口 = 函数内 `init_chan_symbol(..., locate_start, end_date)` 那一次调用：
+    它决定 bi_idx 落在哪一份笔列表上；只有与前端视图是同一个窗口，前端传来的
+    bi_idx 才指到同一根笔。第二次 init 调用不入本录制（那是重建，不是定位）。
+    """
+    from datetime import datetime as _dt, timedelta as _td
+    restore_iso = isolate_side_effects()
+    try:
+        if csv_point:
+            _sse_mod.app_data.save_point_time(SYMBOL, "测试品种", FREQ, csv_point)
+
+        _base = _dt(2025, 1, 5, 9, 30)
+        _records = [{"dt": _base + _td(seconds=15 * i)} for i in range(10)]
+
+        class _FakeKlList:
+            bi_list = [None] * 12     # 足够 target_bi_idx + 「至少4笔」检查
+
+        class _FakeChan(dict):
+            def __getitem__(self, key):
+                return _FakeKlList()
+
+        class _FakeSession:
+            def connect(self):
+                pass
+
+            def close(self):
+                pass
+
+            def close_api(self):
+                pass
+
+            def fetch_kline(self, symbol, freq_sec=None, display_key=None,
+                            start_time=None, num_bars=None):
+                return [dict(r) for r in _records]
+
+        def stub_init(src, symbol, name, freq_sec, freq_label,
+                      start_time=None, end_time=None, num_bars=None):
+            captured.setdefault("locate", []).append(
+                {"start_time": start_time, "end_time": end_time, "num_bars": num_bars})
+            return _FakeChan(), None, ("kl",), [dict(r) for r in _records]
+
+        originals = {}
+        for _n, _s in (
+                ("CTqSdkSession", _FakeSession),
+                ("init_chan_symbol", stub_init),
+                ("_get_futures_name", lambda symbol: "测试品种"),
+                ("_find_left_shoulder_time",
+                 lambda kl_list, bi_list, bi_idx, freq: "2025/01/05 09:30"),
+                ("_build_futures_chan",
+                 lambda recs, sym, fsec, src=None: (_FakeChan(), ("kl",))),
+                ("_extract_realtime_snapshot",
+                 lambda chan, kl_type, symbol, name, freq_label,
+                 saved_selection_date="", is_replay=False: {
+                     "klines": [{}] * 10,
+                     "meta": {"kline_count": 10, "bi_count": 1, "zs_count": 0}}),
+                ("_calc_futures_white_hline", lambda kl_list, freq, date_fmt: None)):
+            originals[_n] = getattr(_sse_mod, _n)
+            setattr(_sse_mod, _n, _s)
+        try:
+            _sse_mod.futures_manual_select_point(SYMBOL, freq=FREQ, bi_idx="0",
+                                                end_date=end_date)
+        finally:
+            for _n, _o in originals.items():
+                setattr(_sse_mod, _n, _o)
+    finally:
+        restore_iso()
+
+
+def test_select_point_locate_window_follows_frontend_view():
+    """非复盘态 + CSV 有选点 → 定位窗口 start = CSV 选点（= 前端视图左边界）。
+
+    这就是 2026-10-09 IM 1m 的现场：CSV(1m 列) 有 2026/09/29 13:37，前端视图
+    = [2026/09/29 13:37, 最新]。定位窗口若退回默认 1200 根，bi_idx 必然错位。
+    """
+    captured = {}
+    _run_select_point(CSV_POINT, None, captured)
+    assert len(captured.get("locate", [])) == 1,         f"定位只应发生一次: {captured.get('locate')!r}"
+    loc = captured["locate"][0]
+    assert loc["end_time"] is None
+    assert loc["start_time"] == _frontend_view_left(CSV_POINT), (
+        "非复盘态定位窗口未与前端视图同源：前端视图左边界 = CSV 选点 "
+        f"{CSV_POINT!r}，定位 start_time = {loc['start_time']!r}"
+        "（退回默认窗口会让前端 bi_idx 整体错位 → 选点落到别的K线上）")
+    print(f"[PASS] 非复盘选点定位窗口同源: start={loc['start_time']}")
+
+
+def test_select_point_locate_window_default_without_csv():
+    """非复盘态 + CSV 无选点 → 定位 start=None（方式C 默认窗口，与前端视图一致）。"""
+    captured = {}
+    _run_select_point(None, None, captured)
+    loc = captured["locate"][0]
+    assert loc["start_time"] == _frontend_view_left(None) is None,         f"无选点时应交 init 按配置根数自算（start=None），实为 {loc['start_time']!r}"
+    print("[PASS] 非复盘无选点定位窗口: start=None（方式C）")
+
+
+def test_select_point_locate_window_replay_unchanged():
+    """复盘态定位窗口保持原口径：start = CSV 选点（无则 None），end = 复盘点。"""
+    captured = {}
+    _run_select_point(CSV_POINT, END_TIME, captured)
+    loc = captured["locate"][0]
+    assert loc["start_time"] == CSV_POINT and loc["end_time"] == END_TIME,         f"复盘态定位窗口应为 [CSV, end]，实为 {loc!r}"
+    captured = {}
+    _run_select_point(None, END_TIME, captured)
+    loc = captured["locate"][0]
+    assert loc["start_time"] is None and loc["end_time"] == END_TIME,         f"复盘态无 CSV 选点应为 [默认, end]，实为 {loc!r}"
+    print("[PASS] 复盘态定位窗口保持原口径（[CSV|默认, 复盘点]）")
+
+
+
 def main():
     test_fetch_bars_branches()
     test_replay_inherits_csv_point()
@@ -538,6 +665,9 @@ def main():
     test_dual_gen_inverted_start_errors()
     test_select_point_end_date_plumbing()
     test_select_point_rebuild_passes_num_bars()
+    test_select_point_locate_window_follows_frontend_view()
+    test_select_point_locate_window_default_without_csv()
+    test_select_point_locate_window_replay_unchanged()
     print("ALL 期货单窗复盘窗口 TESTS PASS")
 
 
