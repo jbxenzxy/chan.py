@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>底部指标区布局对比 · 单窗双槽位（翻倍口径）</title>
+<style>
+  :root{
+    --bg:#1a1a2e; --panel:#212140; --line:rgba(255,255,255,.10);
+    --text:#e2e8f0; --dim:#8892b0; --accent:#22D3EE; --warn:#F77F00;
+    --up:#FF3C3C; --down:#00F0F0;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:#14142a;color:var(--text);
+       font:13px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+  .wrap{max-width:1400px;margin:0 auto;padding:24px 28px 60px}
+  h1{font-size:19px;margin:0 0 4px;font-weight:600}
+  h2{font-size:14px;margin:26px 0 10px;color:var(--text);font-weight:600;
+     border-left:3px solid var(--accent);padding-left:9px}
+  .sub{color:var(--dim);font-size:12px;margin-bottom:6px}
+  code{background:#2a2a4a;padding:1px 5px;border-radius:3px;font-size:12px;
+       font-family:Consolas,monospace;color:#a8b2d1}
+  .ctrls{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+         padding:14px 18px;margin:14px 0 20px;display:flex;flex-wrap:wrap;
+         gap:22px;align-items:center}
+  .ctrl{display:flex;align-items:center;gap:9px}
+  .ctrl label{color:var(--dim);font-size:12px;white-space:nowrap}
+  input[type=range]{width:230px;accent-color:var(--accent)}
+  .val{font-family:Consolas,monospace;color:var(--accent);font-weight:600;
+       min-width:52px;display:inline-block}
+  .btn{background:#2a2a4a;border:1px solid var(--line);color:var(--text);
+       border-radius:5px;padding:5px 11px;font-size:12px;cursor:pointer}
+  .btn:hover{border-color:var(--accent);color:var(--accent)}
+  .btn.on{background:var(--accent);color:#0d0d1f;border-color:var(--accent)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:20px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+        padding:14px 16px}
+  .card h3{margin:0 0 3px;font-size:13px;font-weight:600}
+  .card .meta{color:var(--dim);font-size:11px;margin-bottom:11px}
+  .card.bad{border-color:rgba(255,60,60,.45)}
+  .card.bad h3::after{content:" ✕ 不可用";color:var(--up);font-size:11px}
+  .card.good{border-color:rgba(34,211,238,.45)}
+  .card.good h3::after{content:" ✓ 采纳";color:var(--accent);font-size:11px}
+  .cvs{position:relative;background:var(--bg);border:1px solid var(--line);
+       border-radius:5px;overflow:hidden}
+  .blk{position:absolute;left:0;right:0;border-top:1px solid rgba(255,255,255,.05)}
+  .blk .tag{position:absolute;left:7px;top:50%;transform:translateY(-50%);
+            font-size:10px;font-family:Consolas,monospace;white-space:nowrap}
+  .main{background:linear-gradient(180deg,#232348,#1d1d3d)}
+  .main .tag{color:#c8d0e8}
+  .lbl{background:#2b2b52}
+  .lbl .tag{color:#c8d0e8}
+  .plot{background:#1e1e3a}
+  .plot .tag{color:var(--dim)}
+  table{border-collapse:collapse;width:100%;font-size:12px;margin-top:8px}
+  th,td{border:1px solid var(--line);padding:5px 9px;text-align:right;
+        font-family:Consolas,monospace}
+  th{background:#26264a;color:var(--dim);font-weight:500;text-align:right}
+  th:first-child,td:first-child{text-align:left;font-family:inherit}
+  tr.hi td{background:rgba(34,211,238,.10);color:var(--accent);font-weight:600}
+  tr.no td{color:#6b7280}
+  .num{display:flex;flex-wrap:wrap;gap:14px;margin-top:11px;font-size:11.5px;
+       font-family:Consolas,monospace}
+  .num span{color:var(--dim)}
+  .num b{color:var(--text);font-weight:600}
+  .num b.cy{color:var(--accent)}
+  .num b.wn{color:var(--warn)}
+  .num b.up{color:var(--up)}
+  .note{color:var(--dim);font-size:11.5px;margin-top:9px;line-height:1.7}
+  .note b{color:var(--text)}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:11px;color:var(--dim);
+          margin-top:10px}
+  .legend i{display:inline-block;width:10px;height:10px;border-radius:2px;
+            margin-right:5px;vertical-align:-1px}
+  .inv{background:rgba(34,211,238,.08);border:1px solid rgba(34,211,238,.35);
+       border-radius:7px;padding:11px 15px;margin-top:14px;font-size:12px;
+       font-family:Consolas,monospace}
+  .inv.ok{border-color:rgba(34,211,238,.6)}
+  .inv.no{border-color:rgba(247,127,0,.55);background:rgba(247,127,0,.08)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>底部指标区布局对比 · 单窗双槽位（翻倍口径）</h1>
+  <div class="sub">
+    基线 <code>custom-dev @ dd8f754</code> ·
+    实测画布 <code>1600×900</code> 视口下单窗 <code>canvas H = 820</code> ·
+    所有块高按真实像素绘制（缩放 <span id="scaleTxt">0.72</span>×）<br>
+    <b>定稿口径：单窗底部区 = 现状 × 2（<code>volRatio = 0.40 = 2 × VOL_RATIO</code>），每槽与现在的单槽逐像素相同。</b>
+  </div>
+
+  <div class="ctrls">
+    <div class="ctrl">
+      <label>单窗 volRatio</label>
+      <input type="range" id="vr" min="0.20" max="0.60" step="0.01" value="0.40">
+      <span class="val" id="vrVal">0.40</span>
+    </div>
+    <div class="ctrl">
+      <button class="btn" data-vr="0.20">0.20 现状</button>
+      <button class="btn" data-vr="0.30">0.30 等分（已否）</button>
+      <button class="btn on" data-vr="0.40">0.40 翻倍（已定）</button>
+      <button class="btn" data-vr="0.60">0.60 双窗若也翻倍</button>
+    </div>
+  </div>
+
+  <h2>① 单窗：现状 vs 改造（翻倍）</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>现状 · 单槽</h3>
+      <div class="meta">volRatio = 0.20（<code>VOL_RATIO</code> app.js:63）</div>
+      <div class="cvs" id="cvsNow"></div>
+      <div class="num" id="numNow"></div>
+    </div>
+    <div class="card good" id="cardTwin">
+      <h3>改造 · 双槽位（底部区 ×2）</h3>
+      <div class="meta">volRatio = <span id="metaVr">0.40</span>（可拖滑杆微调）· 上 MACD / 下 RSI(12)</div>
+      <div class="cvs" id="cvsTwin"></div>
+      <div class="num" id="numTwin"></div>
+    </div>
+  </div>
+  <div class="inv" id="invBox"></div>
+  <div class="legend">
+    <span><i style="background:#232348"></i>主图（K线）</span>
+    <span><i style="background:#2b2b52"></i>标签行 14px（含可点 chip）</span>
+    <span><i style="background:#1e1e3a"></i>指标绘图窗</span>
+  </div>
+
+  <h2>② 双窗：每窗高度减半（几何一行不改）</h2>
+  <div class="grid">
+    <div class="card good">
+      <h3>双窗 · 单槽（保持现状）</h3>
+      <div class="meta">每窗 H = 410 · <code>DUAL_LAYOUT.volRatio</code> = 0.30</div>
+      <div class="cvs" id="cvsDual"></div>
+      <div class="num" id="numDual"></div>
+    </div>
+    <div class="card bad">
+      <h3>双窗 · 若也翻倍（仅为说明为何不采用）</h3>
+      <div class="meta">volRatio = 0.60 = 2 × 0.30 → 主图被压到 146.4px</div>
+      <div class="cvs" id="cvsDual2"></div>
+      <div class="num" id="numDual2"></div>
+      <div class="note">每槽确实能拿到 95.8px（与现状相同），但主图只剩 <b>146.4px</b> ——
+        双窗本来每窗就只有 410px，再多切一格给指标，K线区基本没得看了。
+        这就是双窗保持单槽的原因。</div>
+    </div>
+  </div>
+
+  <h2>③ 快速对照表（单窗 H = 820 → netH = 752）</h2>
+  <table id="tbl">
+    <thead><tr>
+      <th>单窗 volRatio</th><th>底部区合计</th><th>主图</th>
+      <th>每槽绘图窗</th><th>vs 现单槽 136.4</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table>
+  <div class="note">
+    每槽高度公式：<code>(netH×volRatio − 2×14) / 2</code>（两条 14px 标签行、槽间距 0）。<br>
+    <b>翻倍口径为什么是 0.40：</b>把 <code>volRatio = 2 × VOL_RATIO</code> 代进去，
+    每槽 = <code>(2×0.2×752 − 28)/2 = 136.4</code> —— 恰好等于现状单槽。
+    一般式 <code>每槽绘图窗(n) = netH × VOL_RATIO − 14</code> <b>与槽数 n 无关</b>，
+    所以「2 槽」不会让任何一槽变小，代价全部由主图承担（−25%）。
+  </div>
+
+  <h2>④ 主图代价随窗口高度（volRatio = 0.40）</h2>
+  <p class="sub">每槽绘图窗 <b>始终 136.4px</b> 的前提是 H = 820；窗口变矮时两者同步缩小（比例固定）。</p>
+  <table id="tblH">
+    <thead><tr>
+      <th>单窗 canvas H</th><th>netH</th><th>主图（0.40）</th><th>每槽绘图窗</th><th>vs 现状主图</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table>
+  <div class="note" id="hNote"></div>
+</div>
+
+<script>
+(function(){
+  var H1 = 820, TOP = 20, BOT = 36, GAP = 12, TXT = 14;    // 单窗实测（PADDING top/bottom + GAP）
+  var H2 = 410, DTOP = 10, DBOT = 30, DGAP = 4;            // 双窗每窗实测
+  var DVR = 0.30;                                          // DUAL_LAYOUT.volRatio
+  var VOLR = 0.20;                                         // VOL_RATIO
+  var SCALE = 0.72;
+
+  function geom(H, top, bot, gap, vr, slots){
+    var netH = H - top - bot - gap;
+    var chartH = netH * (1 - vr);
+    var total = netH * vr;
+    var slotH = (total - slots * TXT) / slots;
+    return {netH:netH, chartH:chartH, total:total, slotH:slotH};
+  }
+
+  function render(host, H, top, bot, gap, vr, slotLabels){
+    var g = geom(H, top, bot, gap, vr, slotLabels.length);
+    var el = document.getElementById(host);
+    el.innerHTML = '';
+    el.style.height = (H * SCALE) + 'px';
+    var y = 0;
+    function add(cls, h, text){
+      var d = document.createElement('div');
+      d.className = 'blk ' + cls;
+      d.style.top = (y * SCALE) + 'px';
+      d.style.height = (h * SCALE) + 'px';
+      if (text) d.innerHTML = '<span class="tag">' + text + '</span>';
+      el.appendChild(d);
+      y += h;
+      return d;
+    }
+    add('main', g.chartH, '主图 ' + g.chartH.toFixed(1) + 'px');
+    for (var i = 0; i < slotLabels.length; i++){
+      add('lbl', TXT, slotLabels[i]);
+      add('plot', g.slotH, '指标绘图窗 ' + g.slotH.toFixed(1) + 'px');
+    }
+    return g;
+  }
+
+  function nums(host, pairs){
+    var el = document.getElementById(host);
+    el.innerHTML = pairs.map(function(p){
+      return '<span>' + p[0] + ' <b class="' + (p[2]||'') + '">' + p[1] + '</b></span>';
+    }).join('');
+  }
+
+  function update(vr){
+    document.getElementById('vrVal').textContent = vr.toFixed(2);
+    document.getElementById('metaVr').textContent = vr.toFixed(2);
+    document.getElementById('vr').value = vr;
+
+    // 现状单槽
+    var gN = render('cvsNow', H1, TOP, BOT, GAP, VOLR,
+                    ['标签行 14px · MACD(12,26,9) DIF… DEA… BAR…']);
+    nums('numNow', [
+      ['主图', gN.chartH.toFixed(1) + 'px'],
+      ['底部区', gN.total.toFixed(1) + 'px'],
+      ['每槽绘图窗', gN.slotH.toFixed(1) + 'px', 'cy']
+    ]);
+
+    // 改造双槽
+    var gT = render('cvsTwin', H1, TOP, BOT, GAP, vr,
+                    ['[MACD] chip · MACD(12,26,9) DIF… DEA… BAR…',
+                     '[RSI(12)] chip · RSI(12): 58.32']);
+    nums('numTwin', [
+      ['主图', gT.chartH.toFixed(1) + 'px', gT.chartH < gN.chartH ? 'wn' : ''],
+      ['底部区', gT.total.toFixed(1) + 'px'],
+      ['每槽绘图窗', gT.slotH.toFixed(1) + 'px', 'cy'],
+      ['主图代价', (gT.chartH - gN.chartH >= 0 ? '+' : '') + (gT.chartH - gN.chartH).toFixed(1) + 'px', 'wn']
+    ]);
+
+    // 双窗单槽
+    var gD = render('cvsDual', H2, DTOP, DBOT, DGAP, DVR,
+                    ['[MACD] chip · MACD(12,26,9) DIF… DEA… BAR…']);
+    nums('numDual', [
+      ['每窗 H', H2 + 'px'],
+      ['主图', gD.chartH.toFixed(1) + 'px'],
+      ['每槽绘图窗', gD.slotH.toFixed(1) + 'px', 'cy']
+    ]);
+
+    // 双窗若也翻倍（= 2 × 0.30）
+    var gD2 = render('cvsDual2', H2, DTOP, DBOT, DGAP, 2 * DVR,
+                     ['[MACD] chip', '[RSI(12)] chip']);
+    nums('numDual2', [
+      ['每窗 H', H2 + 'px'],
+      ['主图', gD2.chartH.toFixed(1) + 'px', 'up'],
+      ['每槽绘图窗', gD2.slotH.toFixed(1) + 'px', 'cy']
+    ]);
+
+    // 不变式自检：每槽 vs 现状单槽
+    var diff = gT.slotH - gN.slotH;
+    var isDbl = Math.abs(vr - 2 * VOLR) < 0.005;
+    var box = document.getElementById('invBox');
+    box.className = 'inv ' + (Math.abs(diff) < 0.05 ? 'ok' : 'no');
+    box.innerHTML =
+      '翻倍口径自检：每槽绘图窗 − 现状单槽 = ' + diff.toFixed(1) + 'px' +
+      (Math.abs(diff) < 0.05
+        ? '  ✓ 逐像素相同（volRatio = 2 × VOL_RATIO = 0.40）'
+        : '  ✗ 与现状不同' + (vr < 2 * VOLR ? '，槽位比现在矮 ⇒ 背离读数会比现在更难' : '，槽位比现在高，但主图多付代价')) +
+      '<br>主图代价：' + (gT.chartH - gN.chartH).toFixed(1) + 'px（'
+      + ((gT.chartH / gN.chartH - 1) * 100).toFixed(1) + '%）';
+
+    // 表格
+    var tb = document.querySelector('#tbl tbody');
+    var netH = H1 - TOP - BOT - GAP, rows = [0.20, 0.30, 0.36, 0.40, 0.60];
+    tb.innerHTML = rows.map(function(r){
+      var total = netH * r, main = netH * (1 - r), slot = (total - 2*TXT) / 2;
+      var cls = (Math.abs(r - vr) < 0.005) ? ' class="hi"' : (r < 2*VOLR - 0.005 ? ' class="no"' : '');
+      var d = ((slot - 136.4) / 136.4 * 100).toFixed(0) + '%';
+      var mark = Math.abs(r - 2*VOLR) < 0.005 ? ' （翻倍·已定）'
+               : (Math.abs(r - 0.30) < 0.005 ? ' （等分·已否）'
+               : (Math.abs(r - 0.20) < 0.005 ? ' （现状）'
+               : (r > 0.40 ? ' （主图过矮）' : '')));
+      return '<tr' + cls + '><td>' + r.toFixed(2) + mark +
+             '</td><td>' + total.toFixed(1) + '</td><td>' + main.toFixed(1) +
+             '</td><td>' + slot.toFixed(1) + '</td><td>' + d + '</td></tr>';
+    }).join('');
+
+    // 窗口高度表
+    var tbH = document.querySelector('#tblH tbody');
+    var hs = [700, 768, 820, 900, 1080];
+    tbH.innerHTML = hs.map(function(h){
+      var n = h - TOP - BOT - GAP;
+      var mainT = n * (1 - vr), mainN = n * (1 - VOLR);
+      var slotT = (n * vr - 2*TXT) / 2;
+      var cls = (h === 820) ? ' class="hi"' : '';
+      return '<tr' + cls + '><td>' + h + (h === 820 ? ' （本机实测）' : '') +
+             '</td><td>' + n + '</td><td>' + mainT.toFixed(1) +
+             '</td><td>' + slotT.toFixed(1) +
+             '</td><td>' + ((mainT / mainN - 1) * 100).toFixed(1) + '%</td></tr>';
+    }).join('');
+    var n820 = 820 - TOP - BOT - GAP;
+    document.getElementById('hNote').innerHTML =
+      '当前 volRatio = <b>' + vr.toFixed(2) + '</b>：H = 820 时每槽 '
+      + (((n820 * vr) - 2*TXT) / 2).toFixed(1) + 'px' +
+      (Math.abs(vr - 2*VOLR) < 0.005 ? '（= 现状）' : '') +
+      '，主图 ' + (n820 * (1 - vr)).toFixed(1) + 'px（相对现状 '
+      + (( (1-vr)/(1-VOLR) - 1) * 100).toFixed(1) + '%）。';
+
+    document.querySelectorAll('.btn[data-vr]').forEach(function(b){
+      b.classList.toggle('on', Math.abs(parseFloat(b.dataset.vr) - vr) < 0.005);
+    });
+    document.getElementById('cardTwin').classList.toggle('good', Math.abs(vr - 2*VOLR) < 0.005);
+  }
+
+  document.getElementById('vr').addEventListener('input', function(e){
+    update(parseFloat(e.target.value));
+  });
+  document.querySelectorAll('.btn[data-vr]').forEach(function(b){
+    b.addEventListener('click', function(){ update(parseFloat(b.dataset.vr)); });
+  });
+
+  document.getElementById('scaleTxt').textContent = SCALE.toFixed(2);
+  update(0.40);
+})();
+</script>
+</body>
+</html>
