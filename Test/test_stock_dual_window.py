@@ -17,7 +17,12 @@ Test/test_stock_dual_window.py —— 股票双窗（三期）选点/复盘语�
   5. §4.4 下窗变动 → 上窗重载：静态契约（选点 URL 带上窗周期 / 响应同时替换两窗 /
      下窗双击入口在位）+ 无头 Chrome 真双击下窗，断言「恰好一次 select/point →
      上窗整体重载且首根不变（L 不变）→ 下窗 = 新选点 → 无二次加载」；
-     浏览器不在位降级 SKIP。
+     浏览器不在位降级 SKIP；
+  6. 下窗选点定位窗口 = **与前端视图同源**的那份 CChan：结构化 dual_sub 键
+     （带 date_suffix，前端下窗视图就是它）优先于运行时 stocks_sub_cache
+     （键不带后缀，可能是另一后缀的窗口）——先读运行时会在两份缓存错后缀时
+     把前端 bi_idx 套到另一个窗口的笔列表上（2026-10-09 审计，与期货
+     futures_manual_select_point 的错位同型）。
 
 夹具：stock_day.json（snapshot_runner 注入，全程离线）；第 5 项另用
 Test/snapshots/multilevel_d_30m.json 裁出双窗打桩数据（本地 http.server +
@@ -536,6 +541,133 @@ def test_dual_sub_change_reloads_main():
         httpd.shutdown()
 
 
+def test_dual_sub_select_point_source_matched():
+    """下窗选点的定位 chan 必须取「与前端视图同源」的那一份（2026-10-09 审计）。
+
+    下窗有两份 CChan 缓存，键粒度不同：
+      · 结构化 dual_sub = (dual_sub, 市场, 代码, 下窗周期, date_suffix)：
+        前端下窗视图就是这一次构建（同键、带复盘后缀）；
+      · 运行时 stocks_sub_cache = 代码:下窗周期：**不带 date_suffix**，
+        是同一 (代码, 下窗周期) 最近一次双窗构建，可能是另一后缀的窗口。
+    原实现先读运行时缓存 ⇒ 错后缀时（live 双窗 → 复盘双窗重建 → 取消复盘回
+    live：结构化 live 键命中、不重建，运行时仍停在复盘构建）前端视图是 live
+    窗口、定位却拿复盘窗口的笔列表 → 前端 bi_idx 整体错位（选点落到别的笔上）。
+    断言：spy 记录 `_find_left_shoulder_time` 收到的是**结构化（视图）** chan。
+    """
+    from App import AppChart as chart
+    from App import AppEngine as m
+    from App.AppData import app_data, make_dual_main_key, make_dual_sub_key
+
+    market, normalized_code = m._get_stock_market_code(CODE)
+    assert market, "股票代码解析失败，用例前提不成立"
+    main_freq, sub_freq, date_suffix = "30m", "5m", "live"
+
+    class _KlList:
+        def __init__(self, tag):
+            self.tag = tag
+            # bi_idx=0 需满足「选点后至少 4 笔」检查（len - 0 - 1 >= 4）
+            self.bi_list = [tag] * 8
+
+    class _Chan(dict):
+        def __init__(self, tag):
+            super().__init__()
+            self.tag = tag
+
+        def __getitem__(self, key):
+            return _KlList(self.tag)
+
+    view_chan = _Chan("view")        # 结构化 dual_sub（= 前端视图那次构建）
+    stale_chan = _Chan("runtime")    # 运行时缓存（另一后缀的窗口）
+
+    sub_key = make_dual_sub_key(market, normalized_code, sub_freq, date_suffix)
+    main_key = make_dual_main_key(market, normalized_code, main_freq, date_suffix)
+
+    seen = {}
+
+    def fake_cache_get(key):
+        if key == sub_key:
+            return {"chan": view_chan, "result": {"meta": {"name": "视图窗"}}}
+        if key == main_key:
+            return {"chan": _Chan("main"), "result": {"meta": {"name": "上窗"}}}
+        return None
+
+    def fake_shoulder(kl_list, bi_list, bi_idx, freq):
+        seen["tag"] = kl_list.tag
+        return "2026/09/25 10:30"
+
+    def fake_internal(code_, **kwargs):
+        seen["rebuild"] = kwargs
+        return {"klines": [], "meta": {"name": "重建", "kline_count": 0}}
+
+    restore_iso = isolate_side_effects()
+    orig = (app_data.cache_get, app_data.stocks_sub_cache_get,
+            m._find_left_shoulder_time, m._analyze_stock_internal)
+    try:
+        app_data.cache_get = fake_cache_get
+        app_data.stocks_sub_cache_get = lambda chan_code, f: stale_chan
+        m._find_left_shoulder_time = fake_shoulder
+        m._analyze_stock_internal = fake_internal
+        result = chart.stock_manual_select_point(
+            CODE, freq=sub_freq, bi_idx=0, dual=True,
+            main_freq=main_freq, sub_freq=sub_freq)
+        assert "error" not in result, f"下窗选点用例被拒绝: {result.get('error')}"
+        assert seen.get("tag") == "view", (
+            "下窗选点定位窗口取了非视图 chan（运行时缓存键不带复盘后缀，可能是"
+            f"另一后缀的窗口）→ 前端 bi_idx 整体错位：期望 tag='view'，"
+            f"实际 {seen.get('tag')!r}")
+        assert seen.get("rebuild", {}).get("dual") is True, \
+            "下窗选点重建未走双窗路径"
+    finally:
+        (app_data.cache_get, app_data.stocks_sub_cache_get,
+         m._find_left_shoulder_time, m._analyze_stock_internal) = orig
+        restore_iso()
+    print("[PASS] 下窗选点定位 chan = 结构化 dual_sub（与前端视图同键同源）")
+
+
+def test_dual_cache_hit_keeps_stale_runtime_sub_chan():
+    """双窗结构化缓存**命中**时不重建 ⇒ 运行时下窗缓存保留上一次构建的窗口。
+
+    可达性（S2 的前提）：live 双窗 → 复盘（带 end_date）双窗重建 →
+    取消复盘回 live。第三步的双窗请求（无 end_date）命中结构化 live 键直接
+    返回（`_analyze_stock_internal` 双窗段），**不会**再写
+    `stocks_sub_cache_put` —— 于是运行时缓存里仍是复盘那次的下窗 chan，
+    而前端视图是 live 键那次的下窗窗口。两份窗口后缀不同 ⇒ 下窗选点的定位
+    若读运行时缓存就错位（读源顺序由 test_dual_sub_select_point_source_matched 钉）。
+    """
+    from App import AppEngine as m
+    from App.AppData import app_data, make_dual_main_key, make_dual_sub_key
+
+    market, code = m._get_stock_market_code(CODE)
+    assert market, "股票代码解析失败，用例前提不成立"
+    main_freq, sub_freq = "30m", "5m"
+    main_key = make_dual_main_key(market, code, main_freq, "live")
+    sub_key = make_dual_sub_key(market, code, sub_freq, "live")
+
+    cached_main = {"result": {"klines": [], "meta": {"name": "live上窗",
+                                                     "saved_selection_date": ""}}}
+    cached_sub = {"result": {"klines": [], "meta": {"name": "live下窗",
+                                                    "saved_selection_date": ""}}}
+    puts = []
+
+    orig = (m._cache_get, app_data.get_saved_point_time, app_data.stocks_sub_cache_put)
+    try:
+        m._cache_get = lambda key: cached_main if key == main_key else (
+            cached_sub if key == sub_key else None)
+        app_data.get_saved_point_time = lambda qualified, col: ""
+        app_data.stocks_sub_cache_put = lambda *a, **k: puts.append(a)
+        result = m._analyze_stock_internal(code, freq=main_freq, dual=True,
+                                           sub_freq=sub_freq)
+        assert result.get("meta", {}).get("name") == "live上窗", \
+            f"未命中双窗结构化缓存（用例前提不成立）: {result.get('meta')!r}"
+        assert not puts, (
+            "双窗结构化缓存命中却仍重建了下窗 → 本用例前提失效"
+            f"（调用了 stocks_sub_cache_put {len(puts)} 次）")
+    finally:
+        (m._cache_get, app_data.get_saved_point_time,
+         app_data.stocks_sub_cache_put) = orig
+    print("[PASS] 双窗结构化缓存命中不刷新运行时下窗缓存（陈旧状态可达）")
+
+
 def main():
     test_validate_stock_dual_pair()
     test_sub_start_time_plumbing()
@@ -543,6 +675,8 @@ def main():
     test_sub_meta_saved_selection_date()
     test_dual_sub_left_boundary_independent()
     test_dual_sub_change_reloads_main()
+    test_dual_sub_select_point_source_matched()
+    test_dual_cache_hit_keeps_stale_runtime_sub_chan()
     test_isolate_redirects_user_store_files()
     print("ALL 股票双窗选点语义 TESTS PASS")
 

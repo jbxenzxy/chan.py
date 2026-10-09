@@ -191,16 +191,18 @@ def call_manual_select_point(code, freq="d", bi_idx=-1, end_date=None, dual=Fals
                                      sub_freq=sub_freq, main_freq=main_freq)
 
 
-def call_futures_manual_select_point(symbol, freq="15s", bi_idx="0", end_date=None):
+def call_futures_manual_select_point(symbol, freq="15s", bi_idx="0", end_date=None,
+                                     start_time=None):
     """期货手动选点（REST 唯一入口，无锁）
 
     内部自建链路（CTqSdkSession + _build_futures_chan +
     _extract_realtime_snapshot，期货生产链路统一走 SSE）：每请求独立
     TqApi 会话，选点落盘走 user_store_lock。
     end_date：复盘态选点传当前复盘点（重建窗口 [选点, 复盘点]，保持复盘态）。
+    start_time：前端当前视图左边界 L（定位窗口同源的唯一来源，见 AppSSE）。
     """
     return futures_manual_select_point(symbol, freq=freq, bi_idx=bi_idx,
-                                       end_date=end_date)
+                                       end_date=end_date, start_time=start_time)
 
 
 def call_compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_date=None):
@@ -263,25 +265,39 @@ def stock_manual_select_point(code, freq="d", bi_idx=-1, end_date=None, dual=Fal
         dual_sub_cache_key = make_dual_sub_key(market, normalized_code, sub_freq, date_suffix)
 
     def _fetch_cached_chan():
-        """选点目标窗口的 (chan, meta_name) 取数：双窗优先，回退单窗链"""
+        """选点目标窗口的 (chan, meta_name) 取数：**与前端视图同源**优先。
+
+        定位窗口必须就是前端当前那个窗口（前端传来的 bi_idx 属于它的笔列表），
+        而下窗有**两份** CChan 缓存，键的粒度不同：
+          · 结构化 dual_sub（=(dual_sub, 市场, 代码, 周期, date_suffix)）：
+            前端下窗视图就是这一次构建（同键，带复盘后缀）⇒ 先读它；
+          · 运行时 stocks_sub_cache（=代码:周期，**不带 date_suffix**）：
+            同一 (代码, 周期) 最近一次双窗构建，可能是另一后缀的窗口 ⇒ 只作兜底。
+        反过来先读运行时会命中另一后缀的窗口：结构化键命中时（如取消复盘回到
+        live，双窗缓存直接返回、不重建）运行时缓存仍停在上一次复盘构建 ⇒ 前端
+        视图是 live 窗口、定位却拿复盘窗口的笔列表 → bi_idx 整体错位（与期货
+        futures_manual_select_point 的错位同型）。上窗读结构化 dual_main 键，
+        本就带 date_suffix，无需改动。
+        """
         if dual:
-            dual_main_cached = app_data.cache_get(dual_main_cache_key)
             if freq == main_freq:
-                # 上窗选点：主级别 CChan
+                # 上窗选点：主级别 CChan（结构化 dual_main 键，自带后缀）
+                dual_main_cached = app_data.cache_get(dual_main_cache_key)
                 if dual_main_cached is not None and "chan" in dual_main_cached:
                     name = dual_main_cached.get("result", {}).get("meta", {}).get("name", "")
                     return dual_main_cached["chan"], name
             else:
-                # 下窗选点：读独立下窗（运行时缓存 → dual_sub）
-                chan_obj = app_data.stocks_sub_cache_get(market + normalized_code, freq)
-                name = ""
-                if chan_obj is None:
-                    dual_sub_cached = app_data.cache_get(dual_sub_cache_key)
-                    if dual_sub_cached is not None:
-                        chan_obj = dual_sub_cached.get("chan")
+                # 下窗选点：先读与视图同源的结构化 dual_sub 键
+                dual_sub_cached = app_data.cache_get(dual_sub_cache_key)
+                if dual_sub_cached is not None:
+                    chan_obj = dual_sub_cached.get("chan")
+                    if chan_obj is not None:
                         name = dual_sub_cached.get("result", {}).get("meta", {}).get("name", "")
+                        return chan_obj, name
+                # 兜底：运行时缓存（键不带复盘后缀，仅结构化键缺失时用）
+                chan_obj = app_data.stocks_sub_cache_get(market + normalized_code, freq)
                 if chan_obj is not None:
-                    return chan_obj, name
+                    return chan_obj, ""
         # 单窗口（或双窗缓存缺失回退）：单窗缓存链
         cached = app_data.cache_get(cache_key)
         if cached is None:
@@ -375,15 +391,18 @@ def stock_manual_select_point(code, freq="d", bi_idx=-1, end_date=None, dual=Fal
     return result
 
 
-def futures_manual_select_point(symbol, freq="15s", bi_idx="0", end_date=None):
+def futures_manual_select_point(symbol, freq="15s", bi_idx="0", end_date=None,
+                                start_time=None):
     """期货手动选点 · RAW（无锁原始入口）
 
     ⚠ 内部读写期货共享缓存，非线程安全。REST 调用方必须走
     call_futures_manual_select_point。实现在 App/AppSSE.py。
-    end_date：复盘态选点的当前复盘点，必须透传给 _sse —— 漏斗层
+    end_date：复盘态选点的当前复盘点；start_time：前端当前视图左边界 L
+    （定位窗口同源）。两者都必须透传给 _sse —— 漏斗层
     call_futures_manual_select_point 恒以关键字传入，本壳漏收即 TypeError。
     """
-    return _sse.futures_manual_select_point(symbol, freq=freq, bi_idx=bi_idx, end_date=end_date)
+    return _sse.futures_manual_select_point(symbol, freq=freq, bi_idx=bi_idx,
+                                            end_date=end_date, start_time=start_time)
 
 
 def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_date=None):

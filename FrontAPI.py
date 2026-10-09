@@ -543,15 +543,19 @@ async def api_futures_select_point(
     freq: str = Query("15s"),
     bi_idx: str = Query("-1"),
     end_date: str = Query(None),
+    start_time: str = Query(None),
 ):
     """期货手动选点（orch.call_futures_manual_select_point）
     期货选点统一走领域异常，AppError 由统一异常处理器捕获
-    end_date：复盘态选点传当前复盘点——重建窗口 [选点, 复盘点]，保持复盘态"""
+    end_date：复盘态选点传当前复盘点——重建窗口 [选点, 复盘点]，保持复盘态
+    start_time：前端当前视图左边界 L——后端定位窗口与前端视图同源的唯一来源
+    （缺省时退回 CSV 选点 → 方式C 默认窗口）"""
     if not symbol or bi_idx == "-1":
         return _json_response({"error": "缺少必要参数 symbol 或 bi_idx"}, 400)
     try:
         result = await run_in_threadpool(orch.call_futures_manual_select_point, symbol,
-                                         freq=freq, bi_idx=bi_idx, end_date=end_date)
+                                         freq=freq, bi_idx=bi_idx, end_date=end_date,
+                                         start_time=start_time)
     except AppError:
         raise
     except Exception as exc:

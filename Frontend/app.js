@@ -761,8 +761,17 @@
                         ? inputDateToApi(klineDateToInput(chartData.klines[chartData.klines.length - 1].date, freq), freq)
                         : null;
                     const replayEndQuery = _replayEndMain ? "&end_date=" + encodeURIComponent(_replayEndMain) : "";
+                    // 视图左边界 L（期货专用）：定位窗口必须与前端**当前视图**同源。
+                    // 选点 = 改 L，前端发来的 bi_idx 属于当前视图的笔列表，后端必须
+                    // 在同一个窗口（同一个 L）上取 bi_list[bi_idx]。L 只能由前端提供：
+                    // 它是冻结值（方案 §2.1「改 R 不改 L」）——冷启动 = 方式C 的实时
+                    // 窗口 L、复盘原样带过来、选点后 = 新选点 T；后端自己推导在
+                    // 「复盘态且该周期无选点」时必然落到另一个窗口（从复盘点往前 N 根）。
+                    const _viewStart = (isFutures && chartData.klines && chartData.klines.length > 0)
+                        ? "&start_time=" + encodeURIComponent(inputDateToApi(klineDateToInput(chartData.klines[0].date, freq), freq))
+                        : "";
                     const apiPath = isFutures
-                        ? "/api/futures/" + encodeURIComponent(code) + "/select/point?freq=" + freq + "&bi_idx=" + clickedBiIdx + replayEndQuery
+                        ? "/api/futures/" + encodeURIComponent(code) + "/select/point?freq=" + freq + "&bi_idx=" + clickedBiIdx + replayEndQuery + _viewStart
                 : "/api/stocks/" + encodeURIComponent(code) + "/select/point?freq=" + freq + "&bi_idx=" + clickedBiIdx + replayEndQuery + dualQuery;
                     const _seq = _bumpChartActionSeq(); // [N1] 捕获本次操作序号
                     fetch(apiPath, { method: "POST" })
@@ -2755,9 +2764,14 @@
         function _calcCountdownState(freq, data) {
             // 返回倒计时计算状态，或 null（不显示）
             // freq/data 缺省时使用全局 currentFreq/chartData（上窗/单窗）
+            // 显示判据只有一个：**末根K线是否正在走**（末根区间覆盖「现在」，
+            // 见下方 klineEnd 判定）。不能用 realtimeStartTime（= 是否设了
+            // start）代替它：选点是改 L 不改 R（需求⑹），选点态 R 仍是最新、
+            // 末根就是当前正在走的K线，倒计时应当照常显示；只有复盘态末根
+            // 冻结在复盘点、末根已走完，才不显示。
             freq = freq || currentFreq;
             data = data || chartData;
-            if (!isRealtimeMode || realtimeStartTime) return null;
+            if (!isRealtimeMode) return null;
             const freqSec = FREQ_SEC_MAP_JS[freq];
             if (!freqSec || freqSec >= 86400) return null;
             if (!data || !data.klines || data.klines.length === 0) return null;
@@ -2772,6 +2786,9 @@
             const klineStart = new Date(yy, mm, dd, hh, min, ss);
             const klineEnd = new Date(klineStart.getTime() + freqSec * 1000);
             const now = new Date();
+            // 末根已走完（复盘态末根冻结在复盘点、或休市时最后一根已收盘）
+            // ⇒ 没有「正在走」的K线，不画倒计时。
+            if (now.getTime() >= klineEnd.getTime()) return null;
             const remaining = Math.max(0, (klineEnd.getTime() - now.getTime()) / 1000);
 
             const remMin = Math.floor(remaining / 60);
@@ -2845,7 +2862,12 @@
         }
 
         function _redrawCountdown() {
-            if (!isRealtimeMode || realtimeStartTime) return;
+            if (!isRealtimeMode) return;
+            // 显示判据唯一来源 = _calcCountdownState（末根K线是否正在走）。
+            // 末根刚走完的那一秒仍需重绘一次，把上一秒画的进度条擦掉
+            // （render 内 drawCountdownBar 见到 null 会把 _countdownBounds
+            // 归 null），此后每秒直接返回——复盘态/休市零空转。
+            if (!_calcCountdownState() && !_countdownBounds && !_subCountdownBounds) return;
             // 全量重绘：render() 内部的 drawCountdownBar 会用最新时间重绘进度条，
             // 避免增量擦除导致K线被擦除后不恢复（双窗口下窗焦点时上窗不重绘的问题）。
             render();
@@ -3257,8 +3279,13 @@
                         const _subReplayEnd = (chartData.meta && chartData.meta.is_replay && chartData.klines && chartData.klines.length > 0)
                             ? "&end_date=" + encodeURIComponent(inputDateToApi(klineDateToInput(chartData.klines[chartData.klines.length - 1].date, _subFreq), _subFreq))
                             : "";
+                        // 视图左边界 L（期货专用，与上窗同款）：本块处于下窗替换态
+                        // （chartData = dualSubData），首根即下窗视图 L。
+                        const _subViewStart = (_subIsFutures && chartData.klines && chartData.klines.length > 0)
+                            ? "&start_time=" + encodeURIComponent(inputDateToApi(klineDateToInput(chartData.klines[0].date, _subFreq), _subFreq))
+                            : "";
                         const _selectUrl = _subIsFutures
-                            ? "/api/futures/" + encodeURIComponent(_subCode) + "/select/point?freq=" + _subFreq + "&bi_idx=" + subBiIdx + _subReplayEnd
+                            ? "/api/futures/" + encodeURIComponent(_subCode) + "/select/point?freq=" + _subFreq + "&bi_idx=" + subBiIdx + _subReplayEnd + _subViewStart
                             : "/api/stocks/" + encodeURIComponent(_subCode) + "/select/point?freq=" + _subFreq
                               + "&bi_idx=" + subBiIdx + _subReplayEnd + "&dual=1&main_freq=" + _mainFreq + "&sub_freq=" + _subFreq;
                         fetch(_selectUrl, { method: "POST" })

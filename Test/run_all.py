@@ -503,6 +503,13 @@ COMPONENTS = [
     ("ao_multi_instance_frontend",
      [sys.executable, os.path.join("Test",
                                    "test_ao_multi_instance_frontend.py")]),
+    # 倒计时（K线区右上角「流逝时间」）显示判据：只有「末根K线是否正在走」才画。
+    #   选点 = 改 L 不改 R（需求⑹）：选点态 R 仍是最新、末根就是当前正在走的
+    #   K线，倒计时必须照常显示；旧判据用 realtimeStartTime（= 是否设了 start）
+    #   代替它，把选点态一并隐藏（2026-10-09「流逝时间不见了」）。
+    #   源码抽取 + node 真执行 + 判别力自证（判据改回旧写法必须转红）。
+    ("countdown_display",
+     [sys.executable, os.path.join("Test", "test_countdown_display.py")]),
     ("apptrader_pid_alive_guards",
      [sys.executable, os.path.join("Trading", "Test",
                                    "test_apptrader_pid_alive_guards.py")]),

@@ -1704,7 +1704,7 @@ def _incremental_klines(prev_klines, kl_list, date_fmt):
 # 区域 3 · 期货选点
 # ═══════════════════════════════════════════════════════════════════════
 
-def futures_manual_select_point(symbol, freq="15s", bi_idx="0", end_date=None):
+def futures_manual_select_point(symbol, freq="15s", bi_idx="0", end_date=None, start_time=None):
     """
     期货期指手选进入段：与股票 stock_manual_select_point 逻辑一致。
     创建临时 TqApi → 拉取全量历史 → 找到左肩时间T → 保存CSV →
@@ -1712,6 +1712,9 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0", end_date=None):
 
     end_date（复盘态选点，2026-10-03 二期）：当前复盘点——重建拉取按
     [T, end_date] 截断（改L不改R），响应 is_replay=True 保持复盘态。
+    start_time：前端**当前视图的左边界 L**，定位窗口的唯一可靠来源
+    （前端视图的 L 是冻结值，§2.1 改 R 不改 L；后端自己推导在「复盘态且
+    该周期无选点」时会落到另一个窗口）。缺省时退回 CSV → 方式C。
     """
     import time
 
@@ -1735,18 +1738,23 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0", end_date=None):
         src.connect()
         log.info(f"[{display_key}] ⓪ 临时连接天勤(选点): 耗时 {time.time()-t_conn:.1f}s")
 
-        # 定位窗口必须与前端当前视图**同源**（前端视图左边界 L = CSV 选点（有）
-        # 或该周期默认回看 N 根（无）：复盘态视图 = [CSV, end]、非复盘态
-        # = [CSV, 最新]）——两种情形都按 CSV 取 locate_start，让定位窗口与前端
-        # 视图是同一个窗口，笔列表逐根对齐，前端传来的 bi_idx 才指到同一根笔。
-        # 原实现只在 end_date 有值时对齐，非复盘态退回 init 的默认窗口
-        # （FUTURES_LOOKBACK_CONFIG[freq]，1m=1200 根）⇒ 笔列表远长于前端视图、
-        # bi_idx 整体错位：2026-10-09 IM 1m 实测 前端视图 [09/29 13:37, 最新]
-        # 40 笔 vs 定位窗口 86 笔，双击 10/08 09:43（前端 bi_idx=23）被套到定位
-        # 窗口 bi[23] → 左肩错到 09/28 13:27（早于前端视图左边界）。
-        # start 传 CSV 值时 init 内部按墙钟估算拉取。
-        _col_loc = app_data.freq_to_col(freq) or ""
-        locate_start = (_get_saved_point(symbol, freq) or None) if _col_loc else None
+        # 定位窗口必须与前端当前视图**同源**：前端发来的 bi_idx 属于**当前视图**
+        # 的笔列表，后端只能在同一个窗口（同一个 L）上取 bi_list[bi_idx]。
+        # L 的唯一可靠来源 = 前端显式传入的 start_time（= 前端 chartData.klines[0]）：
+        #   · 它是**冻结**值（§2.1 改 R 不改 L）——冷启动 = 方式C 的实时窗口 L，
+        #     复盘原样带过来，选点后又变成新选点 T；后端自己推导只能对上两种情形
+        #     （CSV 有值 / 非复盘的方式C），复盘态且无 CSV 时「从复盘点往前推 N 根」
+        #     ≠ 视图 L。实测 2026-10-09 IM 1m 复盘到 10/08：视图 L=09/24 10:50
+        #     （80 笔）vs 推导窗口 L=09/23 14:56（86 笔），双击 10/08 14:28
+        #     （前端 bi_idx=79）左肩错到 10/08 11:24（应得 10/08 14:27）。
+        # 取数优先级与 SSE 生成器（_sse_single_gen / _sse_dual_gen）同构：
+        # 显式 start_time > CSV（F5 刷新后前端内存丢失，CSV 是 SSOT）> 方式C 默认；
+        # start 传值时 init 内部按墙钟估算拉取（B 分支 / start+end 组合分支）。
+        locate_start = start_time or None
+        if locate_start is None:
+            _col_loc = app_data.freq_to_col(freq) or ""
+            if _col_loc:
+                locate_start = _get_saved_point(symbol, freq) or None
         loc_result = init_chan_symbol(src, symbol, name, freq_sec, freq_label, locate_start, end_date)
         if loc_result is None:
             raise DataFetchError("选点定位失败（无数据或网络异常）")

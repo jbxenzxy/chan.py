@@ -405,25 +405,30 @@ def test_select_point_end_date_plumbing():
     from App import AppSSE as sse
 
     params = inspect.signature(chart.futures_manual_select_point).parameters
-    assert "end_date" in params, \
-        f"RAW 薄壳 futures_manual_select_point 缺 end_date 形参（漏斗层恒以关键字传入 → TypeError）: {list(params)}"
+    for _p in ("end_date", "start_time"):
+        assert _p in params, \
+            f"RAW 薄壳 futures_manual_select_point 缺 {_p} 形参（漏斗层恒以关键字传入 → TypeError）: {list(params)}"
 
     orig = sse.futures_manual_select_point
     seen = {}
 
-    def _stub(symbol, freq="15s", bi_idx="0", end_date=None):
-        seen.update(symbol=symbol, freq=freq, bi_idx=bi_idx, end_date=end_date)
+    def _stub(symbol, freq="15s", bi_idx="0", end_date=None, start_time=None):
+        seen.update(symbol=symbol, freq=freq, bi_idx=bi_idx, end_date=end_date,
+                    start_time=start_time)
         return {"ok": True}
 
     sse.futures_manual_select_point = _stub
     try:
         chart.call_futures_manual_select_point("KQ.m@SHFE.rb", freq="15s",
-                                               bi_idx="0", end_date="2026/09/01")
+                                               bi_idx="0", end_date="2026/09/01",
+                                               start_time="2026/08/01 09:30")
     finally:
         sse.futures_manual_select_point = orig
     assert seen.get("end_date") == "2026/09/01", \
-        f"end_date 未透传到 AppSSE（复盘态选点窗口左边界失效）: {seen!r}"
-    print("[PASS] 期货选点 end_date 透传: 漏斗层 → RAW 薄壳 → AppSSE 全链贯通")
+        f"end_date 未透传到 AppSSE（复盘态选点窗口右边界失效）: {seen!r}"
+    assert seen.get("start_time") == "2026/08/01 09:30", \
+        f"start_time 未透传到 AppSSE（定位窗口与前端视图同源失效）: {seen!r}"
+    print("[PASS] 期货选点 end_date/start_time 透传: 漏斗层 → RAW 薄壳 → AppSSE 全链贯通")
 
 
 def test_dual_gen_inverted_start_errors():
@@ -527,24 +532,35 @@ def test_select_point_rebuild_passes_num_bars():
 
 
 # ═════════ futures_manual_select_point：定位窗口必须与前端视图同源 ═════════
-# 2026-10-09 缺陷（IM 1m 实测）：非复盘态选点的「定位窗口」取的是 init 的默认
-# 窗口（FUTURES_LOOKBACK_CONFIG[freq]，1m=1200 根），而前端当前视图的左边界
-# 是 CSV 里已有的选点（视图 = [CSV, 最新]）⇒ 两份笔列表长度不同（实测 86 笔 vs
-# 40 笔），前端传来的 bi_idx 被套到定位窗口的笔列表上**整体错位** —— 双击
-# 2026/10/08 09:43（前端 bi_idx=23）算出的左肩落到 2026/09/28 13:27，
-# 早于前端视图左边界 2026/09/29 13:37（若两窗口相同则不可能）。
-# 修法 = 两种情形都按 CSV 取 locate_start（股票侧天然同源：stock_manual_select_point
-# 直接读当前视图的缓存 chan；期货无缓存、必须显式对齐）。
+# 前端发来的 bi_idx 属于**前端当前视图**的笔列表，后端只能在同一个窗口
+# （同一个 L）上取 bi_list[bi_idx]；两窗口的笔列表一旦不同源，bi_idx 就整体错位。
+#
+# L 的唯一可靠来源 = 前端显式传入的 start_time（= 前端 chartData.klines[0]）：
+# 它是**冻结**值（方案 §2.1「改 R 不改 L」）——冷启动 = 方式C 的实时窗口 L、
+# 复盘原样带过来、选点后 = 新选点 T。后端自己推导只在两种情形恰好对上（CSV
+# 有值 / 非复盘的方式C），两处实测错位都出在推导上：
+#   · 2026-10-09 IM 1m 非复盘（CSV 1m 列 = 2026/09/29 13:37）：定位窗口退回
+#     FUTURES_LOOKBACK_CONFIG 的 1200 根 ⇒ 86 笔 vs 前端视图 40 笔，双击
+#     10/08 09:43（bi_idx=23）左肩错到 09/28 13:27。
+#   · 2026-10-09 IM 1m 复盘到 10/08 且 1m 列**无**选点（真天勤实测）：视图
+#     [09/24 10:50, 10/08 14:55] 80 笔 vs 推导窗口 [09/23 14:56, 10/08 14:55]
+#     86 笔，双击 10/08 14:28（bi_idx=79）左肩错到 10/08 11:24（应得 14:27）。
+#
+# 取数优先级与 SSE 生成器（_sse_single_gen / _sse_dual_gen）同构：
+# 显式 start_time > CSV（F5 刷新后前端内存丢失，CSV 是 SSOT）> 方式C 默认。
+# 股票侧天然同源（stock_manual_select_point 直接读当前视图的缓存 chan），
+# 期货无缓存，只能由请求把视图 L 显式带过来（方案 §3.1 载体不同、体验一致）。
 
-def _frontend_view_left(csv_point):
+def _frontend_view_left(csv_point, view_start=None):
     """前端当前视图左边界 L 的口径，与 `_sse_single_gen` / `_sse_dual_gen`
-    的 start 恢复规则同源：有 CSV 选点 → CSV 真值；无 → None（方式C 默认窗口）。"""
-    return csv_point or None
+    的 start 解析规则同源：显式 start_time（前端视图首根）> CSV 选点 > 无（方式C）。"""
+    return view_start or csv_point or None
 
 
-def _run_select_point(csv_point, end_date, captured):
+def _run_select_point(csv_point, end_date, captured, view_start=None):
     """离线驱动 futures_manual_select_point（全桩），捕获**定位窗口**的 start/end。
 
+    view_start = 前端选点请求里显式带的视图左边界 L（chartData.klines[0]）。
     定位窗口 = 函数内 `init_chan_symbol(..., locate_start, end_date)` 那一次调用：
     它决定 bi_idx 落在哪一份笔列表上；只有与前端视图是同一个窗口，前端传来的
     bi_idx 才指到同一根笔。第二次 init 调用不入本录制（那是重建，不是定位）。
@@ -604,7 +620,8 @@ def _run_select_point(csv_point, end_date, captured):
             setattr(_sse_mod, _n, _s)
         try:
             _sse_mod.futures_manual_select_point(SYMBOL, freq=FREQ, bi_idx="0",
-                                                end_date=end_date)
+                                                end_date=end_date,
+                                                start_time=view_start)
         finally:
             for _n, _o in originals.items():
                 setattr(_sse_mod, _n, _o)
@@ -639,6 +656,40 @@ def test_select_point_locate_window_default_without_csv():
     print("[PASS] 非复盘无选点定位窗口: start=None（方式C）")
 
 
+def test_select_point_locate_window_uses_view_start():
+    """前端显式带视图 L → 定位窗口必须用它（显式 > CSV > 方式C）。
+
+    这是「复盘态 + 该周期无选点」的唯一正确解：后端推导出的窗口是
+    「从复盘点往前推 N 根」，而前端视图的 L 是**冻结**的实时窗口 L（§2.1），
+    两者不同 —— 真天勤实测（IM 1m，复盘到 2026/10/08 14:55、1m 列无选点）
+    前端视图 80 笔 vs 推导窗口 86 笔，双击 10/08 14:28（bi_idx=79）左肩
+    错到 10/08 11:24（应得 10/08 14:27）。
+    """
+    view_start = "2025/01/03 09:30"      # 前端视图首根（≠ CSV 值）
+
+    # ① 非复盘：显式 L 优先，CSV 存在也不得改用它
+    captured = {}
+    _run_select_point(CSV_POINT, None, captured, view_start=view_start)
+    assert len(captured.get("locate", [])) == 1,         f"定位只应发生一次: {captured.get('locate')!r}"
+    loc = captured["locate"][0]
+    assert loc["end_time"] is None
+    assert loc["start_time"] == view_start, (
+        "非复盘态定位窗口未使用前端显式视图 L："
+        f"期望 {view_start!r}，实为 {loc['start_time']!r}"
+        "（CSV 只应在未传 L 时兜底）")
+    assert loc["start_time"] != _frontend_view_left(CSV_POINT),         "显式视图 L 必须压过 CSV 兜底值"
+
+    # ② 复盘 + 无 CSV（2026-10-09 实测现场）：仍须用显式 L，不得回退方式C 默认窗口
+    captured = {}
+    _run_select_point(None, END_TIME, captured, view_start=view_start)
+    loc = captured["locate"][0]
+    assert loc["start_time"] == view_start and loc["end_time"] == END_TIME, (
+        "复盘态无 CSV 时定位窗口未使用前端显式视图 L（退回方式C 默认窗口 = "
+        "「复盘点往前 N 根」，与冻结的视图 L 不同源 → bi_idx 整体错位）："
+        f"{loc!r}")
+    print(f"[PASS] 显式视图 L 优先: 非复盘/复盘无 CSV 两现场均 start={view_start}")
+
+
 def test_select_point_locate_window_replay_unchanged():
     """复盘态定位窗口保持原口径：start = CSV 选点（无则 None），end = 复盘点。"""
     captured = {}
@@ -667,6 +718,7 @@ def main():
     test_select_point_rebuild_passes_num_bars()
     test_select_point_locate_window_follows_frontend_view()
     test_select_point_locate_window_default_without_csv()
+    test_select_point_locate_window_uses_view_start()
     test_select_point_locate_window_replay_unchanged()
     print("ALL 期货单窗复盘窗口 TESTS PASS")
 
