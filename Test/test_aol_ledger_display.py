@@ -86,7 +86,7 @@ check("成交节容器 aol-trades 已从 app.html 删除", "aol-trades" in HTML,
 
 # ═══ ② 持仓行：无止损列 ═══
 print("\n[2] 持仓行去止损列 + 时间格式化")
-i0 = JS.index("function renderAutoOrderLedger(led) {")
+i0 = JS.index("function renderAutoOrderLedger(led")   # 签名可带额外形参（keepFlash）
 i1 = JS.index("// 价格显示", i0)          # 下一区块横幅 = 区块结束锚
 BLOCK = JS[i0:i1]
 check("renderAutoOrderLedger 区块长度 > 300（防锚点抓半截）",

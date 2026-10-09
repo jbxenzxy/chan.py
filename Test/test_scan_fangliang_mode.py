@@ -462,6 +462,14 @@ def part4():
           io.open(os.path.join(ROOT, "App", "AppConfig.py"), encoding="utf-8").read(),
           "配置项未定义")
 
+    # 链路级：键必须真的被 as_dict() 下发到 /api/health ——
+    #   只断言"源码里有这个键"会把「定义在、下发漏」判成通过（前端恒回落中性文案）。
+    _ad = app_config.as_dict()
+    check("④ as_dict() 真下发 scan_fangliang_window_bars（/api/health 的唯一来路）",
+          "scan_fangliang_window_bars" in _ad
+          and _ad["scan_fangliang_window_bars"] == app_config.scan_fangliang_window_bars,
+          "as_dict 缺键或取值不符，现有键=" + str(sorted(_ad.keys())))
+
     check("④ 资源版本号已抬到 v=73（防浏览器吃旧缓存），且 v=72 及更早零残留",
           'app.js?v=73' in html and 'app.js?v=72' not in html,
           "版本号未同步")

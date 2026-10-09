@@ -354,6 +354,7 @@ class _AppConfigBase:
             "tdx_install_dir": self.tdx_install_dir,
             "scan_pool_workers": self.scan_pool_workers,
             "scan_min_float_mc": self.scan_min_float_mc,
+            "scan_fangliang_window_bars": self.scan_fangliang_window_bars,
             "full_data_mode": self.full_data_mode,
             "view_count": self.view_count,
             "tq_account": (self.tq_account[:2] + "***") if (redact and self.tq_account) else self.tq_account,

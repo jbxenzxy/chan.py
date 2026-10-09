@@ -9568,8 +9568,8 @@
             panel.style.display = 'block';
             bindLedgerOutsideClose();
             renderAutoOrderLedger(autoOrderLedgerData);
-            refreshLedgerPanel();   // 打开即拉一次聚合账本（§3.10.1）
-            setAolFlash(flashMsg || '');   // 必须在渲染之后：渲染会清掉提示行
+            refreshLedgerPanel(true);   // 打开即拉一次聚合账本（§3.10.1）；本次刷新不覆盖提示行
+            setAolFlash(flashMsg || '');   // 必须在渲染之后：同步渲染会清掉提示行
         }
 
         function toggleAutoOrderLedger(ev) {
@@ -9607,11 +9607,15 @@
             m = /^(\d{4})-(\d{2})-(\d{2})/.exec(str);
             return m ? m[1].slice(2) + '/' + m[2] + '/' + m[3] : str;
         }
-        function renderAutoOrderLedger(led) {
+        function renderAutoOrderLedger(led, keepFlash) {
             autoOrderLedgerData = led;
             const panel = document.getElementById('auto-order-ledger-panel');
             if (!panel || panel.style.display === 'none') return;   // 关着不渲染
-            setAolFlash('');   // 数据每刷新一次，事件提示行即失效（一次性）
+            // 一次性提示行的清除时机 = **别的**刷新带来的数据到达。
+            // openAutoOrderLedger 会先拉一次账本、再设提示行；那一次刷新属于
+            // 「同一事件」，必须由调用方显式传 keepFlash=true 豁免 —— 否则提示行
+            // 活不过一个 fetch 往返，用户看不到自己当初为什么被弹开面板。
+            if (!keepFlash) setAolFlash('');
             const posEl = document.getElementById('aol-positions');
             if (!posEl) return;
             const groups = (led && Array.isArray(led.groups)) ? led.groups : [];
@@ -9660,7 +9664,7 @@
 
         // 聚合账本拉取（§3.10.1）：面板打开期间随轮询刷新；关着不拉。
         let _ledgerInFlight = false;
-        function refreshLedgerPanel() {
+        function refreshLedgerPanel(keepFlash) {
             const panel = document.getElementById('auto-order-ledger-panel');
             if (!panel || panel.style.display === 'none') return;
             if (_ledgerInFlight) return;
@@ -9672,7 +9676,7 @@
                 })
                 .then(function (led) {
                     _ledgerInFlight = false;
-                    renderAutoOrderLedger(led);
+                    renderAutoOrderLedger(led, keepFlash);
                 })
                 .catch(function (e) {
                     _ledgerInFlight = false;

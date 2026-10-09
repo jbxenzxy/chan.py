@@ -100,8 +100,12 @@ if m_open:
     check("[2e] 面板置为 block（无条件，不是 toggle 取反）",
           "panel.style.display = 'block'" in src, True)
     check("[2f] 不含 willShow 取反切换语义", "willShow" in src, False)
-    check("[2g] 提示行在渲染之后设置（渲染会清提示行）",
-          src.index("refreshLedgerPanel()") < src.index("setAolFlash("), True)
+    _rf = re.search(r"refreshLedgerPanel\([^)]*\)", src)
+    check("[2g] 提示行在渲染之后设置（同步渲染会清提示行）",
+          _rf is not None and _rf.start() < src.index("setAolFlash("), True)
+    check("[2g2] 打开引发的那次刷新显式豁免提示行（keepFlash=true）—— 否则它活不过"
+          "自己那次 fetch 往返",
+          "refreshLedgerPanel(true)" in src, True)
     check("[2h] 自动打开也注册「点外面关」监听",
           "bindLedgerOutsideClose()" in src, True)
 
@@ -146,7 +150,7 @@ else:
         _grab(r"function openAutoOrderLedger\(flashMsg\) \{[\s\S]*?\n        \}"),
         _grab(r"function fmtAolPx1\(v\) \{[\s\S]*?\n        \}"),
         _grab(r"function fmtAolTime\(s\) \{[\s\S]*?\n        \}"),
-        _grab(r"function renderAutoOrderLedger\(led\) \{[\s\S]*?\n        \}"),
+        _grab(r"function renderAutoOrderLedger\(led[^)]*\) \{[\s\S]*?\n        \}"),
         _grab(r"function handleAutoOrderToasts\(toasts\) \{[\s\S]*?\n        \}"),
     ]
     check("[5a] 八段源码全部可抽取",
@@ -252,8 +256,27 @@ handleAutoOrderToasts([
 ]);
 OUT.c8_multi = snap();
 
-OUT.docListeners = DOC_LISTENERS;
-console.log(JSON.stringify(OUT));
+// ── 场景 9：**异步**时序 —— 打开面板引发的那次刷新不得清掉刚设的提示行 ──
+//   场景 7 用「同步直调 renderAutoOrderLedger」模拟"下一次刷新"，测不出这条：
+//   真实链路是 fetch → then → render，至少晚一个微任务才落。
+reset('none');
+let ASYNC_DONE = 0;
+refreshLedgerPanel = function (keepFlash) {
+    return Promise.resolve().then(function () {
+        ASYNC_DONE += 1;
+        renderAutoOrderLedger({ groups: [] }, keepFlash);
+    });
+};
+handleAutoOrderToasts([T(7000, 'open_filled', '开仓成交：多 2手 @ 7584.6')]);
+handleAutoOrderToasts([T(7001, 'open_filled', '开仓成交：多 2手 @ 7584.6')]);
+OUT.c9_before = snap();
+
+setTimeout(function () {
+    OUT.c9_after = snap();
+    OUT.c9_async_done = ASYNC_DONE;
+    OUT.docListeners = DOC_LISTENERS;
+    console.log(JSON.stringify(OUT));
+}, 40);
 """
         script = STUB + "\n".join(parts) + "\n" + HARNESS
         tmp = os.path.join(TEST_DIR, "_aol_autopen_tmp.js")
@@ -306,6 +329,15 @@ console.log(JSON.stringify(OUT));
                 check("[6o] 同一轮多条成交 → 提示行取最后一条",
                       o["c8_multi"]["flashText"],
                       "刚刚：平仓成交·止损：空 2手 @ 7576.8")
+
+                # ── 场景 9：真异步时序（2026-10-09 补）──
+                check("[6p] 打开引发的**异步**刷新不得清掉提示行（真时序）",
+                      o["c9_after"]["flash"], "block")
+                check("[6q] 该次异步刷新确实跑过（render 真被调用，证明不是空转）",
+                      o["c9_async_done"], 1)
+                check("[6r] 异步刷新期间提示行文案保持原文",
+                      o["c9_after"]["flashText"],
+                      "刚刚：开仓成交：多 2手 @ 7584.6")
 
                 print("\n[7] 点外面关（自动弹出也必须能关掉）")
                 check("[7a] 自动打开时注册了一次 document 监听",
