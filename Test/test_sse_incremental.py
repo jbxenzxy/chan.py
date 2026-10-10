@@ -12,6 +12,13 @@
   ③ 快照同构：_extract_realtime_snapshot 增量路径（prev_klines/
      prev_ema_state）与全量路径 klines/meta.kline_count 一致
   ④ 状态缺失回退：prev_ema_state=None 时增量路径回退全量重算，仍正确
+  ⑤ tick 路径指标（2026-10-10 新加，该分支此前**零覆盖**）：
+     a. MacdStream 增量 ≡ 全量 MACD（逐位 ==）
+     b. tick 路径末根 ≡ 快照全量末根（dea 取整口径已统一）
+     c. 上/下窗状态按 key 隔离，互不覆盖
+     d. 结构契约（棘轮）：tick 路径不再有 O(n) 全量重算、取整反馈已废
+     e. MACD_MIN_BARS 门槛语义：整窗不足 26 根 ⇒ 全量与 tick 都置 0；
+        窗内前 25 根全量照样有值（曾把两者门槛混为一谈，见 ⑤e）
 
 运行：python Test/test_sse_incremental.py            # 校验（run_all 组件）
       python Test/test_sse_incremental.py --update   # 兼容 run_all --update
@@ -36,8 +43,11 @@ from App.AppSSE import (
     _incremental_klines,
     _apply_macd_full,
     _apply_macd_incremental,
+    _apply_rsi_full,
+    _tick_update_metrics,
     _extract_realtime_snapshot,
 )
+from App.AppUtils import MacdStream, MACD_MIN_BARS
 
 
 # ── 轻量 Mock：仅承载 _incremental_klines 需要的 kl_list 结构 ────────
@@ -250,6 +260,184 @@ def test_snapshot_incremental_consistency(failures):
     print("[PASS] ③ 快照同构: 增量路径与全量路径 klines/MACD/kline_count 逐位一致")
 
 
+def _src(*parts):
+    with open(os.path.join(REPO_ROOT, *parts), encoding="utf-8") as f:
+        return f.read()
+
+
+def _last_bar(kl):
+    return (kl["dif"], kl["dea"], kl["macd"], kl["rsi"])
+
+
+def test_macd_stream_equals_full(failures):
+    """⑤a MacdStream 增量 ≡ 全量 MACD：逐位 ==（不是"误差范围内"）"""
+    import random
+    random.seed(7)
+    closes = [100.0 + i * 0.5 + random.uniform(-2, 2) for i in range(200)]
+    klines = [{"close": c, "dif": 0, "dea": 0, "macd": 0} for c in closes]
+    _apply_macd_full(klines)
+
+    s = MacdStream()
+    for i, c in enumerate(closes):
+        dif, dea, macd = s.feed(c)
+        got = (round(dif, 4), round(dea, 4), round(macd, 4))
+        want = (klines[i]["dif"], klines[i]["dea"], klines[i]["macd"])
+        if got != want:
+            failures.append(f"⑤a 第{i}根 增量={got} 全量={want}")
+            print(f"[FAIL] ⑤a MacdStream 增量≠全量: 第{i}根 {got} != {want}")
+            return
+    print("[PASS] ⑤a MacdStream 增量 ≡ 全量 MACD（200 根逐位一致）")
+
+
+def test_tick_metrics_equals_snapshot(failures):
+    """⑤b tick 路径末根 ≡ 快照全量末根（dea 取整口径已统一：用未取整 dif 递推）"""
+    import random
+    random.seed(11)
+    for n in (30, 120, 300):
+        closes = [round(3000 + random.uniform(-50, 50), 2) for _ in range(n)]
+        # 快照：n 根确认K线 + 一根预览bar（预览bar 先继承前一根的指标值）
+        ex = [{"close": c, "dif": 0, "dea": 0, "macd": 0, "rsi": 0} for c in closes]
+        _apply_macd_full(ex)
+        _apply_rsi_full(ex)
+        ex.append(dict(ex[-1]))
+        ex[-1]["close"] = round(3000 + random.uniform(-50, 50), 2)  # tick 灌入真实 close
+
+        ref = [dict(k) for k in ex]
+        _apply_macd_full(ref)
+        _apply_rsi_full(ref)
+
+        ms, rs = {}, {}
+        _tick_update_metrics(ex, ms, rs, "main")
+        if _last_bar(ex[-1]) != _last_bar(ref[-1]):
+            failures.append(f"⑤b n={n} 末根 tick={_last_bar(ex[-1])} 快照={_last_bar(ref[-1])}")
+            print(f"[FAIL] ⑤b tick≠快照: n={n} tick={_last_bar(ex[-1])} 快照={_last_bar(ref[-1])}")
+            return
+        # tick 不该碰前 n-1 根
+        for i in range(len(ex) - 1):
+            if _last_bar(ex[i]) != _last_bar(ref[i]):
+                failures.append(f"⑤b n={n} 第{i}根被 tick 改动")
+                print(f"[FAIL] ⑤b tick 改动了非末根: n={n} 第{i}根")
+                return
+    print("[PASS] ⑤b tick 末根 ≡ 快照全量末根（30/120/300 根逐位一致，前 n-1 根不动）")
+
+
+def test_tick_state_isolated_by_key(failures):
+    """⑤c 上/下窗状态按 key 隔离：互不覆盖
+
+    **必须含"根数相同"的一对**：根数不同的两个窗口即使共用状态也会被
+    「n 不等于 len(ex)-1 ⇒ 重建」兜住（只是变慢、不会算错）；只有**根数相同**
+    时状态才会被误复用 ⇒ 判别力全在"根数相同"这一对上。
+    """
+    import random
+    random.seed(13)
+    # A/B 根数相同、数据不同（危险组）；C 根数不同（顺带覆盖重建分支）
+    a = [{"close": 3000.0 + i + random.uniform(-1, 1), "dif": 0, "dea": 0, "macd": 0, "rsi": 0}
+         for i in range(120)]
+    b = [{"close": 5000.0 - i * 0.8 + random.uniform(-1, 1), "dif": 0, "dea": 0, "macd": 0, "rsi": 0}
+         for i in range(120)]
+    c = [{"close": 4000.0 + i * 0.7 + random.uniform(-1, 1), "dif": 0, "dea": 0, "macd": 0, "rsi": 0}
+         for i in range(80)]
+    ms, rs = {}, {}
+    for _ in range(3):
+        _tick_update_metrics(a, ms, rs, "main")
+        _tick_update_metrics(b, ms, rs, "sub")
+        _tick_update_metrics(c, ms, rs, "sub5s")
+    for tag, ex in (("A/main", a), ("B/sub", b), ("C/sub5s", c)):
+        ref = [dict(k) for k in ex]
+        _apply_macd_full(ref)
+        _apply_rsi_full(ref)
+        if _last_bar(ex[-1]) != _last_bar(ref[-1]):
+            failures.append(f"⑤c 窗口{tag} tick={_last_bar(ex[-1])} 快照={_last_bar(ref[-1])}")
+            print(f"[FAIL] ⑤c 状态未按 key 隔离: 窗口{tag} {_last_bar(ex[-1])} != {_last_bar(ref[-1])}")
+            return
+    print("[PASS] ⑤c 上/下窗状态按 key 隔离（含根数相同的 A/B 对，交替 3 轮仍 ≡ 快照）")
+
+
+def test_tick_no_full_recompute(failures):
+    """⑤d 结构契约（棘轮）：tick 路径不再有 O(n) 全量重算、取整反馈已废"""
+    import ast
+    sse = _src("App", "AppSSE.py")
+    utils = _src("App", "AppUtils.py")
+
+    # [1] 全量 EMA 只剩 _apply_macd_full 里的两处（tick 分支已清空）。
+    #     按 **AST 调用点**数，不用 `sse.count("ema(closes")` —— 后者会把
+    #     docstring 里"改造前写法"的叙述也算进去（自己踩过）。
+    c = sum(1 for x in ast.walk(ast.parse(sse))
+            if isinstance(x, ast.Call) and isinstance(x.func, ast.Name) and x.func.id == "ema"
+            and x.args and isinstance(x.args[0], ast.Name) and x.args[0].id == "closes")
+    if c != 2:
+        failures.append(f"⑤d ema(closes…) 调用点 {c} 处（期望 2，只应在 _apply_macd_full）")
+        print(f"[FAIL] ⑤d 结构契约: ema(closes…) 调用点 {c} 处（期望 2）")
+        return
+    # [2] _tick_update_metrics 函数体内不得出现 ema(（AST 取段，不受 docstring 干扰）
+    fn = next((x for x in ast.walk(ast.parse(sse))
+               if isinstance(x, ast.FunctionDef) and x.name == "_tick_update_metrics"), None)
+    if fn is None:
+        failures.append("⑤d 未找到 _tick_update_metrics 定义")
+        print("[FAIL] ⑤d 结构契约: 未找到 _tick_update_metrics")
+        return
+    # 取段时**跳过 docstring**：docstring 里会写"改造前的 ema(closes,12) 写法"，
+    # 不跳就会把叙述当成代码（自己踩过）
+    first = fn.body[1] if (fn.body and isinstance(fn.body[0], ast.Expr)
+                           and isinstance(fn.body[0].value, ast.Constant)) else fn.body[0]
+    seg = "\n".join(sse.split("\n")[first.lineno - 1:fn.body[-1].end_lineno])
+    if "ema(" in seg:
+        failures.append("⑤d _tick_update_metrics 内仍有 ema( 全量调用")
+        print("[FAIL] ⑤d 结构契约: _tick_update_metrics 内仍有 ema( 调用")
+        return
+    # [3] 两个 tick 调用点都在（单窗 "main" + 双窗 freq_label）
+    c2 = sse.count("_tick_update_metrics(ex, macd_tail_state")
+    if c2 != 2:
+        failures.append(f"⑤d tick 调用点 {c2} 处（期望 2）")
+        print(f"[FAIL] ⑤d 结构契约: tick 调用点 {c2} 处（期望 2）")
+        return
+    # [4] 门槛同源：常量单源于 AppUtils，AppSSE 不得再硬编码 26
+    import re
+    m = re.search(r"^MACD_MIN_BARS = (\d+)", utils, re.M)
+    if not m or m.group(1) != "26":
+        failures.append("⑤d AppUtils.MACD_MIN_BARS 不是 26")
+        print("[FAIL] ⑤d 门槛同源: MACD_MIN_BARS 缺失或被改")
+        return
+    if sse.count(">= MACD_MIN_BARS") != 1 or ">= 26" in sse:
+        failures.append("⑤d AppSSE 仍有硬编码的 26 门槛")
+        print("[FAIL] ⑤d 门槛同源: AppSSE 仍有硬编码 26")
+        return
+    print("[PASS] ⑤d 结构契约: tick 无 ema( 全量、调用点 2 处、门槛单源")
+
+
+def test_macd_min_bars_semantics(failures):
+    """⑤e 门槛语义：整窗不足 26 根 ⇒ 全量与 tick 都置 0；窗内前 25 根全量照样有值"""
+    closes = [3000.0 + i for i in range(20)]
+    # [1] 整窗不足门槛：_apply_macd_full 整窗置 0
+    short = [{"close": c, "dif": 9, "dea": 9, "macd": 9, "rsi": 0} for c in closes]
+    _apply_macd_full(short)
+    if any((k["dif"], k["dea"], k["macd"]) != (0, 0, 0) for k in short):
+        failures.append("⑤e 整窗<26 时全量未置 0")
+        print("[FAIL] ⑤e 门槛语义: 整窗<26 全量未置 0")
+        return
+    # [2] tick 同口径：末根也置 0
+    _tick_update_metrics(short, {}, {}, "main")
+    if _last_bar(short[-1])[:3] != (0, 0, 0):
+        failures.append(f"⑤e 整窗<26 时 tick 未置 0: {_last_bar(short[-1])}")
+        print(f"[FAIL] ⑤e 门槛语义: 整窗<26 tick 未置 0 {_last_bar(short[-1])}")
+        return
+    # [3] 窗内前 25 根**不是** 0（门槛是整窗判据，不是"前 25 根无效"）
+    long_closes = [3000.0 + i for i in range(40)]
+    longk = [{"close": c, "dif": 0, "dea": 0, "macd": 0, "rsi": 0} for c in long_closes]
+    _apply_macd_full(longk)
+    if all(k["dif"] == 0 for k in longk[:25]):
+        failures.append("⑤e 窗内前 25 根被误置 0（门槛应是整窗判据）")
+        print("[FAIL] ⑤e 门槛语义: 窗内前 25 根被误置 0")
+        return
+    s = MacdStream()
+    for i, c in enumerate(long_closes[:25]):
+        if s.feed(c) is None:
+            failures.append(f"⑤e MacdStream 第{i}根返回 None（应恒返回三元组）")
+            print(f"[FAIL] ⑤e 门槛语义: MacdStream 第{i}根返回 None")
+            return
+    print("[PASS] ⑤e 门槛语义: 整窗<26 置 0 / 窗内前 25 根仍有值（两处门槛不混）")
+
+
 def main():
     ap = argparse.ArgumentParser(description="P2-4 增量快照守护用例")
     ap.add_argument("--update", action="store_true", help="兼容 run_all --update")
@@ -260,6 +448,11 @@ def main():
     test_macd_incremental_equals_full(failures)
     test_macd_state_missing_fallback(failures)
     test_snapshot_incremental_consistency(failures)
+    test_macd_stream_equals_full(failures)
+    test_tick_metrics_equals_snapshot(failures)
+    test_tick_state_isolated_by_key(failures)
+    test_tick_no_full_recompute(failures)
+    test_macd_min_bars_semantics(failures)
 
     print()
     if failures:

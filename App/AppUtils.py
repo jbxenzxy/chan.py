@@ -255,7 +255,71 @@ def calculate_macd(closes, fast=12, slow=26, signal=9):
     return [{"dif": dif[i], "dea": dea[i], "macd": macd[i]} for i in range(len(closes))]
 
 
-# RSI 周期：全项目**单一来源**。四处必须同值，改动其中任一处都要同步其余：
+# MACD 参与计算所需的最少根数：不足则整窗置 0（与 `App/AppSSE._apply_macd_full`
+# 的门槛同源，改这里必须同步改那里 —— 由「MACD 门槛同源」护栏比对两处数字）。
+MACD_MIN_BARS = 26
+_K12 = 2.0 / 13.0
+_K26 = 2.0 / 27.0
+_K9 = 2.0 / 10.0
+
+
+class MacdStream:
+    """MACD 的 **O(1) 增量**状态机 —— 逐根喂 close，3 个标量状态。
+
+    与 RSI 的关键差别：MACD 是**纯一阶 IIR**、没有播种期 ⇒ 状态从头到尾就是
+    `ema12` / `ema26` / `dea` 三个数，**不随 K 线根数 n 增长**（RSI 多一段「前
+    period-1 个 diff 用简单平均」的播种期，所以是两段式、状态多一个累加和 + 计数）。
+
+    递推式与 `ema()`、`App/AppSSE._apply_macd_incremental` 逐字相同（含 `k = 2/(period+1)`
+    的取值与乘加顺序），且 `dea` 用**未取整**的 `dif` 递推 ⇒ 与 `_apply_macd_full`
+    **逐位相等**。由 `Test/test_sse_incremental.py` 的「MACD 增量 ≡ 全量」护栏用 `==` 钉住。
+
+    `feed()` 恒返回 `(dif, dea, macd)` 三元组（未取整）。**注意门槛的含义**：
+    `MACD_MIN_BARS` 是 `_apply_macd_full` 的**整窗**门槛 —— 整窗不足 26 根才整窗置 0，
+    窗内前 25 根**照样有值**（EMA 首根即自身值）。所以本类不做门槛判断，**由调用方
+    按整窗长度决定是否置 0**（见 `App/AppSSE._tick_update_metrics`）。
+    """
+
+    __slots__ = ("n", "ema12", "ema26", "dea")
+
+    def __init__(self):
+        self.n = 0          # 已喂根数
+        self.ema12 = 0.0
+        self.ema26 = 0.0
+        self.dea = 0.0
+
+    def feed(self, close):
+        """喂一根 close，返回**该根**的 (dif, dea, macd)（未取整）"""
+        if self.n == 0:
+            # 与 ema() 的播种口径一致：首根 EMA 直接取自身值 ⇒ dif[0] = 0、dea[0] = 0
+            self.ema12 = close
+            self.ema26 = close
+            self.dea = 0.0
+        else:
+            self.ema12 = close * _K12 + self.ema12 * (1.0 - _K12)
+            self.ema26 = close * _K26 + self.ema26 * (1.0 - _K26)
+            self.dea = (self.ema12 - self.ema26) * _K9 + self.dea * (1.0 - _K9)
+        self.n += 1
+        dif = self.ema12 - self.ema26
+        return dif, self.dea, 2.0 * (dif - self.dea)
+
+    def copy(self):
+        """快照当前状态（tick 路径用它保存「倒数第二根为止」的状态，供末根重算）"""
+        o = MacdStream()
+        o.n = self.n
+        o.ema12 = self.ema12
+        o.ema26 = self.ema26
+        o.dea = self.dea
+        return o
+
+
+def calculate_macd_stream(closes):
+    """`MacdStream` 的批量包装（结果与 `_apply_macd_full` 应完全一致，供护栏比对）"""
+    s = MacdStream()
+    return [s.feed(c) for c in closes]
+
+
+# RSI 周期：全项目**单一来源**。五处必须同值，改动其中任一处都要同步其余：
 #   ① `Math/RSI.py` 的 `period` 默认值（核心指标模型）
 #   ② `ChanConfig.CChanConfig` 的 `rsi_cycle` 默认值
 #   ③ `App/AppUtils.RSI_CYCLE`（本常量，展示侧 calculate_rsi / _make_chan_config）

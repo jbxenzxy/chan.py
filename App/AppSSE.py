@@ -37,6 +37,7 @@ from App.AppUtils import (
     _calc_zs_confirm_edt_from_bis, _find_left_shoulder_time,
     _FUTURES_DUAL_FREQ_MAP, _SSE_DEBUG, _inherit_metrics_for_preview_bar,
     calculate_rsi, RsiStream, RSI_CYCLE,
+    MacdStream, MACD_MIN_BARS,
 )
 # 业务数据层（选点/期货子窗缓存；与 AppEngine 同一 app_data 单例）
 from App.AppData import app_data
@@ -471,9 +472,11 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
         tick_count = 0
         step_count = 0
         last_perf_print = time.time()
-        # RSI 增量状态：只缓存「到倒数第二根为止」的状态，供每 tick 续算末根（O(1)）。
-        # 形如 {"main": {"n": 已喂根数, "s": RsiStream}}；长度变了（新根推进）或首次
+        # tick 增量状态：只缓存「到倒数第二根为止」的状态，供每 tick 续算末根（O(1)）。
+        # 形如 {"main": {"n": 已喂根数, "s": 状态对象}}；长度变了（新根推进）或首次
         # 进入 ⇒ 重建（重建即全量喂一遍，正确性兜底由「n 必须等于 len(ex)-1」保证）。
+        # 两个 dict 分别装 MacdStream 与 RsiStream —— 见 _tick_update_metrics。
+        macd_tail_state = {}
         rsi_tail_state = {}
 
         while True:
@@ -577,33 +580,10 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
                                 ex[-1]['high'] = h
                                 ex[-1]['low'] = l
                                 ex[-1]['close'] = c
-                                # ★ 实时计算最后一根K线的MACD，避免前端跳变
-                                closes = [k['close'] for k in ex]
-                                if len(closes) >= 26:
-                                    ema12 = ema(closes, 12)
-                                    ema26 = ema(closes, 26)
-                                    for i in range(len(ex)):
-                                        if i < len(ema12):
-                                            ex[i]['dif'] = round(ema12[i] - ema26[i], 4)
-                                    difs = [ex[i]['dif'] for i in range(len(ex))]
-                                    dea = ema(difs, 9)
-                                    for i in range(len(ex)):
-                                        if i < len(dea):
-                                            ex[i]['dea'] = round(dea[i], 4)
-                                            ex[i]['macd'] = round(2 * (ex[i]['dif'] - ex[i]['dea']), 4)
-                                # ★ RSI 实时重算（后端算、前端只读 k.rsi）。
-                                #   tick 只改末根 OHLC ⇒ 前面各根的 rsi 不变，
-                                #   只需从「倒数第二根为止」的状态续算一根（O(1)），
-                                #   不必每 tick 全量重算 n 根。状态见 rsi_tail_state。
-                                if ex:
-                                    _st = rsi_tail_state.get("main")
-                                    if _st is None or _st["n"] != len(ex) - 1:
-                                        _s = RsiStream(RSI_CYCLE)
-                                        for _c in closes[:-1]:
-                                            _s.feed(_c)
-                                        _st = {"n": len(ex) - 1, "s": _s.copy()}
-                                        rsi_tail_state["main"] = _st
-                                    ex[-1]['rsi'] = round(_st["s"].copy().feed(closes[-1]), 4)
+                                # ★ 实时续算末根（预览bar）的 MACD / RSI，避免前端跳变。
+                                #   tick 只改末根 OHLC ⇒ 只续算一根（O(1)），
+                                #   状态按窗口键隔离，见 _tick_update_metrics。
+                                _tick_update_metrics(ex, macd_tail_state, rsi_tail_state, "main")
                                 cached_snapshot['meta']['generated_at'] = now.strftime('%Y-%m-%d %H:%M:%S')
                                 yield _sse_frame("update", cached_snapshot)
                                 t_tick_total += time.time() - t_tick_start
@@ -977,8 +957,10 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
         step_count = 0
         last_perf_print = time.time()
 
-        # RSI 增量状态（按窗口键隔离）：只缓存「到倒数第二根为止」的状态，
+        # tick 增量状态（按窗口键隔离）：只缓存「到倒数第二根为止」的状态，
         # 供每 tick 续算末根（O(1)）。长度变了或首次进入 ⇒ 重建（正确性兜底）。
+        # 两个 dict 分别装 MacdStream 与 RsiStream —— 见 _tick_update_metrics。
+        macd_tail_state = {}
         rsi_tail_state = {}
 
         # ---- 定义单窗口K线处理函数（避免 continue 跳过另一个窗口） ----
@@ -1080,31 +1062,10 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
                                 c = round(float(last_row.get('close', 0) or 0), 3)
                                 ex[-1]['open'] = o; ex[-1]['high'] = h
                                 ex[-1]['low'] = l; ex[-1]['close'] = c
-                                closes = [k['close'] for k in ex]
-                                if len(closes) >= 26:
-                                    ema12 = ema(closes, 12); ema26 = ema(closes, 26)
-                                    for i in range(len(ex)):
-                                        if i < len(ema12):
-                                            ex[i]['dif'] = round(ema12[i] - ema26[i], 4)
-                                    difs = [ex[i]['dif'] for i in range(len(ex))]
-                                    dea = ema(difs, 9)
-                                    for i in range(len(ex)):
-                                        if i < len(dea):
-                                            ex[i]['dea'] = round(dea[i], 4)
-                                            ex[i]['macd'] = round(2 * (ex[i]['dif'] - dea[i]), 4)
-                                # ★ RSI 实时重算：tick 只改末根 ⇒ 从「倒数第二根为止」
-                                #   的状态续算一根即可（同 sse_futures_stream_single）。
-                                if ex:
-                                    # 按窗口键隔离状态：本嵌套函数对上/下窗各调一次，
-                                    # 共用一份状态会互相覆盖（长度恰同时还会算错）。
-                                    _st = rsi_tail_state.get(freq_label)
-                                    if _st is None or _st["n"] != len(ex) - 1:
-                                        _s = RsiStream(RSI_CYCLE)
-                                        for _c in closes[:-1]:
-                                            _s.feed(_c)
-                                        _st = {"n": len(ex) - 1, "s": _s.copy()}
-                                        rsi_tail_state[freq_label] = _st
-                                    ex[-1]['rsi'] = round(_st["s"].copy().feed(closes[-1]), 4)
+                                # ★ 实时续算末根（预览bar）的 MACD / RSI（同单窗路径）。
+                                #   状态按窗口键隔离：本嵌套函数对上/下窗各调一次，
+                                #   共用一份状态会互相覆盖（根数恰相同时还会算错）。
+                                _tick_update_metrics(ex, macd_tail_state, rsi_tail_state, freq_label)
                                 cached_snapshot['meta']['generated_at'] = now.strftime('%Y-%m-%d %H:%M:%S')
                         except Exception as e:
                             log.warning(f"[警告] 异常: {type(e).__name__}: {e}")
@@ -1576,7 +1537,8 @@ def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_se
                 })
         ema_state = _apply_macd_full(klines_out)
 
-    # RSI 无增量版：两条路径都全量重算（见 _apply_rsi_full 的说明）
+    # RSI：**快照**路径两条分支（klines 全量 / 增量）都全量重算（见 _apply_rsi_full 的说明）。
+    # tick 路径走 `RsiStream` 增量，见 `_tick_update_metrics`（tick 只改末根，不必 O(n)）。
     _apply_rsi_full(klines_out)
 
     # 统一结构元素提取（bis/fxs/segs/zs/zs_stars/bsps，与期货分析共用）
@@ -1650,7 +1612,7 @@ def _calc_futures_white_hline(kl_list, _freq, date_fmt):
 def _apply_macd_full(klines_out):
     """全量重算 MACD（原始路径），返回最后一根K线的 EMA 状态（增量续算用）。"""
     closes = [k["close"] for k in klines_out]
-    if len(closes) >= 26:
+    if len(closes) >= MACD_MIN_BARS:
         ema12 = ema(closes, 12)
         ema26 = ema(closes, 26)
         dif = [e12 - e26 for e12, e26 in zip(ema12, ema26)]
@@ -1715,6 +1677,63 @@ def _apply_macd_incremental(klines_out, changed_idx, prev_ema_state):
         k["macd"] = round(2 * (dif - dea), 4)
         state = {"ema12": ema12, "ema26": ema26, "dea": dea}
     return state
+
+
+def _tick_update_metrics(ex, macd_states, rsi_states, key):
+    """tick 路径：只续算**末根**（预览bar）的 dif/dea/macd/rsi —— O(1)，前 n-1 根不动。
+
+    为什么可以只算末根：tick 只改末根的 OHLC，前面各根的 close 没变 ⇒ 它们的指标值
+    也不会变。早前这里每 tick 把 n 根重算一遍（MACD 还是 `ema(closes,12)` +
+    `ema(closes,26)` + `ema(difs,9)` **三趟** O(n)），实测 n=6000 时 tick 单次 1.41 ms
+    里 MACD 占 ~100% —— RSI 改增量后 MACD 成了唯一热点，故一并按同一套路切增量。
+
+    状态缓存：两个 dict 形如 {key: {"n": 状态已喂根数, "s": 状态对象}}
+      · `key` 由调用方给定（单窗 `"main"` / 双窗 `freq_label`）—— **上/下窗必须分开**，
+        否则两个窗口根数不同时会互相覆盖，根数恰相同时还会算错；
+      · `"n"` 必须等于 `len(ex) - 1`，否则说明序列已经变了（新根推进 / 首次进入），
+        重建一次（O(n)，一根K线周期内只发生一次）。
+
+    **取入口径（本轮统一）**：全程用**未取整**的 `dif` 递推 `dea`，最后才 `round` 落到
+    字段上 —— 与 `_apply_macd_full` / `_apply_macd_incremental` 同源。早前 tick 路径先把
+    `dif` round 到 4 位再喂给 `dea`（`difs = [ex[i]['dif'] ...]`），导致 tick 推的值与
+    快照推的值在末位差 1e-4（600 根实测 `macd` 有 253 根不相等）—— 已统一，由
+    `Test/test_sse_incremental.py` 的「MACD tick ≡ 快照」护栏逐位钉住。
+    """
+    if not ex:
+        return
+    n = len(ex)
+    last_close = ex[-1]["close"]
+    # 注意：**不要**在这里 `[k["close"] for k in ex]` 建全表 —— 那是 O(n)，
+    # 每 tick 建一次就把增量的收益全吃回去（实测 n=6000 会从 0.0002 ms 涨到 0.18 ms）。
+    # 只有状态需要重建时才遍历 ex[:-1]（一根K线周期内只发生一次）。
+
+    # ── MACD（3 标量：ema12 / ema26 / dea）
+    ms = macd_states.get(key)
+    if ms is None or ms["n"] != n - 1:
+        s = MacdStream()
+        for k in ex[:-1]:
+            s.feed(k["close"])
+        ms = {"n": n - 1, "s": s.copy()}
+        macd_states[key] = ms
+    if n < MACD_MIN_BARS:       # 整窗门槛：与 _apply_macd_full 一致，不足则整窗置 0
+        ex[-1]["dif"] = 0
+        ex[-1]["dea"] = 0
+        ex[-1]["macd"] = 0
+    else:
+        dif, dea, macd = ms["s"].copy().feed(last_close)
+        ex[-1]["dif"] = round(dif, 4)
+        ex[-1]["dea"] = round(dea, 4)
+        ex[-1]["macd"] = round(macd, 4)
+
+    # ── RSI（4 组状态量：见 AppUtils.RsiStream）
+    rs = rsi_states.get(key)
+    if rs is None or rs["n"] != n - 1:
+        s = RsiStream(RSI_CYCLE)
+        for k in ex[:-1]:
+            s.feed(k["close"])
+        rs = {"n": n - 1, "s": s.copy()}
+        rsi_states[key] = rs
+    ex[-1]["rsi"] = round(rs["s"].copy().feed(last_close), 4)
 
 
 def _incremental_klines(prev_klines, kl_list, date_fmt):
