@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>复权事件复合顺序：xdxr1→2→3 还是 3→2→1</title>
+<style>
+  :root{--bg:#f7f8fa;--card:#fff;--line:#e3e6eb;--ink:#1d2129;--sub:#5b6572;
+        --bad:#c62828;--ok:#1b7f3b;--warn:#b26a00;--accent:#1a5fb4;--code:#f0f2f5;}
+  *{box-sizing:border-box}
+  body{margin:0;padding:28px 20px 60px;background:var(--bg);color:var(--ink);
+       font:15px/1.75 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:1060px;margin:0 auto}
+  h1{font-size:25px;margin:0 0 6px}
+  .meta{color:var(--sub);font-size:13px;margin-bottom:22px}
+  h2{font-size:19px;margin:34px 0 12px;padding-left:11px;border-left:4px solid var(--accent)}
+  h3{font-size:16px;margin:22px 0 8px;color:#2c3440}
+  section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin-bottom:16px}
+  table{border-collapse:collapse;width:100%;margin:10px 0 14px;font-size:13.5px}
+  th,td{border:1px solid var(--line);padding:6px 9px;text-align:left}
+  th{background:#eef1f5;font-weight:600;white-space:nowrap}
+  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  td.mono,span.mono{font-family:Consolas,"Courier New",monospace;font-size:12.8px}
+  .bad{color:var(--bad);font-weight:600}.ok{color:var(--ok)}.warn{color:var(--warn)}
+  td.ok,td.bad{font-weight:600}
+  code{background:var(--code);border:1px solid var(--line);border-radius:4px;padding:1px 5px;
+       font-family:Consolas,monospace;font-size:12.6px}
+  .lead{background:#fff;border:1px solid var(--line);border-radius:10px;padding:16px 20px;margin-bottom:16px}
+  .lead b{color:var(--accent)}
+  ul,ol{margin:8px 0 8px;padding-left:22px}li{margin:5px 0}
+  .note{color:var(--sub);font-size:13px;margin:6px 0 12px}
+  .kv{display:flex;flex-wrap:wrap;gap:10px;margin:12px 0}
+  .kv div{flex:1 1 190px;background:#fbfcfd;border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+  .kv .k{font-size:12.5px;color:var(--sub)}
+  .kv .v{font-size:19px;font-weight:700;margin-top:2px}
+  .box{border-left:4px solid var(--warn);background:#fffbf3;padding:10px 14px;border-radius:0 8px 8px 0;margin:12px 0}
+  .box.good{border-color:var(--ok);background:#f4fbf6}
+  .box.bad2{border-color:var(--bad);background:#fdf5f5}
+  pre{background:var(--code);border:1px solid var(--line);border-radius:6px;padding:10px 12px;
+      font-family:Consolas,monospace;font-size:12.8px;overflow-x:auto;margin:8px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>复权事件的复合顺序：xdxr1→xdxr2→xdxr3，还是反过来</h1>
+<div class="meta">结论日期 2026-10-11 ｜ 池内 800 只 · 2941 个真实除权日 ｜ 脚本 <span class="mono">sandbox/zero_scan/c4_order.py · c4b_jump.py · c4c_impact.py</span></div>
+
+<div class="lead">
+<b>有区别，而且你的直觉（xdxr1 → xdxr2 → xdxr3，按时间正序）是对的。</b>代码现在用的是 <code>reversed(events)</code>（从最近的除权往回推），这是<b>错的</b>。<br><br>
+仿射变换 <code>P' = a·P + b</code> 不满足交换律，两次事件复合的差 = <code>b₁(a₂−1) + b₂(1−a₁)</code> —— 只有<b>全是纯现金分红</b>（a 恒为 1）或<b>全是纯送转股</b>（b 恒为 0）时两种顺序才等价。A 股绝大多数公司<b>既有送转又有分红</b>，所以差异是常态。<br><br>
+池内实测：<b>641 / 791 只（81.0%）</b>两种顺序给出的复权价不同，涉及 <b>1,049,137 根 K 线（占全池 39.3%）</b>。
+</div>
+
+<h2>为什么正序才对</h2>
+<section>
+<p>关键在于：<b>现金红利是按「除权后的股数」派发的。</b></p>
+<p>设 E1 = 10 送 10（a₁=0.5, b₁=0），E2 = 每股派息 5 元（a₂=1, b₂=−5）。持有 1 股穿越这两次除权：</p>
+<ul>
+<li>E1 之后：1 股变 <b>2 股</b></li>
+<li>E2 派息：每股 5 元 × 2 股 = <b>原 1 股实收 10 元</b></li>
+</ul>
+<p>所以正确的复合是<b>先把价格折到除权后的股数口径，再减去当期红利</b>：</p>
+<pre>正序 T2∘T1 :  100 →(×0.5)→ 50 →(−5)→ 45     常数项 = a₂·b₁ + b₂
+逆序 T1∘T2 :  100 →(−5)→ 95 →(×0.5)→ 47.5   常数项 = a₁·b₂ + b₁</pre>
+<div class="box bad2">逆序先减 5 再折半，相当于假设「原股每股只收到 5 元红利」—— <b>漏掉了送转后多出来那一半</b>。这就是差异的物理来源。</div>
+<p class="note">备注：<code>_build_adjust_events</code> 里的 <code>fenhong</code> 是交易所口径的<b>原股本每股</b>现金红利（与「除权参考价 =（前收盘 − 红利 + 配股价×配股比例）/（1+送转配）」一致），所以单次事件的 <code>a, b</code> 是对的；错的只是多次事件的复合顺序。</p>
+</section>
+
+<h2>证据一：人工样例（答案已知）</h2>
+<section>
+<p>构造一条<b>全程无真实涨跌</b>的价格序列：E1 前 100 元 → E1(10送10) 后 50 元 → E2(派息5元) 后 45 元。投资者总资产始终 100 元不变 ⇒ <b>正确的前复权序列应全程恒等于 45.00</b>。</p>
+<table>
+<tr><th>bar 日期</th><th>原始价</th><th>正序复权</th><th>逆序复权（代码现行）</th><th>判定</th></tr>
+<tr><td class="mono">2001-06-01</td><td class="num">100.00</td><td class="num ok">45.00</td><td class="num bad">47.50</td><td>正序 ✓ / 逆序 ✗</td></tr>
+<tr><td class="mono">2005-06-01</td><td class="num">100.00</td><td class="num ok">45.00</td><td class="num bad">47.50</td><td>正序 ✓ / 逆序 ✗</td></tr>
+<tr><td class="mono">2006-06-01</td><td class="num">50.00</td><td class="num">45.00</td><td class="num">45.00</td><td>两者相同（只跨 1 个事件）</td></tr>
+<tr><td class="mono">2011-06-01</td><td class="num">45.00</td><td class="num">45.00</td><td class="num">45.00</td><td>两者相同（最新段不变）</td></tr>
+</table>
+<div class="box good">正序 = <b>45.00 ✓</b>；逆序 = <b>47.50 ✗</b>，等于凭空给出 <b>−5.26%</b> 的虚假收益率。</div>
+</section>
+
+<h2>证据二：真实数据的「除权日虚假跳变」检验</h2>
+<section>
+<p>不依赖任何人工构造。判据：若除权日当天实际收盘 ≈ 理论除权价（当日真实涨跌 &lt; 1%），正确的复权序列<b>在该日不应跳变</b>。只取「该次除权之后还有其他除权事件」的样本 —— 最后一次除权两种顺序等价，没有区分力。</p>
+<div class="kv">
+  <div><div class="k">合格样本</div><div class="v">2,941 个</div><div class="k">除权日，来自 690 只标的</div></div>
+  <div><div class="k">正序 vs 逆序 逐样本</div><div class="v">1076 : 311</div><div class="k">另有 1554 个持平（纯分红/纯送转，本就等价）</div></div>
+</div>
+<table>
+<tr><th>指标</th><th>正序（早→晚）</th><th>逆序（晚→早，代码现行）</th></tr>
+<tr><td>|跳变| 中位数</td><td class="num ok">0.5184%</td><td class="num bad">0.7027%</td></tr>
+<tr><td>|跳变| P90</td><td class="num ok">1.0655%</td><td class="num bad">5.1876%</td></tr>
+<tr><td>|跳变| 最大</td><td class="num">466.7%</td><td class="num bad">3666.1%</td></tr>
+</table>
+<p class="note">在有区分力的 1387 个样本里，正序胜率 <b>77.6%</b>。正序的最大跳变（466%）来自负价附近的分母塌缩，属另一个问题；看中位与 P90 更能反映系统性差异。</p>
+<h3>极端样例（真实涨跌几乎为 0，逆序却产生巨大跳变）</h3>
+<table>
+<tr><th>代码</th><th>除权日</th><th>当日真实涨跌</th><th>正序跳变</th><th>逆序跳变</th></tr>
+<tr><td class="mono">sh600971</td><td class="mono">2005-06-13</td><td class="num">+0.032%</td><td class="num ok">−0.027%</td><td class="num bad">−3666.126%</td></tr>
+<tr><td class="mono">sz000858</td><td class="mono">2007-05-08</td><td class="num">+0.360%</td><td class="num ok">−0.959%</td><td class="num bad">−2157.054%</td></tr>
+<tr><td class="mono">sz000060</td><td class="mono">2001-06-14</td><td class="num">+0.820%</td><td class="num">−8.109%</td><td class="num bad">−1628.346%</td></tr>
+<tr><td class="mono">sh600383</td><td class="mono">2003-05-29</td><td class="num">0.000%</td><td class="num ok">0.000%</td><td class="num bad">+420.966%</td></tr>
+<tr><td class="mono">sz002044</td><td class="mono">2005-11-28</td><td class="num">−0.113%</td><td class="num ok">−0.251%</td><td class="num bad">−558.946%</td></tr>
+<tr><td class="mono">sh600741</td><td class="mono">2000-08-18</td><td class="num">+0.524%</td><td class="num ok">−0.147%</td><td class="num bad">−206.459%</td></tr>
+</table>
+<div class="box good">正序的跳变基本就等于当日真实涨跌（0.03%、0.00%、−0.11% 量级）；逆序在同一批日期上给出数百到数千个百分点的虚假跳变 —— <b>这些跳变会直接被缠论引擎读成笔的端点</b>。</div>
+</section>
+
+<h2>证据三：影响面（池内 800 只全扫描）</h2>
+<section>
+<div class="kv">
+  <div><div class="k">送转 + 分红 混合型</div><div class="v">646 / 791</div><div class="k">占 81.7%（这类必然有差异）</div></div>
+  <div><div class="k">两种顺序结果不一致</div><div class="v bad">641 / 791</div><div class="k">占 81.0%，且全部是混合型</div></div>
+  <div><div class="k">取值不同的 K 线</div><div class="v bad">39.3%</div><div class="k">1,049,137 / 2,666,392 根</div></div>
+  <div><div class="k">受影响标的的差异 bar 占比</div><div class="v">中位 39.0%</div><div class="k">P90 75.2%，最大 96.4%</div></div>
+</div>
+<h3>逐标的样例</h3>
+<table>
+<tr><th>代码</th><th>事件数</th><th>差异 bar</th><th>占全序列</th><th>类型</th></tr>
+<tr><td class="mono">sh600519 贵州茅台</td><td class="num">30</td><td class="num">3291</td><td class="num">54.7%</td><td>送转+分红混合</td></tr>
+<tr><td class="mono">sh600030 中信证券</td><td class="num">28</td><td class="num">4533</td><td class="num">80.0%</td><td>送转+分红混合</td></tr>
+<tr><td class="mono">sz000651 格力电器</td><td class="num">38</td><td class="num">3691</td><td class="num">58.9%</td><td>送转+分红混合</td></tr>
+<tr><td class="mono">sh600066 宇通客车</td><td class="num">34</td><td class="num">3628</td><td class="num">56.7%</td><td>送转+分红混合</td></tr>
+<tr><td class="mono">sh600036 招商银行</td><td class="num">29</td><td class="num">2700</td><td class="num">46.0%</td><td>送转+分红混合</td></tr>
+<tr><td class="mono">sz000858 五粮液</td><td class="num">30</td><td class="num">1709</td><td class="num">26.9%</td><td>送转+分红混合</td></tr>
+</table>
+</section>
+
+<h2>一个必须一起看的连带后果</h2>
+<section>
+<div class="box bad2">改成正序后，出现 ≤0 复权价的标的会从 <b>83 只增加到 129 只</b>。因为正序正确认领了送转后的全部现金红利，<b>减得更多</b>，早期价被压得更低、穿零更深。</div>
+<p>这说明：<b>「顺序」和「加法口径」是两个独立的问题</b>。只把顺序改对，会<b>加剧</b>负价。要从根上解决，必须同时把 <code>×a+b</code> 的加法公式换成<b>乘性（等比）复权</b> —— 因子恒正、尺度不变，顺序问题也随之消失（纯乘法满足交换律）。</p>
+</section>
+
+<h2>修复点</h2>
+<section>
+<p><code>DataAPI/TdxAPI.py:852</code>：</p>
+<pre># 现状（错）
+for event_date, a, b in reversed(events):
+    for r in records:
+        if r["dt"] &lt; event_date:
+            r["close"] = r["close"] * a + b
+
+# 应为（正序 = 先早后晚）
+for event_date, a, b in events:
+    for r in records:
+        if r["dt"] &lt; event_date:
+            r["close"] = r["close"] * a + b</pre>
+<p class="note">语义不变：每个事件仍然只作用于 <code>dt &lt; event_date</code> 的 bar，最新一根仍恒为真实价；变的只是多次事件的复合次序。</p>
+<div class="box"><b>边界提示</b>：如果目标是严格对齐通达信客户端的显示值，改之前应先拿通达信的实际显示价对拍一次（通达信自身实现的复合次序未在本轮验证）。但从数学正确性看，正序是唯一正确的 —— 尤其对回测用途。</div>
+<p class="note">本次<b>未改动任何代码</b>，仅在沙盒内做对照与量化。</p>
+</section>
+
+</div>
+</body>
+</html>

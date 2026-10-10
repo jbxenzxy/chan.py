@@ -849,7 +849,17 @@ def _forward_adjust(records, market, code, end_date=None):
     if len(records) > 1 and records[0]["dt"] > records[1]["dt"]:
         records.sort(key=lambda r: r["dt"])
 
-    for event_date, a, b in reversed(events):
+    # 复合次序必须为「时间正序」：最旧的除权事件先作用于更早的 K 线，
+    # 再依次叠加较新的事件。
+    # 仿射变换 P' = a*P + b 不满足交换律。两个事件 E1(旧)/E2(新)：
+    #   正序 E1->E2 : a1*a2*P + a2*b1 + b2
+    #   逆序 E2->E1 : a1*a2*P + a1*b2 + b1
+    #   差 = b1*(a2-1) + b2*(1-a1)
+    # 只有「全是纯现金分红」(a=1) 或「全是纯送转」(b=0) 时两者才相等，
+    # A 股送转与分红并存是常态，故必须正序。
+    # 语义理由：现金红利按「除权后的股数」派发 —— 10送10 之后每股实收红利翻倍，
+    # 只有先折到除权后股数口径(a)再扣红利(b)，才是真实的持股现金流。
+    for event_date, a, b in events:
         adjusted_count = 0
         for r in records:
             if r["dt"] < event_date:

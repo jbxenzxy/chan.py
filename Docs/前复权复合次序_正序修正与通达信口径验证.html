@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>前复权复合次序：正序修正 + 通达信自身口径验证</title>
+<style>
+  :root{
+    --bg:#ffffff; --fg:#1a1d21; --muted:#5b6572; --line:#e3e7ec;
+    --panel:#f7f9fb; --bad:#c0392b; --good:#1e7a4d; --warn:#a86400; --accent:#1f5fa9;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font-family:"Microsoft YaHei","PingFang SC",-apple-system,Segoe UI,sans-serif;
+       font-size:14px;line-height:1.75;}
+  .wrap{max-width:1080px;margin:0 auto;padding:32px 28px 72px;}
+  h1{font-size:26px;margin:0 0 6px;letter-spacing:.3px}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:26px}
+  h2{font-size:19px;margin:38px 0 12px;padding-left:11px;border-left:4px solid var(--accent)}
+  h3{font-size:15px;margin:22px 0 8px;color:var(--accent)}
+  p{margin:9px 0}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:13px}
+  th,td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:var(--panel);font-weight:600}
+  td.num,th.num{text-align:right;font-family:Consolas,Menlo,monospace}
+  .mono{font-family:Consolas,Menlo,monospace}
+  code{background:var(--panel);padding:1px 5px;border-radius:3px;font-family:Consolas,Menlo,monospace;font-size:12.5px}
+  pre{background:var(--panel);border:1px solid var(--line);border-radius:5px;
+      padding:12px 14px;overflow-x:auto;font-family:Consolas,Menlo,monospace;font-size:12.5px;line-height:1.6}
+  .bad{color:var(--bad);font-weight:600}
+  .good{color:var(--good);font-weight:600}
+  .warn{color:var(--warn);font-weight:600}
+  .cards{display:flex;gap:12px;flex-wrap:wrap;margin:16px 0}
+  .card{flex:1 1 180px;border:1px solid var(--line);border-radius:7px;padding:12px 14px;background:var(--panel)}
+  .card .k{color:var(--muted);font-size:12px}
+  .card .v{font-size:21px;font-weight:700;margin-top:3px;font-family:Consolas,Menlo,monospace}
+  .verdict{border:2px solid var(--good);border-radius:8px;padding:14px 18px;background:#f2fbf6;margin:16px 0}
+  .verdict .t{font-weight:700;color:var(--good);font-size:15px;margin-bottom:4px}
+  .note{color:var(--muted);font-size:12.5px;margin-top:6px}
+  ul{margin:8px 0 8px 20px;padding:0}
+  li{margin:5px 0}
+  .src{color:var(--muted);font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>前复权复合次序：正序修正 + 通达信自身口径验证</h1>
+<div class="sub">
+  chan.py <span class="mono">custom-dev</span> · <span class="mono">DataAPI/TdxAPI.py::_forward_adjust</span> ·
+  基线 <span class="mono">e899926</span> · 2026-10-11
+</div>
+
+<div class="verdict">
+  <div class="t">结论</div>
+  <p style="margin:4px 0">
+  ① 已按数学正确性把复合次序改为<b>时间正序</b>（<code>reversed(events)</code> → <code>events</code>），门禁 <b>175/175</b> 通过。<br>
+  ② 通达信自身实现已验证：其<b>默认前复权 = 等差（仿射）口径</b>，且复合次序<b>正是时间正序</b> ——
+  由浦发银行(sh600000) 的公开实测值<b>双向吻合</b>判定（默认 −3.88 / 等比 +0.63 两个数在同一时点同时命中）。
+  </p>
+</div>
+
+<div class="cards">
+  <div class="card"><div class="k">改动行数</div><div class="v">1 行 + 10 行注释</div></div>
+  <div class="card"><div class="k">门禁</div><div class="v good">175 / 175</div></div>
+  <div class="card"><div class="k">仓库输出 vs 独立正序实现</div><div class="v good">0 差 / 0 根</div></div>
+  <div class="card"><div class="k">通达信口径判定</div><div class="v good">正序（非逆序）</div></div>
+</div>
+
+<h2>一、改动内容</h2>
+<p>文件：<code>DataAPI/TdxAPI.py</code>，函数 <code>_forward_adjust</code>，第 852 行。</p>
+<pre>    <span class="bad">- for event_date, a, b in reversed(events):</span>      <span class="src"># 改前：从最近的除权往回推</span>
+    <span class="good">+ for event_date, a, b in events:</span>                <span class="src"># 改后：按时间正序（最旧事件先作用）</span>
+          adjusted_count = 0
+          for r in records:
+              if r["dt"] &lt; event_date:
+                  r["open"]  = r["open"]  * a + b
+                  ...</pre>
+<p>语义完全不变：每个事件仍只作用于 <code>dt &lt; event_date</code> 的 K 线，最新一根仍恒为真实盘面价。
+另加了 10 行注释，写明"为什么必须正序"（仿射变换不可交换 + 红利按除权后股数派发）。</p>
+<p class="note">交付包基于<b>你本地工作树的版本</b>制作（保留了你删掉的 37 行 <span class="mono">chinese_calendar</span> 相关代码），
+整文件替换不会覆盖你的改动；展开后仅 <code>DataAPI/TdxAPI.py</code> 一个文件。</p>
+
+<h2>二、验证 ①：改动后的仓库输出 == 独立实现的正序仿射</h2>
+<p>在脚本内<b>手写三套独立实现</b>（不复用仓库代码），与补丁后的仓库输出逐根对拍：</p>
+<table>
+<tr><th>变体</th><th>实现</th><th>与仓库输出的最大绝对差 / 不同根数</th></tr>
+<tr><td>A 逆序仿射</td><td class="mono">for evt in reversed(events)</td><td class="num bad">有差异（见下表）</td></tr>
+<tr><td><b>B 正序仿射</b></td><td class="mono">for evt in events</td><td class="num good">0 / 0（完全一致）</td></tr>
+<tr><td>C 乘性因子</td><td class="mono">qfq = raw × Π ratio<sub>j</sub></td><td class="num">有差异</td></tr>
+</table>
+
+<table>
+<tr>
+  <th>标的</th><th class="num">根数</th>
+  <th class="num">A 逆序最低价</th><th class="num">A ≤0 根</th>
+  <th class="num">B 正序最低价</th><th class="num">B ≤0 根</th>
+  <th class="num">C 等比最低价</th><th class="num">C ≤0 根</th>
+</tr>
+<tr><td class="mono">sz000568 泸州老窖</td><td class="num">6371</td><td class="num">−23.799</td><td class="num">3284</td><td class="num bad">−39.448</td><td class="num">3432</td><td class="num good">0.804</td><td class="num">0</td></tr>
+<tr><td class="mono">sh600519 贵州茅台</td><td class="num">6017</td><td class="num">−216.356</td><td class="num">3529</td><td class="num bad">−314.881</td><td class="num">3529</td><td class="num good">3.033</td><td class="num">0</td></tr>
+<tr><td class="mono">sz000651 格力电器</td><td class="num">6269</td><td class="num">−10.285</td><td class="num">3198</td><td class="num bad">−26.955</td><td class="num">3816</td><td class="num good">0.206</td><td class="num">0</td></tr>
+<tr><td class="mono">sh600415 小商品城</td><td class="num">5799</td><td class="num">−1.038</td><td class="num">925</td><td class="num bad">−1.414</td><td class="num">995</td><td class="num good">0.302</td><td class="num">0</td></tr>
+<tr><td class="mono">sh600066 宇通客车</td><td class="num">6394</td><td class="num">−2.607</td><td class="num">1548</td><td class="num bad">−12.452</td><td class="num">3504</td><td class="num good">0.250</td><td class="num">0</td></tr>
+<tr><td class="mono">sz000002 万科A</td><td class="num">6271</td><td class="num">−3.658</td><td class="num">2182</td><td class="num bad">−8.245</td><td class="num">2479</td><td class="num good">0.390</td><td class="num">0</td></tr>
+</table>
+<p class="note"><b>注意（连带后果，与上一轮预估一致）</b>：改正序后负价<b>更深</b>了（茅台 −216 → −315，宇通 −2.6 → −12.5），
+池内出现 ≤0 复权价的标的由 83 只增至 129 只。原因是正序正确认领了送转后的全部红利，减得更多。
+<b>「顺序」和「加法口径」是两个独立问题</b> —— 只改顺序会加剧负价。</p>
+
+<h2>三、验证 ②：通达信自身的实现</h2>
+
+<h3>2.1 先纠正一个前提：通达信默认前复权<b>就是</b>等差（会出负价）</h3>
+<p>我上一轮推断"通达信必然是乘性"是<b>错的</b>。多方独立来源一致确认：</p>
+<ul>
+  <li>雪球（2025-03-06 帖，用户「持有封基」）：<i>「通达信里默认值是不采用等比复权的……通达信的系统设置里有个开关，可以选择等比复权」</i></li>
+  <li>同帖：<i>「记得当年第一次看行情用除权，发现有股票除权除成负值」</i> —— 通达信默认口径确实出负价</li>
+  <li>雪球（技术研究帖）：<i>「用通达信和东方财富的K线前复权，之前的股价可能会变成负数，而用雪球的不会。原因是：通达信的前复权，在处理分红时，直接将前面交易日的股价相应减去每股分红」</i></li>
+  <li>设置路径：<b>「选项」→「系统设置」→「设置1」→「复权使用等比方式(沪深)」，默认不打勾</b></li>
+</ul>
+<p>⇒ 本仓库的仿射口径是在<b>忠实复刻通达信默认行为</b>，负价不是本仓库引入的偏差。</p>
+
+<h3>2.2 复合次序：用公开实测值做判决</h3>
+<p>上面那则雪球评论同时给出了<b>两个可核对的实测数</b>：</p>
+<pre>「雪球的前复权就是等比复权的，例如浦发银行前复权的历史最低价格是 <span class="good">0.63</span>，
+  和我在通达信上设置等比复权后的最低价完全一样。
+  而通达信<u>如果不设置的话</u>，浦发银行前复权的最低价是 <span class="bad">负的 3.88 元</span>」      —— 发布于 2025-03-06</pre>
+<p>对 sh600000 逐年做定点复权（<code>end_date</code> 截断除权事件），分别用两种次序算"历史最低前复权价"：</p>
+<table>
+<tr><th>as-of</th><th class="num">事件数</th><th class="num">正序最低</th><th class="num">逆序最低</th><th class="num">等比最低</th><th>与实测对照</th></tr>
+<tr><td>2019-01</td><td class="num">19</td><td class="num">−1.3944</td><td class="num">−0.1983</td><td class="num">0.8230</td><td>均不符</td></tr>
+<tr><td>2021-01</td><td class="num">21</td><td class="num">−2.3444</td><td class="num">−0.3644</td><td class="num">0.7570</td><td>均不符</td></tr>
+<tr><td>2023-01</td><td class="num">23</td><td class="num">−3.2344</td><td class="num">−0.5201</td><td class="num">0.6827</td><td>均不符</td></tr>
+<tr><td>2024-01</td><td class="num">24</td><td class="num">−3.5544</td><td class="num">−0.5761</td><td class="num">0.6532</td><td>均不符</td></tr>
+<tr style="background:#f2fbf6"><td><b>2025-03-06（帖发布日）</b></td><td class="num">25</td>
+    <td class="num good"><b>−3.8754</b></td><td class="num">−0.6322</td><td class="num good"><b>0.6300</b></td>
+    <td class="good"><b>−3.88 ✓ ／ 0.63 ✓ 双向命中</b></td></tr>
+<tr><td>2026-01</td><td class="num">26</td><td class="num">−4.2854</td><td class="num">−0.7039</td><td class="num">0.6115</td><td>均不符</td></tr>
+</table>
+<div class="verdict">
+  <div class="t">判决</div>
+  <p style="margin:4px 0">
+  在帖发布日这一时点，<b>正序 = −3.8754</b>（通达信显示 <b>−3.88</b>）、<b>等比 = 0.6300</b>（雪球/通达信等比 <b>+0.63</b>）
+  —— 两个数<b>同时</b>吻合到分；逆序 −0.6322 差 <b>6.1 倍</b>，且在所有时点都对不上。<br>
+  ⇒ <b>通达信默认前复权的复合次序 = 时间正序</b>。本次改动让它真正对齐通达信；改前的 <code>reversed()</code> 是 bug。
+  </p>
+</div>
+
+<h3>2.3 旁证：第三方实现也是正序</h3>
+<p><code>mootdx/mootdx/tools/reversion.py::baoli_qfq</code>（暴力前复权，公式与本仓库同源）：
+<code>for i in range(0, len(xdxr))</code> 对<b>按日期升序</b>的事件表<b>正序</b>遍历，
+每轮对 <code>df.index &lt; date</code> 应用 <code>(P×10 − 分红 + 配股×配股价) / (10 + 配股 + 送转)</code>。</p>
+<p>另：<code>_reversion</code>（QUANTAXIS 血统）虽写 <code>[::-1].cumprod()</code>，但那是<b>乘性</b>因子 —— 乘法可交换，方向不影响结果。
+这恰好说明：<b>只有仿射口径才存在"次序"这个问题</b>。</p>
+
+<h3>2.4 旁证：除权日虚假跳变（上一轮已测，2941 个真实除权日）</h3>
+<table>
+<tr><th></th><th class="num">正序</th><th class="num">逆序（改前）</th></tr>
+<tr><td>|跳变| 中位</td><td class="num good">0.52%</td><td class="num">0.70%</td></tr>
+<tr><td>|跳变| P90</td><td class="num good">1.07%</td><td class="num bad">5.19%</td></tr>
+<tr><td>逐样本胜出</td><td class="num good">1076</td><td class="num">311（持平 1554）</td></tr>
+</table>
+<p class="note">极端样例：sh600971 于 2005-06-13 真实涨跌 +0.032%，正序跳变 −0.027%、逆序 <b>−3666%</b>。</p>
+
+<h2>四、门禁</h2>
+<pre>cd c5_repo &amp;&amp; python Test/run_all.py
+<span class="good">结果: 175/175 通过</span>   （exit=0，耗时 4m53s）</pre>
+<p class="note">沙盒为 <span class="mono">custom-dev</span> 最新 <span class="mono">e899926</span> 的干净克隆 + 本次改动；
+你本地工作树的 <span class="mono">Docs/Eltdx分析.md</span> 行尾问题不在该克隆内，故未复现上次的 newline_hygiene 报警。</p>
+
+<h2>五、待你决定的后续（本次未做）</h2>
+<ul>
+  <li><b>改等比（乘性）复权</b>：可一并消除负价、量纲失真、逐年漂移。代价：与通达信<b>默认</b>显示价不同（等于勾选了"复权使用等比方式"），历史价格数值全变、基线需重跑一轮。判据已具备 —— 等比口径下浦发最低 0.6300 与实测 0.63 吻合。</li>
+  <li><b>保留等差但接定点复权</b>：<code>_forward_adjust(..., end_date=)</code> 页面复盘态已在用，回测链路（<span class="mono">Backtest/Exp/common/tdx_source.py</span>）未接 ⇒ 回测是"以今天为锚 + 全部历史事件"。接上可消除未来函数与漂移，但<b>不治负价</b>。</li>
+  <li>无论选哪条，<code>Cal_MACD_slope</code> / <code>is_divergence</code> 等"以价格为分母"的护栏仍建议加。</li>
+</ul>
+
+<h2>六、产物</h2>
+<table>
+<tr><th>文件</th><th>说明</th></tr>
+<tr><td class="mono">deliver/chanpy_前复权复合次序-正序修正_20261011.zip</td><td>交付包，仅含 <span class="mono">DataAPI/TdxAPI.py</span>（基于你本地版本）</td></tr>
+<tr><td class="mono">zero_scan/c5_verify_order.py</td><td>三套独立实现对拍（改动正确性）</td></tr>
+<tr><td class="mono">zero_scan/c7_pufa.py</td><td>浦发银行逐年定点复权判决（通达信口径）</td></tr>
+<tr><td class="mono">zero_scan/mk_patch_order.py</td><td>CRLF 安全打补丁脚本</td></tr>
+</table>
+<p class="src">本报告所有数值均可在上述脚本中复跑；除公开实测值外不依赖网络。</p>
+
+</div>
+</body>
+</html>
