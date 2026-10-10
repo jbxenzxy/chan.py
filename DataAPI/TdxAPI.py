@@ -22,7 +22,6 @@ log = logging.getLogger(__name__)
 from contextlib import contextmanager
 from collections import OrderedDict
 import numpy as np
-from chinese_calendar import is_holiday
 
 from Common.CEnum import AUTYPE, KL_TYPE, DATA_FIELD
 from DataAPI.CommonStockAPI import CCommonStockApi
@@ -406,43 +405,7 @@ def read_tdx_day_file(filepath, max_records=None, market=None):
             })
         except (ValueError, OverflowError, struct.error):
             continue
-    _check_and_report_gaps(records)
     return records
-
-
-def _count_trading_days(prev_dt, curr_dt):
-    """计算两个日期之间（不含两端）的A股交易日数（周一至周五且非法定节假日）"""
-    count = 0
-    d = prev_dt.date() + timedelta(days=1)
-    end = curr_dt.date()
-    while d < end:
-        if d.weekday() < 5 and not is_holiday(d):
-            count += 1
-        d += timedelta(days=1)
-    return count
-
-
-def _check_and_report_gaps(records):
-    """检测数据缺口（相邻记录间隔超过0个交易日即视为缺失K线），仅打印提示，不截断"""
-    gap_indices = []
-    for i in range(1, len(records)):
-        prev_dt = records[i-1]["dt"]
-        curr_dt = records[i]["dt"]
-        gap_trading_days = _count_trading_days(prev_dt, curr_dt)
-        if gap_trading_days > 20:  # 用 >0 可识别出个股各种停牌日期（因股东大会、筹划重大事项、重大事项紧急、重大资产重组等停牌）；但打印信息太多
-            gap_indices.append((i, gap_trading_days))
-
-    if gap_indices:
-        log.warning(f"[警告] 检测到 {len(gap_indices)} 处数据缺口（请补全数据）:")
-        for idx, (gi, gap_td) in enumerate(gap_indices):
-            prev_dt = records[gi-1]["dt"].strftime("%Y-%m-%d")
-            curr_dt = records[gi]["dt"].strftime("%Y-%m-%d")
-            log.warning(f"[警告]   缺口{idx+1}: {prev_dt} -> {curr_dt} (间隔{gap_td}个交易日)")
-    else:
-        old_start = records[0]["dt"].strftime("%Y-%m-%d")
-        old_end = records[-1]["dt"].strftime("%Y-%m-%d")
-        log.info("[信息] 检测到 0 处数据缺口")
-        log.info(f"[信息]   数据范围: {old_start} ~ {old_end} ({len(records)}条)")
 
 
 def _parse_tdx_min_binary(filepath, market):

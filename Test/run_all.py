@@ -842,6 +842,20 @@ COMPONENTS = [
     #      删成 (self) 命中 ① 反向锚点。
     ("dead_param_guard",
      [sys.executable, os.path.join("Test", "test_dead_param_guard.py")]),
+    # ── 防回潮：TdxAPI 日线路径不得再依赖交易日历（chinese_calendar）─────
+    #   背景：该 import 的唯一生产用途是日线「缺口检测」的交易日计数，本次已
+    #   连同 _count_trading_days / _check_and_report_gaps 整段删除。它带来两类
+    #   真实故障：① 缺库则 `import DataAPI.TdxAPI` 直接失败（整个模块不可用，
+    #   比缺口检测自身崩更严重）；② 该库只覆盖 [2004, 当年]，而通达信 .day
+    #   起点统一在 2000-01-04，读 2000~2003 日线必抛 NotImplementedError。
+    #   覆盖：①~④ AST 符号集合（import 集合 / Name 集合 / 函数集双向 / 旧「内置
+    #   年份表」备选方案符号不得复活）；⑤⑥ requirements 激活行与 _stub_env 桩
+    #   名单；⑦ 屏蔽 chinese_calendar 的全新子进程内真调 import；⑧⑨ 端到端读
+    #   合成与真实 .day。变异实证 7/7：加回 import → ①；复活 is_holiday 使用
+    #   → ②；加回两函数或改名 read_tdx_day_file → ③；复活年份表常量 → ④；
+    #   requirements 加回激活行 → ⑤；_GUARDED 加回 → ⑥。
+    ("tdx_no_calendar_dep",
+     [sys.executable, os.path.join("Test", "test_tdx_no_calendar_dep.py")]),
     # ── 暂不注册（注册即恒红 / 无拦截力，注册了门禁形同虚设）──────────
     #   Test/repro_n4_cleanup_race.py          N4 未修，且脚本只有 return 0
     #                                          （恒通过、无拦截力，须先改成

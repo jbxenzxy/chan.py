@@ -11,7 +11,7 @@ test_chan_data_isolation_control）原本这样取 stub::
         sys.path.insert(0, _STUBS)
 
 问题在于 ``stubs/`` 位于仓库**外部**且不在版本库中。CI 或任何纯净
-环境一旦没有 pandas / numpy / chinese_calendar，这些用例会在 import
+环境一旦没有 pandas / numpy，这些用例会在 import
 阶段直接抛 ModuleNotFoundError —— 断言一行都没执行，守护静默失效
 （外层若吞异常，报告上甚至看不出它"没跑"）。这是没有
 覆盖到的一类覆盖面盲区：**守护自身的可执行性**没有守护。
@@ -36,7 +36,7 @@ import sys
 import types
 
 # 可能出现在导入链上的第三方依赖（缺哪个补哪个，不预设全缺）
-_GUARDED = ("pandas", "numpy", "chinese_calendar")
+_GUARDED = ("pandas", "numpy")
 
 
 class _Any:
