@@ -41,7 +41,11 @@ SSOT_FUNC = "_default_tdx_install_dir"
 SCAN_EXT = {".py", ".md", ".html", ".htm", ".sh", ".example", ".txt"}
 SCAN_NAMES = {".env"}
 SKIP_DIRS = {".git", "__pycache__", ".kcache_tdx", "State", "node_modules",
-             "\u53c2\u7167\u65e5\u5fd7", "\u53c2\u7167\u7ed3\u679c"}   # 运行产物目录
+             "\u53c2\u7167\u65e5\u5fd7", "\u53c2\u7167\u7ed3\u679c",
+             ".venv", "venv"}   # 运行产物目录 + 虚拟环境
+# ↑ `.venv`：2026-10-10 门禁实测 —— 已安装的第三方包 `eltdx`（2026-10-06 装入，
+#   早于基线）其 `docs/` `helpers/` `protocol/` 自带含 tdx 的路径字面量，被本护栏
+#   扫成「本仓越权引用」3 处假红。第三方包不是本仓 SSOT 的约束对象 ⇒ 跳过。
 
 # 历史快照豁免：这些文件里**带日期**的行允许保留旧路径
 HISTORICAL_FILES = {

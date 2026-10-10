@@ -432,6 +432,36 @@ def _ast_contract_failures(sse_src):
     return bad
 
 
+def _utils_gate_failures(utils_src):
+    """`App/AppUtils.py` 侧 MACD 门槛的结构契约（源代码文本 → 违规清单）。
+
+    与 `_ast_contract_failures` 同形，盯的是**另一处**引用：`calculate_macd`
+    是展示侧唯一的算值出口（HTTP 股票路径走它）。此前它**没有**整窗门槛 ⇒
+    与 SSE 侧口径分裂（2026-10-11 补齐）。这里钉住「它必须引用 `MACD_MIN_BARS`
+    且不得把门槛写成字面量」—— 否则改 SSE 侧时又会漏掉这一处。
+    """
+    import ast
+    bad = []
+    tree = ast.parse(utils_src)
+    fn = next((x for x in ast.walk(tree)
+               if isinstance(x, ast.FunctionDef) and x.name == "calculate_macd"), None)
+    if fn is None:
+        return ["未找到 calculate_macd 定义"]
+    gate = [n for n in ast.walk(fn) if isinstance(n, ast.Compare)
+            and "MACD_MIN_BARS" in ast.unparse(n)]
+    if len(gate) != 1:
+        bad.append(f"calculate_macd 引用 MACD_MIN_BARS 的比较 {len(gate)} 处（期望 1）")
+    for node in ast.walk(fn):
+        if not isinstance(node, ast.Compare):
+            continue
+        for side in [node.left] + list(node.comparators):
+            if (isinstance(side, ast.Constant) and isinstance(side.value, int)
+                    and not isinstance(side.value, bool)):
+                bad.append(f"calculate_macd:{node.lineno} 与整数常量 {side.value} 比较"
+                           f"（门槛必须走 MACD_MIN_BARS）")
+    return bad
+
+
 def test_tick_no_full_recompute(failures):
     """⑤d 结构契约（棘轮）：门槛单源、tick 无 O(n) 全量重算、调用点恰好 2 处"""
     import ast
@@ -443,6 +473,14 @@ def test_tick_no_full_recompute(failures):
         failures.extend("⑤d " + x for x in bad)
         for x in bad:
             print(f"[FAIL] ⑤d 结构契约: {x}")
+        return
+
+    # ── AppUtils 侧：`calculate_macd` 的整窗门槛必须与 SSE 侧同源 ──────
+    bad_u = _utils_gate_failures(utils)
+    if bad_u:
+        failures.extend("⑤d " + x for x in bad_u)
+        for x in bad_u:
+            print(f"[FAIL] ⑤d 门槛同源(AppUtils): {x}")
         return
 
     # 常量值本身（外围）仍按文本校验：单源于 AppUtils，且必须是 26
@@ -499,7 +537,20 @@ def test_tick_no_full_recompute(failures):
         print("[FAIL] ⑤d 变异自证: 塞回 ema( 全量调用未被拦住")
         return
 
-    # ③ 删调用点：必须被 [4] 拦住
+    # ③ AppUtils 侧：门槛写字面值 / 删掉门槛 ⇒ 必须被 `_utils_gate_failures` 拦住
+    u_gate = "len(closes) < MACD_MIN_BARS"
+    if u_gate not in utils:
+        failures.append("⑤d 变异自证: AppUtils 门槛锚点未找到")
+        print("[FAIL] ⑤d 变异自证: AppUtils 门槛锚点未找到")
+        return
+    for label, new_u in (("AppUtils 门槛写字面值", u_gate.replace("MACD_MIN_BARS", "26")),
+                         ("AppUtils 删掉整窗门槛", "False")):
+        if not _utils_gate_failures(utils.replace(u_gate, new_u, 1)):
+            failures.append(f"⑤d 变异自证: 注入「{label}」后判据未报错（判据无判别力）")
+            print(f"[FAIL] ⑤d 变异自证: 「{label}」未被拦住")
+            return
+
+    # ④ 删调用点：必须被 [4] 拦住
     if not _ast_contract_failures(sse.replace(seg_call, "pass", 1)):
         failures.append("⑤d 变异自证: 删掉单窗 tick 调用点后判据未报错")
         print("[FAIL] ⑤d 变异自证: 删掉调用点未被拦住")
@@ -522,8 +573,9 @@ def test_tick_no_full_recompute(failures):
             print(f"[FAIL] ⑤d 不误报自证: 「{label}」被误报: {got}")
             return
 
-    print("[PASS] ⑤d 结构契约: 门槛单源 + tick 无 ema( 全量 + 调用点 2 处；"
-          "6 种坏写法全被拦、3 种等价改写不误报")
+    print("[PASS] ⑤d 结构契约: 门槛单源（SSE 全量 / tick + AppUtils.calculate_macd）"
+          " + tick 无 ema( 全量 + 调用点 2 处；"
+          "8 种坏写法全被拦、3 种等价改写不误报")
 
 
 def test_macd_min_bars_semantics(failures):

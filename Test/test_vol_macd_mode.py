@@ -201,7 +201,7 @@ process.stdout.write(JSON.stringify(out));
 
 def test_numeric_alignment(failures):
     print("\n③ 数值对齐：前端类MACD ≡ 后端 calculate_macd（真实快照，逐点）")
-    from App.AppUtils import calculate_macd
+    from App.AppUtils import calculate_macd, MACD_MIN_BARS
 
     js = read(APP_JS)
     begin = js.find(CORE_BEGIN)
@@ -237,12 +237,15 @@ def test_numeric_alignment(failures):
         snap = json.load(open(snap_path, encoding="utf-8"))
         klines = snap["klines"]
         vals = [(k["vol"] if kind == "futures" else k["amount"]) for k in klines]
-        ref = calculate_macd(vals) if len(vals) >= 26 else None
+        # 整窗门槛已收进 `calculate_macd` 内部（MACD_MIN_BARS 单源），不足即整窗置 0
+        ref = calculate_macd(vals)
 
         full = got["full"]
-        if ref is None:
-            check(failures, all(abs(x) < 1e-12 for tri in full for x in tri),
-                  f"{name}: 样本不足 26 根 → 全 0")
+        if len(vals) < MACD_MIN_BARS:
+            check(failures, all(abs(x) < 1e-12 for tri in full for x in tri)
+                  and all(t["dif"] == 0 and t["dea"] == 0 and t["macd"] == 0
+                          for t in ref),
+                  f"{name}: 样本不足 {MACD_MIN_BARS} 根 → 前端与后端同为全 0")
             continue
         worst = 0.0
         for i, tri in enumerate(full):
@@ -902,7 +905,7 @@ def test_real_render(failures):
                    and not any("(12, 26, 9)" in t for t in macd_texts), ""))
 
     # ── 标签数值 ≡ Python 侧 calculate_macd（同源比对，跨语言闭环） ──
-    from App.AppUtils import calculate_macd
+    from App.AppUtils import calculate_macd, MACD_MIN_BARS
     klines = snap["klines"]
     total = len(klines)
     start = max(0, int(view["off"]))

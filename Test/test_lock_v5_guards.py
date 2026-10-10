@@ -16,8 +16,10 @@ _HERE = os.path.dirname(os.path.abspath(__file__))            # .../src/Test
 _REPO_ROOT = os.path.dirname(_HERE)                            # .../src
 sys.path.insert(0, _REPO_ROOT)
 
-# 无第三方依赖的环境（CI 沙箱）下，用最小 stub 顶替 pandas / numpy /
-# chinese_calendar，使本用例在没有安装生产依赖时也能跑结构性验证。
+# 无第三方依赖的环境（CI 沙箱）下，用最小 stub 顶替 pandas / numpy，
+# 使本用例在没有安装生产依赖时也能跑结构性验证。
+# （`chinese_calendar` 已于 2026-10-10 随 TdxAPI 改造摘除，
+#   不再是导入链上的依赖 —— `Test/_stub_env.py::_GUARDED` 同步收敛为 2 项。）
 _STUBS = os.path.join(os.path.dirname(_REPO_ROOT), "stubs")
 if os.path.isdir(_STUBS):
     try:

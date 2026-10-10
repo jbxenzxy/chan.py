@@ -246,7 +246,19 @@ def ema(data, period):
 
 
 def calculate_macd(closes, fast=12, slow=26, signal=9):
-    """计算MACD"""
+    """计算 MACD（展示侧算值出口：SSE 快照 / HTTP 两条路径共用）。
+
+    整窗门槛与 `App/AppSSE._apply_macd_full` 同源：整窗不足 `MACD_MIN_BARS`
+    根 ⇒ **整窗置 0**。EMA 以首根自身值为种子，样本不足时 dif/dea 是未收敛
+    的伪值，画出来会把零线附近的柱子放大成假信号。
+
+    2026-10-11 补：这道门槛此前**只存在于 SSE 侧**，本函数缺 ⇒ HTTP 股票
+    路径（`App/AppEngine` 的两处调用）在「新股 / 极短窗口」下与 SSE 路径给出
+    不同结果；前端 `app.js::calcVolMacdMap` 的类 MACD 早已自带同款门槛，其注释
+    写「与后端同规则」，实为后端缺失。补齐后三处同源于 `MACD_MIN_BARS`。
+    """
+    if len(closes) < MACD_MIN_BARS:
+        return [{"dif": 0.0, "dea": 0.0, "macd": 0.0} for _ in closes]
     ema_fast = ema(closes, fast)
     ema_slow = ema(closes, slow)
     dif = [f - s for f, s in zip(ema_fast, ema_slow)]
@@ -255,8 +267,11 @@ def calculate_macd(closes, fast=12, slow=26, signal=9):
     return [{"dif": dif[i], "dea": dea[i], "macd": macd[i]} for i in range(len(closes))]
 
 
-# MACD 参与计算所需的最少根数：不足则整窗置 0（与 `App/AppSSE._apply_macd_full`
-# 的门槛同源，改这里必须同步改那里 —— 由「MACD 门槛同源」护栏比对两处数字）。
+# MACD 参与计算所需的最少根数：不足则整窗置 0。**三处同源**，改任一处必须同步其余：
+#   ① `App/AppUtils.calculate_macd`（展示侧算值，HTTP 股票路径走它）
+#   ② `App/AppSSE._apply_macd_full`（快照 / 全量路径）
+#   ③ `App/AppSSE._tick_update_metrics`（tick / 增量路径）
+# 由 `Test/test_sse_incremental.py` 的「门槛同源」护栏比对各处引用方式与数字。
 MACD_MIN_BARS = 26
 _K12 = 2.0 / 13.0
 _K26 = 2.0 / 27.0
@@ -311,12 +326,6 @@ class MacdStream:
         o.ema26 = self.ema26
         o.dea = self.dea
         return o
-
-
-def calculate_macd_stream(closes):
-    """`MacdStream` 的批量包装（结果与 `_apply_macd_full` 应完全一致，供护栏比对）"""
-    s = MacdStream()
-    return [s.feed(c) for c in closes]
 
 
 # RSI 周期：全项目**单一来源**。五处必须同值，改动其中任一处都要同步其余：
