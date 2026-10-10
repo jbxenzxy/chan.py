@@ -134,6 +134,8 @@ class Case:
     mae_at_fail: float = None
     bars: int = 0
     ret_H: float = None
+    rsi: float = None       # 信号所在**分型极值 K 线**的同级别 RSI(12)、无未来函数
+    rsi_sig: float = None   # 对照：信号（右肩）K 线自身的同级别 RSI(12)
     post_H: float = None    # 「确认后入场」：从反向笔确认那根起算的 H 根收益
 
 
@@ -165,6 +167,8 @@ def _finalize(c: Case, horizon: int) -> dict:
         "mfe_fail_A": (c.mfe_at_fail / c.A)
         if (c.A > 0 and c.mfe_at_fail is not None) else None,
         "ret_H": c.ret_H,
+        "rsi": c.rsi,
+        "rsi_sig": c.rsi_sig,
         "post_H": c.post_H,
         "bars": c.bars,
     }
@@ -259,7 +263,13 @@ def scan(code: str, freq: str, n: int = None, horizon: int = 30, src: str = "tdx
                     btype=str(bsp.type2str()),
                     t0=frame, date=cur_klu.time.toFmtStr(date_fmt),
                     entry=entry, ext=ext, A=abs(entry - ext),
-                    anchor=int(f_klu.idx)))
+                    anchor=int(f_klu.idx),
+                    # 新口径：分型极值 K 线（f_klu = bsp.bi.get_end_klu()）
+                    rsi=(float(f_klu.rsi)
+                         if getattr(f_klu, "rsi", None) is not None else None),
+                    # 旧口径对照：信号（右肩）K 线 bsp.klu
+                    rsi_sig=(float(bsp.klu.rsi)
+                             if getattr(bsp.klu, "rsi", None) is not None else None)))
 
     # 统一 finalize 并补 ret_H / post_H（用同一份 closes ⇒ 与基准同源）
     out = []
