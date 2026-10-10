@@ -1680,12 +1680,22 @@ def _apply_macd_incremental(klines_out, changed_idx, prev_ema_state):
 
 
 def _tick_update_metrics(ex, macd_states, rsi_states, key):
-    """tick 路径：只续算**末根**（预览bar）的 dif/dea/macd/rsi —— O(1)，前 n-1 根不动。
+    """tick 路径：续算**末根**（预览bar）的 dif/dea/macd/rsi —— 末根 O(1)，前 n-1 根不动。
 
-    为什么可以只算末根：tick 只改末根的 OHLC，前面各根的 close 没变 ⇒ 它们的指标值
+    为什么末根可以只算一根：tick 只改末根的 OHLC，前面各根的 close 没变 ⇒ 它们的指标值
     也不会变。早前这里每 tick 把 n 根重算一遍（MACD 还是 `ema(closes,12)` +
     `ema(closes,26)` + `ema(difs,9)` **三趟** O(n)），实测 n=6000 时 tick 单次 1.41 ms
     里 MACD 占 ~100% —— RSI 改增量后 MACD 成了唯一热点，故一并按同一套路切增量。
+
+    **例外（重建分支，2026-10-10 补）**：状态需要重建时（`"n" != len(ex)-1`，一根K线周期
+    只发生一次），顺带把**前 n-1 根**的 MACD 写成与 `_apply_macd_full` 同一批值。原因是
+    快照可能生成于「整窗不足门槛」的时刻（那时整窗被置 0），而此刻窗口可能已越过门槛
+    （典型：25 根确认K线 + 1 根预览bar = 26）⇒ 若只写末根，就会留下「前 25 根全 0 +
+    末根有值」的孤立点。旧 tick 因**循环重写全窗**而没有这个现象，切增量后才会显出来。
+    重建分支本来就是 O(n)，顺带写一遍不改变量级；且稳态下这些根的值与流式算出的逐位
+    相同（`Test/test_sse_incremental.py` ⑤a），故对已填好的窗口等价于幂等重写。
+    门槛未开时同分支同步置 0，令「tick 后整窗 ≡ `_apply_macd_full`」**无条件**成立
+    （⑤f 用 `==` 钉住）。
 
     状态缓存：两个 dict 形如 {key: {"n": 状态已喂根数, "s": 状态对象}}
       · `key` 由调用方给定（单窗 `"main"` / 双窗 `freq_label`）—— **上/下窗必须分开**，
@@ -1708,14 +1718,29 @@ def _tick_update_metrics(ex, macd_states, rsi_states, key):
     # 只有状态需要重建时才遍历 ex[:-1]（一根K线周期内只发生一次）。
 
     # ── MACD（3 标量：ema12 / ema26 / dea）
+    # 整窗门槛：与 `_apply_macd_full` 同源同义 —— 整窗不足 MACD_MIN_BARS 根 ⇒ 整窗置 0。
+    # 只判一次、重建分支与末根分支**共用**，避免门槛在两处各写一遍（改一处漏一处）。
+    gate_open = n >= MACD_MIN_BARS
     ms = macd_states.get(key)
     if ms is None or ms["n"] != n - 1:
+        # 重建分支（每根K线周期一次，本来就是 O(n)）：顺带把前 n-1 根写成与
+        # `_apply_macd_full` 同一批值 —— 否则「快照在整窗不足门槛时置的 0」会与
+        # 「此刻已越过门槛的末根值」并存（窗口恰好 26 根时 = 一条孤立点）。
+        # 稳态下这些根的值与流式算出的逐位相同 ⇒ 等价于幂等重写（见函数 docstring）。
         s = MacdStream()
         for k in ex[:-1]:
-            s.feed(k["close"])
+            dif, dea, macd = s.feed(k["close"])
+            if gate_open:
+                k["dif"] = round(dif, 4)
+                k["dea"] = round(dea, 4)
+                k["macd"] = round(macd, 4)
+            else:
+                k["dif"] = 0
+                k["dea"] = 0
+                k["macd"] = 0
         ms = {"n": n - 1, "s": s.copy()}
         macd_states[key] = ms
-    if n < MACD_MIN_BARS:       # 整窗门槛：与 _apply_macd_full 一致，不足则整窗置 0
+    if not gate_open:
         ex[-1]["dif"] = 0
         ex[-1]["dea"] = 0
         ex[-1]["macd"] = 0

@@ -1166,8 +1166,8 @@
                      w: tw + CHIP_PAD_X * 2, h: CHIP_H - 2, text: name };
         }
 
-        // chip 命中测试（返回槽号，未命中 -1）。命中区仅限标签行左侧，
-        // 不触碰 K 线区单击语义（选点走双击）。
+        // chip 命中测试（返回槽号，未命中 -1）。命中区就是该槽标签行**右端**的 chip
+        // 矩形本身（见 getBottomSlotChipRect），不触碰 K 线区单击语义（选点走双击）。
         function hitBottomSlotChip(x, y) {
             const n = SLOT_COUNT();
             for (let i = 0; i < n; i++) {
