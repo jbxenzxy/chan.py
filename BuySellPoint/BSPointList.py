@@ -1107,6 +1107,8 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
 
     # ── 第n笔主分析逻辑（返回是否找到买卖点）──
     def _cal_bs0point_nth_nzs(self, bi_list, pivot_a, stroke_n):
+        return False # River: 跳过
+
         # n-3, n-2, n-1 重叠 -> 中枢B
         n_idx = stroke_n.idx
         s_nm1 = bi_list[n_idx - 1]  # 笔n-1
@@ -1294,6 +1296,8 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
 
     # ── 第n笔再次分析：MACD全面积比较（中枢A进入段 vs 笔n）──
     def _cal_bs0point_nth_ozs_68th(self, bi_list, pivot_a, stroke_n):
+        return # River: 跳过
+
         """
         分析逻辑：当n=6或8时，主分析未找到买卖点，改用中枢A进入段与笔n做MACD全面积比较
         进入段为 pivot_a.begin_bi 的前一笔，离开段为 stroke_n
