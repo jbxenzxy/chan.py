@@ -1827,13 +1827,13 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
 
     @staticmethod
     def _is_valid_out_bi(stroke_n, zs):
-        """检查离开笔是否有效突破中枢
-
-        向上笔高点 >= 中枢下沿 + 基准区间 × BS0_ZS_BREAK_RATIO
-        向下笔低点 <= 中枢上沿 - 基准区间 × BS0_ZS_BREAK_RATIO
-
-        基准区间由 _compute_base_range 计算（smoothstep 平滑过渡）。
         """
+        检查离开笔是否有效突破中枢
+        向上笔高点 >= 中枢下沿 + 基准区间 × BS0_ZS_BREAK_RATIO(0.8)
+        向下笔低点 <= 中枢上沿 - 基准区间 × BS0_ZS_BREAK_RATIO(0.8)
+        """
+        
+        # 基准区间 由 _compute_base_range 计算（smoothstep 平滑过渡）
         base_range, _, _ = CMyBSPointList._compute_base_range(zs)
         if base_range < 0:
             return False
