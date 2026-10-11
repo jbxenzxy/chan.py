@@ -2236,10 +2236,10 @@ def _red_range_amp(bis, all_bi_list, date_fmt):
         pk = bis[skip]           # 当前候选进入笔
         pk1 = bis[skip + 1]      # 下一笔（中枢第一笔候选）
 
-        # amp 校验
+        # 当前候选进入笔 ≥ 下一笔（中枢第一笔候选）* 1.2
         pk_amp = pk.amp()
         pk1_amp = pk1.amp()
-        threshold = pk1_amp * CMyBSPointList.ZS_ENTRY_AMP_RATIO
+        threshold = pk1_amp * CMyBSPointList.ZS_ENTRY_AMP_RATIO  # 1.2 倍
         if pk_amp >= threshold:
             sub_bis = bis[skip:]
             return _red_range_try_construct_zs(sub_bis, all_bi_list, date_fmt)
