@@ -1816,12 +1816,6 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         if zs_low > zs_high:
             return False, None
 
-        '''
-        # 进入笔振幅需 >= bi3振幅 × ZS_ENTRY_AMP_RATIO
-        if entry_bi.amp() < bi3.amp() * CMyBSPointList.ZS_ENTRY_AMP_RATIO:
-            return False, None
-        '''
-
         # peak_high/peak_low：中枢内所有笔（bi1/bi2/bi3）的极值，即波动区间
         zs_peak_high = max(bi1._high(), bi2._high(), bi3._high())
         zs_peak_low = min(bi1._low(), bi2._low(), bi3._low())
@@ -2220,7 +2214,7 @@ def _red_range_bi_sequence(fx_a_sub_dt, fx_b_sub_dt, sub_bi_list, sub_freq):
 
 def _red_range_amp(bis, all_bi_list, date_fmt):
     """
-    从红框覆盖的笔列表中构建中枢。
+    从红框覆盖的笔列表中构建中枢
 
     策略（先校验进入笔，再跑原始chan.py）：
       红框覆盖 bis = [P1, P2, ..., Pn]
@@ -2242,7 +2236,7 @@ def _red_range_amp(bis, all_bi_list, date_fmt):
         pk = bis[skip]           # 当前候选进入笔
         pk1 = bis[skip + 1]      # 下一笔（中枢第一笔候选）
 
-        # amp 校验: pk.amp() >= pk1.amp() * ZS_ENTRY_AMP_RATIO
+        # amp 校验
         pk_amp = pk.amp()
         pk1_amp = pk1.amp()
         threshold = pk1_amp * CMyBSPointList.ZS_ENTRY_AMP_RATIO
