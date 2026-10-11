@@ -1021,7 +1021,26 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         config = self.config.GetBSConfig(is_buy)
         entry_bi = bi_list[pivot_a.begin_bi.idx - 1]
 
-        # ㈠ 离开笔4有效突破(中枢A)
+        # ㈠ 闪电走势判定（笔n-1/n-2/n-3 = C/B/A，口径对齐 _cal_bs0point_3rd 的 ㈠）
+        # stroke_n 是当前笔(笔4)：C=笔n-1、B=笔n-2、A=笔n-3（=中枢A形成笔1，即 pivot_a.begin_bi）
+        # 3rd 的 ㈠ 只把同向的 C/A 两端相比，B 是中间的反向笔、不单独设闸；此处沿用同一口径
+        # 向下笔C：笔C高点 <= 笔A高点
+        # 向上笔C：笔C低点 >= 笔A低点
+        stroke_c = bi_list[stroke_n.idx - 1]  # 笔n-1，对应 3rd 的笔C
+        stroke_a = bi_list[stroke_n.idx - 3]  # 笔n-3，对应 3rd 的笔A
+        if stroke_c.is_down():
+            c_ext, a_ext = stroke_c._high(), stroke_a._high()
+            is_lightning = c_ext <= a_ext
+        else:
+            c_ext, a_ext = stroke_c._low(), stroke_a._low()
+            is_lightning = c_ext >= a_ext
+        if not is_lightning:
+            self._dbg_bs0(' _cal_bs0point_4th', '跳过: 笔A、B、C 非闪电走势',
+                          c_idx=stroke_c.idx, b_idx=stroke_n.idx - 2, a_idx=stroke_a.idx,
+                          c_ext=c_ext, a_ext=a_ext)
+            return
+
+        # ㈡ 离开笔4有效突破(中枢A)
         if not self._is_valid_out_bi(stroke_n, pivot_a):
             base_range, ratio, _ = self._compute_base_range(pivot_a)
             r = self.BS0_ZS_BREAK_RATIO
@@ -1044,7 +1063,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           condition=cond)
             return
 
-        # ㈡ 进入笔MACD同侧围栏（柱面积主导 + 黄白线同侧，二者都通过才继续）
+        # ㈢ 进入笔MACD同侧围栏（柱面积主导 + 黄白线同侧，二者都通过才继续）
         fence_dominant = entry_bi.is_macd_same_side_dominant()
         fence_lines = entry_bi.is_macd_lines_same_side()
         if not (fence_dominant and fence_lines):
@@ -1053,7 +1072,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           dominant=fence_dominant, lines=fence_lines)
             return
 
-        # ㈢ 离开笔4和进入笔，要求离开笔DIF峰值 < 进入笔DIF峰值
+        # ㈣ 离开笔4和进入笔，要求离开笔DIF峰值 < 进入笔DIF峰值
         is_diver_dif, dif_out_metric, dif_in_metric = self._is_stroke_divergence(stroke_n, entry_bi, MACD_ALGO.DIF, config)
         if not is_diver_dif:
             self._dbg_bs0(' _cal_bs0point_4th', '跳过: MACD DIF 未背驰',
@@ -1062,7 +1081,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           threshold=round(config.divergence_rate, 2))
             return
 
-        # ㈣ 离开笔4和进入笔，要求离开笔MACD面积 < 进入笔MACD面积
+        # ㈤ 离开笔4和进入笔，要求离开笔MACD面积 < 进入笔MACD面积
         in_metric = entry_bi.cal_macd_metric(config.macd_algo)
         out_metric = stroke_n.cal_macd_metric(config.macd_algo)
         divergence_rate = out_metric / (in_metric + 1e-7)
