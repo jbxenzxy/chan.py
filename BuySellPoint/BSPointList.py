@@ -1838,7 +1838,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         if base_range < 0:
             return False
 
-        r = CMyBSPointList.BS0_ZS_BREAK_RATIO
+        r = CMyBSPointList.BS0_ZS_BREAK_RATIO  # 0.8
         if stroke_n.is_up():
             return stroke_n._high() >= zs.low + base_range * r
         else:
