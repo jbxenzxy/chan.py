@@ -304,45 +304,29 @@
    "file": "sz002190_15m.json",
    "freq": "15m",
    "metrics": {
-    "avg_bars_held": 27.8,
-    "avg_net_return": 0.0115451215,
+    "avg_bars_held": 29.0,
+    "avg_net_return": 0.0117435975,
     "e": 0,
-    "expectancy_r": 1.71862,
+    "expectancy_r": 1.85907778,
     "l": 1,
     "max_loss_r": -1.8837,
     "max_win_r": 5.95,
-    "n": 10,
-    "profit_factor": 4.67447382,
+    "n": 9,
+    "profit_factor": 4.36387863,
     "u": 1,
-    "w": 9,
-    "win_rate": 0.9
+    "w": 8,
+    "win_rate": 0.8888888889
    },
    "note": "15m（由 5m 合成）",
    "run": {
     "bars_total": 3872,
     "signals_filtered": 0,
     "signals_rejected": 2,
-    "signals_seen": 13,
+    "signals_seen": 12,
     "type_appended_after_freeze": 0
    },
    "sha256": "9e8d3d43d61ea27a6a1bb1b0b66555937a7d771dc30a579d4431db715ce4fd7f",
    "trades": [
-    {
-     "bars_held": 17,
-     "bsp_type": "0",
-     "entry_date": "2025-10-23 10:00",
-     "entry_price": 43.0,
-     "exit_date": "2025-10-24 10:15",
-     "exit_price": 43.45,
-     "exit_reason": "breakeven",
-     "net_return": 0.0097588372,
-     "open": false,
-     "r_distance": 0.99,
-     "r_multiple": 0.4545,
-     "shares": 1200,
-     "side": "long",
-     "trade_id": 1
-    },
     {
      "bars_held": 25,
      "bsp_type": "3",
@@ -357,7 +341,7 @@
      "r_multiple": 1.7391,
      "shares": 1300,
      "side": "short",
-     "trade_id": 2
+     "trade_id": 1
     },
     {
      "bars_held": 3,
@@ -373,7 +357,7 @@
      "r_multiple": 4.0,
      "shares": 1400,
      "side": "short",
-     "trade_id": 3
+     "trade_id": 2
     },
     {
      "bars_held": 7,
@@ -389,7 +373,7 @@
      "r_multiple": 0.8824,
      "shares": 1400,
      "side": "long",
-     "trade_id": 4
+     "trade_id": 3
     },
     {
      "bars_held": 16,
@@ -405,7 +389,7 @@
      "r_multiple": 2.539,
      "shares": 1300,
      "side": "short",
-     "trade_id": 5
+     "trade_id": 4
     },
     {
      "bars_held": 22,
@@ -421,7 +405,7 @@
      "r_multiple": 5.95,
      "shares": 1400,
      "side": "short",
-     "trade_id": 6
+     "trade_id": 5
     },
     {
      "bars_held": 5,
@@ -437,7 +421,7 @@
      "r_multiple": 1.6207,
      "shares": 2000,
      "side": "short",
-     "trade_id": 7
+     "trade_id": 6
     },
     {
      "bars_held": 173,
@@ -453,7 +437,7 @@
      "r_multiple": 0.4508,
      "shares": 2200,
      "side": "long",
-     "trade_id": 8
+     "trade_id": 7
     },
     {
      "bars_held": 3,
@@ -469,7 +453,7 @@
      "r_multiple": 1.4334,
      "shares": 2000,
      "side": "long",
-     "trade_id": 9
+     "trade_id": 8
     },
     {
      "bars_held": 7,
@@ -485,7 +469,7 @@
      "r_multiple": -1.8837,
      "shares": 1900,
      "side": "short",
-     "trade_id": 10
+     "trade_id": 9
     },
     {
      "bars_held": null,
@@ -501,7 +485,7 @@
      "r_multiple": null,
      "shares": 2100,
      "side": "short",
-     "trade_id": 11
+     "trade_id": 10
     }
    ]
   },
@@ -510,25 +494,25 @@
    "file": "sz002190_5m.json",
    "freq": "5m",
    "metrics": {
-    "avg_bars_held": 19.10416667,
-    "avg_net_return": -0.0031796998,
+    "avg_bars_held": 19.02173913,
+    "avg_net_return": -0.0028758305,
     "e": 0,
-    "expectancy_r": -1.08137083,
-    "l": 32,
+    "expectancy_r": -1.08380217,
+    "l": 30,
     "max_loss_r": -31.5,
     "max_win_r": 5.0476,
-    "n": 48,
-    "profit_factor": 0.56902441,
+    "n": 46,
+    "profit_factor": 0.60369303,
     "u": 0,
     "w": 16,
-    "win_rate": 0.3333333333
+    "win_rate": 0.347826087
    },
    "note": "5m（vipdoc fzline 原始周期）",
    "run": {
     "bars_total": 11616,
     "signals_filtered": 0,
-    "signals_rejected": 48,
-    "signals_seen": 96,
+    "signals_rejected": 47,
+    "signals_seen": 93,
     "type_appended_after_freeze": 0
    },
    "sha256": "fc4f7ae44f53e31cc777214d0a4398dccf58e2c47108240b31980e865c61a95f",
@@ -1014,22 +998,6 @@
      "trade_id": 30
     },
     {
-     "bars_held": 40,
-     "bsp_type": "0",
-     "entry_date": "2026-05-25 10:15",
-     "entry_price": 29.46,
-     "exit_date": "2026-05-26 09:35",
-     "exit_price": 28.89,
-     "exit_reason": "sl",
-     "net_return": -0.020038431,
-     "open": false,
-     "r_distance": 0.26,
-     "r_multiple": -2.1923,
-     "shares": 1700,
-     "side": "long",
-     "trade_id": 31
-    },
-    {
      "bars_held": 15,
      "bsp_type": "3",
      "entry_date": "2026-05-26 13:50",
@@ -1043,7 +1011,7 @@
      "r_multiple": -1.7219,
      "shares": 1800,
      "side": "short",
-     "trade_id": 32
+     "trade_id": 31
     },
     {
      "bars_held": 18,
@@ -1059,7 +1027,7 @@
      "r_multiple": -1.1071,
      "shares": 1800,
      "side": "long",
-     "trade_id": 33
+     "trade_id": 32
     },
     {
      "bars_held": 88,
@@ -1075,7 +1043,7 @@
      "r_multiple": -1.0105,
      "shares": 1800,
      "side": "long",
-     "trade_id": 34
+     "trade_id": 33
     },
     {
      "bars_held": 20,
@@ -1091,7 +1059,7 @@
      "r_multiple": 2.8,
      "shares": 1900,
      "side": "short",
-     "trade_id": 35
+     "trade_id": 34
     },
     {
      "bars_held": 26,
@@ -1107,7 +1075,7 @@
      "r_multiple": 0.963,
      "shares": 1900,
      "side": "long",
-     "trade_id": 36
+     "trade_id": 35
     },
     {
      "bars_held": 16,
@@ -1123,23 +1091,7 @@
      "r_multiple": 1.8554,
      "shares": 2000,
      "side": "long",
-     "trade_id": 37
-    },
-    {
-     "bars_held": 2,
-     "bsp_type": "0",
-     "entry_date": "2026-06-09 11:30",
-     "entry_price": 24.92,
-     "exit_date": "2026-06-09 13:10",
-     "exit_price": 24.93,
-     "exit_reason": "trailing",
-     "net_return": -0.0002989567,
-     "open": false,
-     "r_distance": 0.070714,
-     "r_multiple": 0.1414,
-     "shares": 2100,
-     "side": "long",
-     "trade_id": 38
+     "trade_id": 36
     },
     {
      "bars_held": 2,
@@ -1155,7 +1107,7 @@
      "r_multiple": -1.5455,
      "shares": 2000,
      "side": "short",
-     "trade_id": 39
+     "trade_id": 37
     },
     {
      "bars_held": 30,
@@ -1171,7 +1123,7 @@
      "r_multiple": 5.0476,
      "shares": 2000,
      "side": "long",
-     "trade_id": 40
+     "trade_id": 38
     },
     {
      "bars_held": 29,
@@ -1187,7 +1139,7 @@
      "r_multiple": 1.3306,
      "shares": 2200,
      "side": "short",
-     "trade_id": 41
+     "trade_id": 39
     },
     {
      "bars_held": 2,
@@ -1203,7 +1155,7 @@
      "r_multiple": -1.2,
      "shares": 2400,
      "side": "long",
-     "trade_id": 42
+     "trade_id": 40
     },
     {
      "bars_held": 2,
@@ -1219,7 +1171,7 @@
      "r_multiple": 4.2,
      "shares": 2200,
      "side": "long",
-     "trade_id": 43
+     "trade_id": 41
     },
     {
      "bars_held": 5,
@@ -1235,7 +1187,7 @@
      "r_multiple": -1.2,
      "shares": 2000,
      "side": "long",
-     "trade_id": 44
+     "trade_id": 42
     },
     {
      "bars_held": 4,
@@ -1251,7 +1203,7 @@
      "r_multiple": -1.1667,
      "shares": 2200,
      "side": "long",
-     "trade_id": 45
+     "trade_id": 43
     },
     {
      "bars_held": 2,
@@ -1267,7 +1219,7 @@
      "r_multiple": -1.0833,
      "shares": 2200,
      "side": "long",
-     "trade_id": 46
+     "trade_id": 44
     },
     {
      "bars_held": 3,
@@ -1283,7 +1235,7 @@
      "r_multiple": -1.5,
      "shares": 1900,
      "side": "long",
-     "trade_id": 47
+     "trade_id": 45
     },
     {
      "bars_held": 1,
@@ -1299,7 +1251,7 @@
      "r_multiple": -2.3333,
      "shares": 2000,
      "side": "short",
-     "trade_id": 48
+     "trade_id": 46
     }
    ]
   }
