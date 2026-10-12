@@ -277,28 +277,46 @@ def part4():
     check("④ AppScanPool.submit_batch_scan 收 bsp_types",
           "bsp_types" in p_pool, list(p_pool))
     p_w = inspect.signature(_pool._worker_scan_one).parameters
-    check("④ _worker_scan_one 参数序 = ...mode, bsp_types, seq（位置必须对得上派发）",
-          list(p_w) == ["task_id", "code", "freq", "prefix", "recent", "source",
-                        "mode", "bsp_types", "seq"], list(p_w))
+    # 形状无关：只钉「bsp_types 紧随 mode、seq 收尾」——尾部再插新参数（如 RSI
+    #   阈值）不该红，但把 bsp_types 挪走、或让 seq 不再收尾，必须红。
+    check("④ _worker_scan_one：bsp_types 紧随 mode、seq 收尾"
+          "（新增参数只许插在二者之间）",
+          list(p_w).index("bsp_types") == list(p_w).index("mode") + 1
+          and list(p_w)[-1] == "seq", list(p_w))
 
     src_pool = io.open(os.path.join(ROOT, "App", "AppScanPool.py"),
                        encoding="utf-8").read()
     m = re.search(r"pool\.submit\(_worker_scan_one,([^)]*)\)", src_pool)
-    n_args = len([x for x in (m.group(1).split(",") if m else []) if x.strip()])
-    check("④ 派发实参 9 个（与 _worker_scan_one 形参一一对应）",
-          n_args == 9, "n_args=%r src=%r" % (n_args, m.group(0) if m else None))
-    check("④ 派发把 bsp_types 排在 mode 与 seq 之间",
-          bool(m) and re.search(r"mode\s*,\s*bsp_types\s*,\s*seq", m.group(1)),
-          m.group(1) if m else None)
+    disp_args = [x.strip() for x in (m.group(1).split(",") if m else []) if x.strip()]
+    check("④ 派发实参数 == _worker_scan_one 形参数（个数不再写死）",
+          bool(m) and len(disp_args) == len(list(p_w)),
+          "n_args=%r src=%r" % (len(disp_args), m.group(0) if m else None))
+    # 逐位对齐，唯一放行的是**声明式局部名别名**：调用点 `src = stk["_source"] or source`
+    #   是按票覆盖后的局部值，位置语义与形参 source 完全相同（拿局部名比形参名会假红）；
+    #   除该别名外任何位置的错位（尤其 bsp_types / rsi_over / rsi_under 被换位）必须红。
+    _ARG_ALIAS = {"source": ("source", "src")}
+    _pos_ok = len(disp_args) == len(list(p_w)) and all(
+        a in _ARG_ALIAS.get(p, (p,)) for a, p in zip(disp_args, list(p_w)))
+    check("④ 派发实参**逐位等于**形参表（bsp_types / seq 都落在各自形参的位置上）",
+          bool(m) and _pos_ok,
+          "args=%r params=%r" % (disp_args, list(p_w)))
 
     src_api = io.open(FRONTAPI, encoding="utf-8").read()
     check("④ 路由 /scan/submit 声明 bsp_types 且缺省 None（不传 = 全放行）",
           bool(re.search(r"bsp_types:\s*typing\.Optional\[str\]\s*=\s*Body\(None\)",
                          src_api)),
           "未找到 bsp_types 声明")
-    check("④ 路由把 bsp_types 作为末位实参交给 submit_batch_scan",
-          bool(re.search(r"scan_token\s+or\s+None,\s*bsp_types\)", src_api)),
-          "未找到透传调用")
+    # 形状无关：实参逐位对齐 submit_batch_scan 形参（除 self），bsp_types 必须落在
+    #   **它自己的**形参位上 —— 原来写死「bsp_types 是末位」在尾部加参数后必假红。
+    m_api = re.search(
+        r"run_in_threadpool\(\s*orch\.scanner\.submit_batch_scan,\s*([^)]*)", src_api)
+    api_args = [x.strip() for x in (m_api.group(1).split(",") if m_api else []) if x.strip()]
+    sub_params = [n for n in list(p_sub) if n != "self"]
+    check("④ 路由把 bsp_types 交给 submit_batch_scan，且实参与形参逐位对齐",
+          m_api is not None and len(api_args) == len(sub_params)
+          and "bsp_types" in api_args
+          and api_args.index("bsp_types") == sub_params.index("bsp_types"),
+          "args=%r params=%r" % (api_args, sub_params))
 
     src_pool_txt = src_pool
     check("④ 池层不吞 bsp_types（submit 调用带 bsp_types=）",

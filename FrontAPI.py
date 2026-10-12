@@ -439,22 +439,27 @@ async def api_stocks_scan_submit(stocks: list = Body(...),
                                recent: str = Body("1"),
                                source: str = Body("zxg"),
                                scan_token: str = Body(""),
-                               bsp_types: typing.Optional[str] = Body(None)):
+                               bsp_types: typing.Optional[str] = Body(None),
+                               rsi_over: typing.Optional[float] = Body(None),
+                               rsi_under: typing.Optional[float] = Body(None)):
     """提交批量扫描 → {task_id, total}（ProcessPool 异步执行）
 
     body: {stocks: [{code, prefix, _source}], freq, mode, recent, source,
-           scan_token, bsp_types}
+           scan_token, bsp_types, rsi_over, rsi_under}
     返回 task_id；进度经 /api/stocks/scan/{task_id}/read/status 轮询。
     scan_token 用于把收割线程的跳过记录写回发起它的那次扫描。
     bsp_types：买/卖点扫描与回测扫描消费（页面「设置 → 买卖点类型」勾选串）：
     缺省不传 = None = 全放行；`""` = 四类全不勾（零命中 / 零成交）—— 二者语义
     不同，不可用 `if bsp_types` 合并（同 App/AppBacktest.py 的口径说明）。
+    rsi_over / rsi_under：rsi 扫描的超买 / 超卖阈值（页面「设置 → RSI 阈值」，
+    仅显式配置过才传）。缺省 None ⇒ 后端回退 AppUtils 默认；非法整对回退默认
+    （防御见 App/AppScan.py 的 rsi 分支）。
     """
     if not stocks:
         return _json_response({"error": "股票列表为空"}, 400)
     result = await run_in_threadpool(
         orch.scanner.submit_batch_scan, stocks, freq, mode, recent, source,
-        scan_token or None, bsp_types)
+        scan_token or None, bsp_types, rsi_over, rsi_under)
     if "error" in result:
         return _json_response(result, 400)
     return _json_response(result)

@@ -567,7 +567,7 @@ def test_mirror():
         % (_ft_y, _ft_all),
         _ft_all >= 1 and _ft_y == _ft_all and "zeroY" not in axis, "")
     rec("④", "纵轴档位 = 参考线同一组语义档位，且由 RSI_REF_VALUES 派生（无第二遍字面量）",
-        bool(re.search(r"const RSI_AXIS_LEVELS = RSI_REF_VALUES\.slice\(\)\.sort\(", js))
+        bool(re.search(r"let RSI_AXIS_LEVELS = RSI_REF_VALUES\.slice\(\)\.sort\(", js))
         and "[80, 50, 20]" not in js and "[80,50,20]" not in js, "")
     rec("④", "只印落在值域内的档位（与参考线的「出界不画」同一口径）",
         "v >= range.min && v <= range.max" in axis, "")
@@ -639,9 +639,14 @@ def test_rsi_style_and_range():
         "ctx.fillStyle = COLORS.dif;" in lbl and "COLORS.rsi" not in lbl, "")
 
     # ② 参考线 50 / 80 / 20
-    m = re.search(r"const RSI_REF_VALUES = \[([^\]]*)\];", js)
-    got = [int(x) for x in m.group(1).split(",")] if m else []
-    rec("②", "参考线取值 = [50, 80, 20]（中轴 + 超买 80 + 超卖 20，与通达信常见 RSI 副图一致）",
+    # 阈值可配置化后：前端不再写死运行数组 —— 取 [中轴, 默认超买, 默认超卖] 三元组；
+    #   默认兜底与后端 RSI_REF_VALUES 同值（跨语言同值由 test_scan_rsi_mode 另钉）。
+    _mo = re.search(r"const RSI_DEFAULT_OVER = (\d+);", js)
+    _mu = re.search(r"const RSI_DEFAULT_UNDER = (\d+);", js)
+    _mr = re.search(r"let RSI_REF_VALUES = \[(\d+), RSI_DEFAULT_OVER, RSI_DEFAULT_UNDER\];", js)
+    got = ([int(_mr.group(1)), int(_mo.group(1)), int(_mu.group(1))]
+           if (_mo and _mu and _mr) else [])
+    rec("②", "参考线默认取值 = [50, 80, 20]（中轴 + 超买 80 + 超卖 20，与通达信常见 RSI 副图一致）",
         got == [50, 80, 20], str(got))
     draw = strip_comments(fn_src(js, "drawRsi"))
     rec("②", "旧的 30 / 70 两线硬编码已清零，三条线统一从 RSI_REF_VALUES 取",
@@ -993,10 +998,14 @@ process.stdout.write(JSON.stringify(out));
 
 def _seg_driver(js):
     return "\n".join([
-        const_line(js, r"const RSI_REF_VALUES = \[[^\]]*\];"),
+        const_line(js, r"const RSI_DEFAULT_OVER = [^\n]*"),
+        const_line(js, r"const RSI_DEFAULT_UNDER = [^\n]*"),
+        const_line(js, r"let _rsiOverUser = [^\n]*"),
+        const_line(js, r"let _rsiUnderUser = [^\n]*"),
+        const_line(js, r"let RSI_REF_VALUES = [^\n]*"),
         const_line(js, r"const RSI_REF_DASH = \[[^\]]*\];"),
-        const_line(js, r"const RSI_SEG_OVER = [^\n]*"),
-        const_line(js, r"const RSI_SEG_UNDER = [^\n]*"),
+        const_line(js, r"let RSI_SEG_OVER = [^\n]*"),
+        const_line(js, r"let RSI_SEG_UNDER = [^\n]*"),
         const_line(js, r"const COLORS = \{[^}]*\};"),
         "let _isMirrorMode = false;",
         fn_src(js, "rsiOf"),
@@ -1020,8 +1029,8 @@ def test_rsi_segment_colors():
     #   改动 —— 静态反锚点被跳过时，漏掉的正是最该抓的那一改。
     #   （2026-10-12 变异实测：端到端硬编码在旧结构下只被 ④ 组抓住。）
     # ⑥ 源码反锚点：阈值同源、抽色全走 COLORS 引用、值级位置规则（值不可复制）
-    m1 = re.search(r"const RSI_SEG_OVER = ([^;]+);", js)
-    m2 = re.search(r"const RSI_SEG_UNDER = ([^;]+);", js)
+    m1 = re.search(r"let RSI_SEG_OVER = ([^;]+);", js)
+    m2 = re.search(r"let RSI_SEG_UNDER = ([^;]+);", js)
     rec("⑩", "两个阈值由 RSI_REF_VALUES 派生（超买 / 超卖参考线本身，不写第二遍 80 / 20）",
         bool(m1 and m2 and "RSI_REF_VALUES" in m1.group(1)
              and "RSI_REF_VALUES" in m2.group(1)),

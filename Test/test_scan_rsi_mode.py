@@ -24,9 +24,11 @@
 
 阈值同源（值级，不是注释级）——
   Python 侧 `AppUtils.RSI_OVERBOUGHT / RSI_OVERSOLD` = max / min(`RSI_REF_VALUES`)；
-  前端 `app.js` `RSI_SEG_OVER / RSI_SEG_UNDER` = max / min(`RSI_REF_VALUES`)
-  （副图折线分段着色的同一对阈值）。两侧同值 ⇒ 「图上画成超买红」与「扫描报超买」
-  永远同判据。② 段用**跨语言解析**把这条钉死。
+  前端 `app.js` `RSI_SEG_OVER / RSI_SEG_UNDER` = max / min(`RSI_REF_VALUES.slice(1)`)
+  —— 只取三元组里的**阈值对**（[中轴 50, 超买, 超卖] 的后两位）：把中轴算进来
+  会在「超买 < 50 / 超卖 > 50」时把取色边界顶在中轴，与后端判据分叉。
+  两侧同值 ⇒ 「图上画成超买红」与「扫描报超买」永远同判据。② 段用
+  **跨语言解析**把这条钉死。
 
 四段守护 ——
   ① 后端判据（合成 K 线，手算期望，经真实 scan_one 打桩驱动）：命中 / 未命中 /
@@ -264,14 +266,21 @@ def part2():
           and RSI_OVERSOLD == min(RSI_REF_VALUES),
           (RSI_OVERBOUGHT, RSI_OVERSOLD, RSI_REF_VALUES))
 
-    check("② 前端：副图分段着色阈值同样由 RSI_REF_VALUES 派生（RSI_SEG_OVER/UNDER）",
-          "const RSI_SEG_OVER = Math.max.apply(null, RSI_REF_VALUES);" in appjs
-          and "const RSI_SEG_UNDER = Math.min.apply(null, RSI_REF_VALUES);" in appjs,
+    check("② 前端：副图分段着色阈值同样由 RSI_REF_VALUES 的**阈值对**派生"
+          "（RSI_SEG_OVER/UNDER = max/min(RSI_REF_VALUES.slice(1))；"
+          "可配置化后由 _applyRsiThresholds 重算，派生式不变）",
+          "RSI_SEG_OVER = Math.max.apply(null, RSI_REF_VALUES.slice(1));" in appjs
+          and "RSI_SEG_UNDER = Math.min.apply(null, RSI_REF_VALUES.slice(1));" in appjs,
           "\u524d\u7aef\u6d3e\u751f\u884c\u672a\u627e\u5230")
 
-    m = re.search(r"const RSI_REF_VALUES = \[([\d,\s]+)\];", appjs)
-    front_vals = [int(x) for x in m.group(1).split(",")] if m else None
-    check("② 跨语言同源：前端 RSI_REF_VALUES == Python RSI_REF_VALUES",
+    # 阈值可配置化后前端不再写死运行数组：默认兜底常量（RSI_DEFAULT_*）与 Python
+    #   默认同值；运行值 [中轴, 超买, 超卖] 由 _applyRsiThresholds() 按用户配置重算。
+    _mo = re.search(r"const RSI_DEFAULT_OVER = (\d+);", appjs)
+    _mu = re.search(r"const RSI_DEFAULT_UNDER = (\d+);", appjs)
+    _mr = re.search(r"let RSI_REF_VALUES = \[(\d+), RSI_DEFAULT_OVER, RSI_DEFAULT_UNDER\];", appjs)
+    front_vals = ([int(_mr.group(1)), int(_mo.group(1)), int(_mu.group(1))]
+                  if (_mo and _mu and _mr) else None)
+    check("② 跨语言同源：前端默认兜底 [中轴, 超买, 超卖] == Python RSI_REF_VALUES",
           front_vals == list(RSI_REF_VALUES),
           (front_vals, list(RSI_REF_VALUES)))
     check("② 两端 max/min 同值 ⇒ 「图上画成超买」与「扫描报超买」永远同判据",
@@ -287,16 +296,25 @@ def part2():
     check("② 切片区段非空（防锚点漂移后护栏空转）", len(rsi_slice) > 2000, len(rsi_slice))
 
     check("② 判据方向：`v >= 超买` / `v <= 超卖`（**含边界**；改成严格不等即红）",
-          "if v >= RSI_OVERBOUGHT" in rsi_slice
-          and "if v <= RSI_OVERSOLD" in rsi_slice, "\u5224\u636e\u65b9\u5411\u4e0d\u7b26")
+          "if v >= _rsi_over" in rsi_slice
+          and "if v <= _rsi_under" in rsi_slice, "\u5224\u636e\u65b9\u5411\u4e0d\u7b26")
+
+    check("② 阈值取值链：请求参数优先、缺省回退 RSI_OVERBOUGHT / RSI_OVERSOLD（默认 SSOT）",
+          "_rsi_over = RSI_OVERBOUGHT if rsi_over is None else float(rsi_over)" in rsi_slice
+          and "_rsi_under = RSI_OVERSOLD if rsi_under is None else float(rsi_under)" in rsi_slice,
+          "\u9608\u503c\u53d6\u503c\u94fe\u7f3a\u5931")
+    check("② 防御校验：非法组合（不满足 0 < 超卖 < 超买 < 100）整对回退默认 + 告警",
+          "if not (0 < _rsi_under < _rsi_over < 100):" in rsi_slice
+          and rsi_slice.count("_rsi_over, _rsi_under = RSI_OVERBOUGHT, RSI_OVERSOLD") == 2,
+          "\u9632\u5fa1\u6821\u9a8c\u7f3a\u5931")
 
     check("② rsi 分支内**不写 80 / 20 数值副本**（阈值只在 RSI_REF_VALUES 一处）",
           re.search(r"(?<!\d)(80|20)(?!\d)", rsi_slice) is None,
           re.findall(r".{0,40}(?<!\d)(?:80|20)(?!\d).{0,40}", rsi_slice)[:2])
 
     check("② 归类三分支齐备（末根 <= 超卖 / 末根 >= 超买 / 中性按极值兜底）",
-          "if rsi_last <= RSI_OVERSOLD:" in rsi_slice
-          and "elif rsi_last >= RSI_OVERBOUGHT:" in rsi_slice
+          "if rsi_last <= _rsi_under:" in rsi_slice
+          and "elif rsi_last >= _rsi_over:" in rsi_slice
           and 'rsi_group = "under" if hit_under else "over"' in rsi_slice,
           "\u5f52\u7c7b\u5206\u652f\u7f3a\u5931")
 
@@ -371,9 +389,15 @@ def part3():
 
     appjs = io.open(APPJS, encoding="utf-8").read()
     consts = []
-    for pat in (r"        const RSI_REF_VALUES = .*",
-                r"        const RSI_SEG_OVER = .*",
-                r"        const RSI_SEG_UNDER = .*"):
+    # 阈值可配置化后：取 默认兜底常量 + 用户变量 + let 派生三件（初值 = 默认，
+    #   与改造前语义等价；运行值重算由 test_scan_rsi_thresholds 另钉）。
+    for pat in (r"        const RSI_DEFAULT_OVER = .*",
+                r"        const RSI_DEFAULT_UNDER = .*",
+                r"        let _rsiOverUser = .*",
+                r"        let _rsiUnderUser = .*",
+                r"        let RSI_REF_VALUES = .*",
+                r"        let RSI_SEG_OVER = .*",
+                r"        let RSI_SEG_UNDER = .*"):
         m = re.search(pat, appjs)
         assert m, "app.js 常量行抽取失败: " + pat
         consts.append(m.group(0).strip())
@@ -406,6 +430,8 @@ def part3():
         "  _rsiGroupOf({rsi_group:'under'}), _rsiGroupOf({rsi_group:'over'}),\n"
         "  _rsiGroupOf({rsi_last:15.0}), _rsiGroupOf({rsi_last:85.0})]));\n"
         "out.push('CAL=' + JSON.stringify(_rsiCaliberHtml()));\n"
+        "out.push('CALRT=' + JSON.stringify(_rsiCaliberHtml(\n"
+        "  [{rsi_over:70, rsi_under:30}])));\n"
         "out.push('CALVALS=' + JSON.stringify([RSI_SEG_OVER, RSI_SEG_UNDER]));\n"
         "out.push('ROWS=' + JSON.stringify(rowsHtml));\n"
         "DOM['scan-body'].innerHTML = '';\n"
@@ -474,6 +500,11 @@ def part3():
           calvals == [RSI_OVERBOUGHT, RSI_OVERSOLD]
           and (">= " in cal.replace("≥", ">=")) and ("<= " in cal.replace("≤", "<=")),
           (calvals, cal))
+    calrt = json.loads(kv["CALRT"])
+    check("③ 披露行：**回传值优先** —— 结果行带 rsi_over/rsi_under=70/30 时覆盖当前"
+          "默认 80/20（扫描后改配置，文案不跟着变）",
+          "≥ 70" in calrt and "≤ 30" in calrt
+          and "≥ 80" not in calrt and "≤ 20" not in calrt, calrt)
     check("③ 披露行：**只留判据一句话** —— 不含「含边界 / 副图同源 / 排序」等实现侧话术",
           all(w not in cal for w in ("\u542b\u8fb9\u754c", "\u526f\u56fe",
                                      "\u8d85\u5356\u7ec4\u6392\u8d85\u4e70\u7ec4\u524d",

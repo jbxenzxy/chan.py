@@ -118,7 +118,14 @@ ALLOWED_STRAY = {"getLayoutParams",
                  # 跨组件并发工具，被 RealtimeService / Bootstrap / 股票·期货
                  # 加载器等 40+ 处共享，用于丢弃过期异步响应，不属于任一
                  # 业务组件的私有逻辑，故作为区块外辅助函数放行。
-                 "_bumpChartActionSeq", "_isChartActionStale"}
+                 "_bumpChartActionSeq", "_isChartActionStale",
+                 # RSI 阈值重算（2026-10-13 阈值可配置化）：与上面三个同属
+                 # 模块级共享 —— 它改写的四个派生值（RSI_REF_VALUES /
+                 # RSI_AXIS_LEVELS / RSI_SEG_OVER / RSI_SEG_UNDER）声明在
+                 # KLineChart 横幅**之前**的共享区，消费者却横跨两个区块：
+                 # KLineChart（参考线 / 纵轴档位 / 分段着色）与 ScanPanel
+                 # （披露行的回退阈值）。私有到任一组件都会造成跨区块引用。
+                 "_applyRsiThresholds"}
 
 # JS 关键字（④ 中内联事件的非函数标识符误报豁免）
 JS_KEYWORDS = {"if", "else", "return", "this", "var", "let", "const", "new",

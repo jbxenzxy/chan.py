@@ -112,6 +112,16 @@ CI / 迁移每阶段的验收门禁）。
                                                      市场计数与顺序 / 空态返回空串 /
                                                      后端 _PREFIX_MAP 每个取值前端都
                                                      统计得到 / 六个扫描模式全接线
+ 38. RSI 阈值可配置    test_scan_rsi_thresholds.py 设置抽屉一对阈值（默认 80/20）
+                                                     同管 K 线副图**与**股票扫描 /
+                                                     显示侧四件派生值单源重算（参考
+                                                     线 / 纵轴档位 / 分段着色 / 披露
+                                                     行回退）/ 扫描侧参数随请求走（未
+                                                     配置不带参 ⇒ 后端默认 SSOT 不被
+                                                     架空）/ 非法整对回退 + 告警恰好
+                                                     一次 / AST 位置律 + 真跑提交与
+                                                     worker + 真跑前端抽屉 / 运行值
+                                                     单源棘轮（第二份副本即红）
 每组件独立子进程执行，超时 300s 按失败终止（防死循环挂死）。
 
 登记在 `CLEAN_CREDENTIALS_COMPONENTS` 的组件（当前 p20 / p60）额外**清空凭据
@@ -874,6 +884,25 @@ COMPONENTS = [
     #   [真渲染] 无头 Chrome 量取 rect 按 top 分行 == 恰好 2 行，且不折行、不越出盒子。
     ("scan_dialog_layout",
      [sys.executable, os.path.join("Test", "test_scan_dialog_layout.py")]),
+    # RSI 超买 / 超卖阈值可配置（2026-10-13 第四轮）：设置抽屉「RSI 阈值」一对值
+    #   （默认 80 / 20，留空 = 用默认）**同管两路** ——
+    #     · 显示侧：_applyRsiThresholds() 单源重算四件派生值（参考线 RSI_REF_VALUES /
+    #       纵轴档位 RSI_AXIS_LEVELS / 分段着色 RSI_SEG_OVER·UNDER / 披露行回退值）；
+    #     · 扫描侧：仅 rsi 模式且两侧都显式配置过才随请求带参，一路透传到
+    #       scan_one；未配置**不带参** ⇒ 后端回退 AppUtils 默认（默认值的权威源
+    #       始终在 Python 侧；前端写死默认值就会把它架空）。
+    #   判据分六段：① 真跑 scan_one（K75/K25 证明配置真的改写判据、K87+90/10 证明
+    #   「替换而非与默认 OR 叠加」、非法整对回退 + 告警恰好一次、非数静默兜底）；
+    #   ② 源码契约（取值链 / 防御一句 / 回退恰好两处 / 回传键名 / 默认常量未动）；
+    #   ③ 全链路（四处形参 + 三处实参 AST 位置律；真跑 submit_batch_scan 验
+    #   params_json 留痕与派发顺序；真跑 _worker_scan_one 验结果行回传）；
+    #   ④ 前端抽屉真行为（node 抽真段：回填 / 保存 / 留空 = 默认 / 单侧留空 /
+    #   五种非法回滚 / 异常持久数据不半应用 / 档位去重 / rsiColorOf 跟随）；
+    #   ⑤ 请求带参条件（模式闸门 + 两侧齐备闸门 + 传的是用户原值而非生效值）；
+    #   ⑥ 运行值单源棘轮（派生三件必须表达式算、重算调用点恰好两处、
+    #   取色阈值只许在阈值对 slice(1) 上取 max/min）。
+    ("scan_rsi_thresholds",
+     [sys.executable, os.path.join("Test", "test_scan_rsi_thresholds.py")]),
     # 未定义全局名静态护栏（2026-10-08 期货选点 NameError 事故防回潮）：
     #   db6f886 把「定位」段的 `config = _make_chan_config()` 换成
     #   `init_chan_symbol(...)`，下方 Step 4 的 `config=config` 遂成孤立引用

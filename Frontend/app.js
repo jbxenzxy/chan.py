@@ -122,16 +122,43 @@
 
         const CHIP_PAD_X = 6;                          // chip 内左右留白
         const CHIP_H = MACD_TEXT_HEIGHT;               // chip 高度（与标签行同高）
-        const RSI_REF_VALUES = [50, 80, 20];           // RSI 参考线：中轴 50、超买 80、超卖 20
+        // RSI 超买 / 超卖阈值的**出厂默认兜底**（用户可在设置抽屉覆盖，见 _rsiOverUser）。
+        //   后端 AppUtils.RSI_REF_VALUES 是默认值的权威源，本处兜底与之同值 ——
+        //   跨语言同值由 Test/test_scan_rsi_mode.py 钉住（两份同值不视为副本）。
+        const RSI_DEFAULT_OVER = 80;
+        const RSI_DEFAULT_UNDER = 20;
+        // 用户显式配置（localStorage 持久化；null = 该侧未配置 ⇒ 用默认）。
+        //   成对校验（0 < 超卖 < 超买 < 100）后写入；随扫描请求传给后端（仅 rsi 模式）。
+        let _rsiOverUser = null;
+        let _rsiUnderUser = null;
         const RSI_REF_DASH = [1, 3];                   // 三条线统一「细点虚线」：1px 点 + 3px 空隙
+        // RSI 参考线：中轴 50 + 超买 / 超卖两条（顺序固定 [中轴, 超买, 超卖]）。
+        // ⚠ 参考线 / 纵轴档位 / 分段着色阈值三件派生值由 _applyRsiThresholds()
+        //   统一重算 —— 阈值可配后**禁止**在别处二次求值。
+        let RSI_REF_VALUES = [50, RSI_DEFAULT_OVER, RSI_DEFAULT_UNDER];
         // RSI 纵轴刻度档位 = 参考线同一组值，只按上→下排序（单一来源，不再写第二遍字面量）。
         //   刻度与参考线因此天然同位：标签画在哪一档，那条虚线就在哪一行。
-        const RSI_AXIS_LEVELS = RSI_REF_VALUES.slice().sort((a, b) => b - a);
-        // RSI 折线**分段着色**的两个阈值 = 超买 / 超卖参考线的值本身（同一份 RSI_REF_VALUES
+        let RSI_AXIS_LEVELS = RSI_REF_VALUES.slice().sort((a, b) => b - a);
+        // RSI 折线**分段着色**的两个阈值 = 参考线里那一对**阈值线**（同一份 RSI_REF_VALUES
         //   派生，不写第二遍 80 / 20）：≥ 上沿用 MACD 红柱色、≤ 下沿用 MACD 绿柱色、其余白。
-        //   取色只认**值**，与翻转视图无关（翻转只翻 Y 位置，见 drawRsi）。
-        const RSI_SEG_OVER = Math.max.apply(null, RSI_REF_VALUES);
-        const RSI_SEG_UNDER = Math.min.apply(null, RSI_REF_VALUES);
+        //   ⚠ 取 max / min 只许在**阈值对** `RSI_REF_VALUES.slice(1)`（即 [中轴, 超买, 超卖]
+        //   的后两位）上进行 —— 对整个三元组取会把**常量中轴 50** 算进来：
+        //   用户把超买配到 50 以下（如 45）时上沿会被顶在 50，与后端按 45 判的扫
+        //   描结果两边分叉（反之超卖配到 50 以上同理）。阈值对由 _rsiPairOk / scan_one
+        //   保证「超买 > 超卖」。取色只认**值**，与翻转视图无关（翻转只翻 Y 位置，见 drawRsi）。
+        let RSI_SEG_OVER = Math.max.apply(null, RSI_REF_VALUES.slice(1));
+        let RSI_SEG_UNDER = Math.min.apply(null, RSI_REF_VALUES.slice(1));
+        // 阈值配置生效：重算上列三件派生值（调用点 = 启动载入 + 抽屉保存，勿增第三处）
+        function _applyRsiThresholds() {
+            RSI_REF_VALUES = [50,
+                (_rsiOverUser === null) ? RSI_DEFAULT_OVER : _rsiOverUser,
+                (_rsiUnderUser === null) ? RSI_DEFAULT_UNDER : _rsiUnderUser];
+            // 档位排序后去重：阈值被配到与中轴同值（如超买=50）时档位不印两遍
+            RSI_AXIS_LEVELS = RSI_REF_VALUES.slice().sort((a, b) => b - a)
+                .filter((v, i, arr) => arr.indexOf(v) === i);
+            RSI_SEG_OVER = Math.max.apply(null, RSI_REF_VALUES.slice(1));
+            RSI_SEG_UNDER = Math.min.apply(null, RSI_REF_VALUES.slice(1));
+        }
 
         // 双窗口模式逐窗布局参数（fix#1+#2）：
         // 双窗时每个 canvas 高度被砍半，若沿用单窗的 PADDING/GAP 绝对值与 0.2 占比，
@@ -2124,19 +2151,20 @@
                 .sort((a, b) => a - b);
         }
 
-        // RSI 折线（单线**分段着色**）+ 50 中轴 + 80/20 超买超卖参考线。
+        // RSI 折线（单线**分段着色**）+ 50 中轴 + 超买 / 超卖两条参考线
+        //   （取值 = 当前生效阈值，默认 80 / 20，见 RSI_REF_VALUES / _applyRsiThresholds）。
         // 三条水平线的 y **全部走同一个 rsiToY(v)**，禁止手写 area.h * 0.2 / * 0.8 之类
         // 相对比例 —— MACD 那条 0 轴踩过的坑正是"同一条线用两个式子算"。
-        // 值域自适应后参考线可能整体出界（放大到趋势段时 20/80 都在窗外）：出界那条
+        // 值域自适应后参考线可能整体出界（放大到趋势段时两条阈值线都在窗外）：出界那条
         //   直接不画 —— 照画会落到相邻区域上（MACD 的 0 轴就有这个隐患）。
         // 折线按超买 / 超卖**分段着色**（见 rsiColorOf）：≥ 上沿 → MACD 红柱色、≤ 下沿 →
         //   MACD 绿柱色、其余 → 白；变色点取在与阈值线的交点上（rsiSegmentCuts 线性插值），
         //   同色连续的子段合并成一条 path，只在变色处断笔。
-        // 翻转视图：三条线与折线整体镜像（80 ↔ 20 互换、50 是不动点）；取色只看值
+        // 翻转视图：三条线与折线整体镜像（超买 ↔ 超卖互换、50 是不动点）；取色只看值
         //   ⇒ 只翻 Y 位置，不改颜色、不改数值。
         function drawRsi(klines, area, range, barStep, subPixelOffset) {
             // 三条线**同一套线型**（细点虚线），只靠明度区分中轴与超买超卖：
-            // 50 中轴略亮（0.2），80/20 略暗（0.15）。
+            // 50 中轴略亮（0.2），两条阈值线略暗（0.15）。
             ctx.lineWidth = 1;
             ctx.setLineDash(RSI_REF_DASH);
             RSI_REF_VALUES.forEach(v => {
@@ -3006,7 +3034,8 @@
             ctx.fillText("0", volArea.x + volArea.w + 6, volArea.y + volArea.h - 4);
         }
 
-        // RSI 纵轴刻度：印**语义档位** RSI_AXIS_LEVELS（超买 80 / 中轴 50 / 超卖 20），
+        // RSI 纵轴刻度：印**语义档位** RSI_AXIS_LEVELS（默认 超买 80 / 中轴 50 / 超卖 20，
+        //   阈值可配后档位随当前生效值走 —— 本函数不写第二遍数字），
         //   与那三条参考线同一组值、同一套 rsiToY ⇒ 每个数字都贴在它自己那条虚线上，
         //   读图时「这条线是多少」不用猜。对标通达信公式管理器「坐标线位置」的档位做法
         //   （通达信默认 自动：按值域铺一串整齐刻度；本实现取语义档位）。
@@ -6764,6 +6793,12 @@
             if (opts.bsp_types !== undefined && opts.bsp_types !== null) {
                 body.bsp_types = opts.bsp_types;
             }
+            // RSI 阈值随请求走（仅 rsi 模式且用户显式配置过；未配置不带参，
+            //   后端回退默认——前端一旦写死默认值，后端默认就被架空，同市值口径）
+            if (opts.mode === "rsi" && opts.rsi_over != null && opts.rsi_under != null) {
+                body.rsi_over = opts.rsi_over;
+                body.rsi_under = opts.rsi_under;
+            }
             return body;
         }
 
@@ -7057,7 +7092,7 @@
                         // 提交到后端执行池，轮询增量结果
                         // （单票响应同形，模式过滤/渲染逻辑零改动）
                         btn.textContent = "中断扫描";
-                        _asyncScanAll(stocks, {freq: freq, mode: spec.mode, recent: spec.recent, source: _scanSources.join(","), bsp_types: spec.bsp_types, scan_token: scanToken}, function(data) {
+                        _asyncScanAll(stocks, {freq: freq, mode: spec.mode, recent: spec.recent, source: _scanSources.join(","), bsp_types: spec.bsp_types, scan_token: scanToken, rsi_over: _rsiOverUser, rsi_under: _rsiUnderUser}, function(data) {
                             completed++;
                             if (data.skipped) { skipped++; }
                             else if (data.error) { skipped++; }
@@ -7673,12 +7708,21 @@
         //   **面板只留判据一句话**：含边界口径、与副图同源、排序规则等**实现侧
         //   保证一律不上面板** —— 它们分别由 AppScan 分支的 >= / <= 判据、rsiColorOf
         //   与 Test/test_scan_rsi_mode.py 钉住；写上面板只会变成读者看不懂的术语堆叠。
-        //   阈值取自 RSI_SEG_OVER / RSI_SEG_UNDER（派生自 RSI_REF_VALUES），
-        //   **不写第二遍阈值数字**。
-        function _rsiCaliberHtml() {
+        //   阈值口径（阈值可配置化后）：**本次扫描实际生效值优先** —— 后端每行回传
+        //   rsi_over / rsi_under；缺省（空面板 / 无回传字段）回落当前生效阈值
+        //   （RSI_SEG_OVER / RSI_SEG_UNDER，派生自 RSI_REF_VALUES；**不写第二遍数字**）。
+        //   扫描完成后用户再改配置，面板文案不跟着变，与已扫出的结果集保持同一口径。
+        function _rsiCaliberHtml(rows) {
+            var o = RSI_SEG_OVER, u = RSI_SEG_UNDER;
+            if (rows && rows.length) {
+                var r0 = rows[0] || {};
+                if (r0.rsi_over != null && r0.rsi_under != null) {
+                    o = r0.rsi_over; u = r0.rsi_under;
+                }
+            }
             return '<div class="scan-summary" style="font-size:10px;color:#7a8399;">'
-                + '最近 ' + _scanRecentDays + ' 根 · 判据：其中任一根 RSI ≥ ' + RSI_SEG_OVER
-                + '（超买）或 ≤ ' + RSI_SEG_UNDER + '（超卖）</div>';
+                + '最近 ' + _scanRecentDays + ' 根 · 判据：其中任一根 RSI ≥ ' + o
+                + '（超买）或 ≤ ' + u + '（超卖）</div>';
         }
 
         // RSI 结果行渲染（进度期与终态共用同一份，避免两处漂移）
@@ -7690,7 +7734,7 @@
         //   勾选：命中即勾 —— 每行都已满足判据，与连涨/放量同约定。
         function _renderRsiRows(results) {
             var html = _scanMarketSummaryHtml(results);
-            html += _rsiCaliberHtml();
+            html += _rsiCaliberHtml(results);
             results.sort(function(a, b) {
                 var ga = _rsiGroupOf(a), gb = _rsiGroupOf(b);
                 if (ga !== gb) { return ga === "under" ? -1 : 1; }
@@ -7723,7 +7767,7 @@
             var html = '<div class="scan-summary">' + sourceLabel + ' <b>' + total + '</b> 只，跳过 <b>' + skipped + '</b> 只，扫描 <b>' + (total - skipped) + '</b> 只，超卖 <b>' + underCount + '</b> 只，超买 <b>' + overCount + '</b> 只' + label + '</div>';
             if (results.length === 0) {
                 // 空结果同样给披露行（口径不该只在有票时才出现）—— 与放量同约定。
-                html += _rsiCaliberHtml();
+                html += _rsiCaliberHtml(results);
                 html += '<div class="scan-no-result">当前周期下未发现 RSI 超买/超卖标的</div>';
             } else {
                 html += _renderRsiRows(results);
@@ -9549,6 +9593,72 @@
                 _scanMinFloatMc = v;
                 try { localStorage.setItem("scan_min_float_mc", String(v)); } catch(e) {}
             });
+        })();
+
+        // RSI 阈值输入框（设置抽屉）：成对校验（0 < 超卖 < 超买 < 100），change 即持久化。
+        //   留空 = 该侧用默认（删持久值；扫描请求不带参，后端默认生效）——与流通市值
+        //   过滤同一套「未配置」语义。合法变更后 _applyRsiThresholds() + render()：
+        //   副图参考线 / 纵轴档位 / 分段着色即时跟随；扫描侧由下次扫描随请求携带
+        //   （参数随请求走，不推送全局——多网页互不覆盖，同 page_index_code 契约）。
+        (function() {
+            var overInput = document.getElementById("rsi-threshold-over");
+            var underInput = document.getElementById("rsi-threshold-under");
+            if (!overInput || !underInput) return;
+            // placeholder = 默认值（引用常量，不写第二遍数字）
+            overInput.placeholder = String(RSI_DEFAULT_OVER);
+            underInput.placeholder = String(RSI_DEFAULT_UNDER);
+
+            function _readStored(key) {
+                try {
+                    var raw = localStorage.getItem(key);
+                    if (raw === null) return null;
+                    var v = parseFloat(raw);
+                    return isNaN(v) ? null : v;
+                } catch (e) { return null; }
+            }
+            function _writeStored(key, v) {
+                try {
+                    if (v === null) localStorage.removeItem(key);
+                    else localStorage.setItem(key, String(v));
+                } catch (e) {}
+            }
+            // 成对判据：0 < 超卖 < 超买 < 100（与后端 scan_one 的防御校验同一口径）
+            function _rsiPairOk(o, u) { return o > u && o < 100 && u > 0; }
+            function _syncRsiInputs() {
+                overInput.value = (_rsiOverUser === null) ? "" : String(_rsiOverUser);
+                underInput.value = (_rsiUnderUser === null) ? "" : String(_rsiUnderUser);
+            }
+            // 启动载入：两侧独立回退默认后成对校验；组合非法（异常数据）整体不应用
+            (function _loadRsiThresholds() {
+                var o = _readStored("scan_rsi_overbought");
+                var u = _readStored("scan_rsi_oversold");
+                var eo = (o === null) ? RSI_DEFAULT_OVER : o;
+                var eu = (u === null) ? RSI_DEFAULT_UNDER : u;
+                if (!_rsiPairOk(eo, eu)) return;
+                _rsiOverUser = o;
+                _rsiUnderUser = u;
+                _applyRsiThresholds();
+            })();
+            function _commitRsiThresholds() {
+                var rsO = (overInput.value || "").trim();
+                var rsU = (underInput.value || "").trim();
+                var o = (rsO === "") ? RSI_DEFAULT_OVER : parseFloat(rsO);
+                var u = (rsU === "") ? RSI_DEFAULT_UNDER : parseFloat(rsU);
+                if (isNaN(o) || isNaN(u) || !_rsiPairOk(o, u)) {
+                    showToast("RSI 阈值不合法：需满足 0 < 超卖 < 超买 < 100");
+                    _syncRsiInputs();
+                    return;
+                }
+                _rsiOverUser = (rsO === "") ? null : o;
+                _rsiUnderUser = (rsU === "") ? null : u;
+                _writeStored("scan_rsi_overbought", _rsiOverUser);
+                _writeStored("scan_rsi_oversold", _rsiUnderUser);
+                _applyRsiThresholds();
+                render();
+            }
+            _syncRsiInputs();
+            overInput.addEventListener("change", _commitRsiThresholds);
+            underInput.addEventListener("change", _commitRsiThresholds);
         })();
 
         // Esc键取消区间选择 / 关闭设置抽屉

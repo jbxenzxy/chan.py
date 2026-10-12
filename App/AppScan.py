@@ -738,7 +738,7 @@ class Scanner:
 
     # ── 单只扫描 ─────────────────────────────────────────────────────
     def scan_one(self, code, freq="d", prefix="", recent="1", source="zxg", mode="",
-                 bsp_types=None):
+                 bsp_types=None, rsi_over=None, rsi_under=None):
         """扫描单只股票（唯一调用方：AppScanPool._worker_scan_one，worker 进程内）
 
         并发安全不依赖锁，而是三层隔离：
@@ -753,6 +753,11 @@ class Scanner:
         回测还是买/卖点"得到的是同一个门。`None` = 未启用过滤（全放行）与
         `""` = 四类全不勾（零命中 / 零成交）是两种**不同**语义，透传时不得合并
         （口径详注见 App/AppBacktest.py）。其余模式不消费该参数。
+
+        rsi_over / rsi_under: `mode="rsi"` 消费的超买 / 超卖阈值（页面「设置 →
+        RSI 阈值」；仅显式配置过才随请求传参）。`None` = 未传 ⇒ 回退本模块默认
+        （RSI_OVERBOUGHT / RSI_OVERSOLD）。非法组合（不满足 0 < 超卖 < 超买
+        < 100）整对回退默认并告警 —— 前端已同口径校验，此处兜底非法客户端。
         """
         t_scan_start = time.time()
         try:
@@ -967,6 +972,19 @@ class Scanner:
             #   门槛取 max 而非 N 的原因：只有超过 RSI_CYCLE 根之后，窗口内的 RSI 才全部
             #   脱离**播种区**（前 period-1 根用简单平均，数值与递推段不可比，不该参与判定）。
             if mode == "rsi":
+                # 阈值：随请求传入（设置抽屉配置，仅显式配置过才传）；缺省回退默认
+                #   （默认值的 SSOT 在本模块顶部 RSI_OVERSOLD / RSI_OVERBOUGHT）。
+                #   防御校验：前端已同口径校验（0 < 超卖 < 超买 < 100），此处兜底
+                #   非法客户端 —— 非法整对回退默认 + 告警，不阻断本票扫描。
+                try:
+                    _rsi_over = RSI_OVERBOUGHT if rsi_over is None else float(rsi_over)
+                    _rsi_under = RSI_OVERSOLD if rsi_under is None else float(rsi_under)
+                except (TypeError, ValueError):
+                    _rsi_over, _rsi_under = RSI_OVERBOUGHT, RSI_OVERSOLD
+                if not (0 < _rsi_under < _rsi_over < 100):
+                    log.warning(f"[扫描-RSI] 阈值参数非法(超买={rsi_over} 超卖={rsi_under})，"
+                                f"回退默认 {RSI_OVERBOUGHT}/{RSI_OVERSOLD}")
+                    _rsi_over, _rsi_under = RSI_OVERBOUGHT, RSI_OVERSOLD
                 need_bars = max(recent_days, RSI_CYCLE + 1)
                 closes = [k.get("close", 0) or 0 for k in klines]
                 # 两条前置门槛，任一不满足都按「未命中」静默跳过（输出形与连涨/放量同款：
@@ -986,8 +1004,8 @@ class Scanner:
 
                 rsi_series = calculate_rsi(closes)
                 win = rsi_series[-recent_days:]
-                hit_under = sum(1 for v in win if v <= RSI_OVERSOLD)
-                hit_over = sum(1 for v in win if v >= RSI_OVERBOUGHT)
+                hit_under = sum(1 for v in win if v <= _rsi_under)
+                hit_over = sum(1 for v in win if v >= _rsi_over)
                 if not hit_under and not hit_over:
                     mkt, cd = _m._get_market_code(qualified_code)
                     if mkt and cd:
@@ -995,9 +1013,9 @@ class Scanner:
                     return {"code": code, "is_rsi": False}
 
                 rsi_last = win[-1]
-                if rsi_last <= RSI_OVERSOLD:
+                if rsi_last <= _rsi_under:
                     rsi_group = "under"
-                elif rsi_last >= RSI_OVERBOUGHT:
+                elif rsi_last >= _rsi_over:
                     rsi_group = "over"
                 else:
                     rsi_group = "under" if hit_under else "over"
@@ -1005,7 +1023,8 @@ class Scanner:
                 t_filter = time.time() - t0
                 t_total = time.time() - t_scan_start
                 log.info(f"[耗时-扫描-RSI] {code} 总{t_total:.3f}s(分析{t_analyze:.3f}s "
-                         f"过滤{t_filter:.3f}s) 最近{recent_days}根 末值={rsi_last:.2f} "
+                         f"过滤{t_filter:.3f}s) 阈值{_rsi_over:g}/{_rsi_under:g} "
+                         f"最近{recent_days}根 末值={rsi_last:.2f} "
                          f"最小={rsi_min:.2f} 最大={rsi_max:.2f} 组={rsi_group} "
                          f"越界{hit_under + hit_over}根(超卖{hit_under}/超买{hit_over})")
                 return {
@@ -1013,6 +1032,8 @@ class Scanner:
                     "is_rsi": True,
                     "freq": freq,
                     "recent_days": recent_days,
+                    "rsi_over": _rsi_over,
+                    "rsi_under": _rsi_under,
                     "rsi_group": rsi_group,
                     "rsi_last": round(rsi_last, 2),
                     "rsi_min": round(rsi_min, 2),
@@ -1224,7 +1245,7 @@ class Scanner:
     # 共享结果经 SQLite AppScanStore 跨进程。
 
     def submit_batch_scan(self, stocks, freq="d", mode="", recent="1", source="zxg",
-                          scan_token=None, bsp_types=None):
+                          scan_token=None, bsp_types=None, rsi_over=None, rsi_under=None):
         """提交批量扫描 → {task_id, total}（薄封装，委托 AppScanPool）
 
         stocks: [{code, prefix, _source}, ...]（scan_stock_list 合并列表）。
@@ -1233,13 +1254,16 @@ class Scanner:
         bsp_types: 买/卖点扫描与回测扫描消费的买卖点类型勾选串，随请求透传到
         worker（口径同单页回测，见 scan_one）。
 
+        rsi_over / rsi_under: rsi 扫描消费的超买 / 超卖阈值，随请求透传到 worker
+        （口径同 scan_one：None 回退默认、非法整对回退）。
+
         scan_token：本次扫描的会话标识（由 start() 返回）。池的收割线程
         只拿得到 task_id，故在此绑定 task_id → scan_token，让它能把跳过
         记录写回**发起它的那一次扫描**而非全局。
         """
         from App.AppScanPool import submit_batch_scan as _submit
         result = _submit(stocks, freq=freq, mode=mode, recent=recent, source=source,
-                         bsp_types=bsp_types)
+                         bsp_types=bsp_types, rsi_over=rsi_over, rsi_under=rsi_under)
         task_id = result.get("task_id") if isinstance(result, dict) else None
         if task_id and scan_token:
             # 未传 token 的旧客户端无需绑定：append_scan_skip 会回退到
