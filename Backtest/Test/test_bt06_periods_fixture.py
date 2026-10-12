@@ -190,10 +190,16 @@ def build_snapshot():
 
 
 def diff(got, want, path="", out=None):
+    """递归收集**全部**差异（不截断；限量的显示由 summarize_diffs 负责）。
+
+    此处曾有 `if len(out) > 40: return out`：一旦超过 40 条就再也不收，且不留
+    任何痕迹 —— 失败输出会**静默**止步于 41 条（无省略号、无总数、不按周期分组），
+    把「哪里坏了、坏了多少」一并抹掉。本样本上就曾把 441 条差异（15m 55 条 +
+    5m 386 条）显示成「只有 15m 的四十余条」，导致影响面误判。
+    收集是廉价的；需要防刷屏的是**打印** —— 见 summarize_diffs。
+    """
     if out is None:
         out = []
-    if len(out) > 40:
-        return out
     if isinstance(want, dict) and isinstance(got, dict):
         for k in sorted(set(want) | set(got)):
             if k not in got:
@@ -210,6 +216,38 @@ def diff(got, want, path="", out=None):
     elif got != want:
         out.append("%s got=%r 基线=%r" % (path, got, want))
     return out
+
+
+# 失败明细的显示上限：汇总计数**永远完整**，只有明细行限量。
+DIFF_SHOW_LIMIT = 40
+
+
+def summarize_diffs(diffs, periods, limit=DIFF_SHOW_LIMIT):
+    """差异清单 -> 「每周期计数 + 前 limit 条明细（超出显式标注）」，供 check() 的 detail。
+
+    为什么不直接把 diffs 全量拼进 detail：差异条数可能远超屏幕可读量（本样本上一次
+    口径改动就产出 441 条），全量打印会刷屏、且看不出「哪个周期坏了」；但也不能像
+    旧版那样静默截断 —— 被吞掉的条数必须**可见**。故：计数逐周期完整、明细限量。
+    """
+    n_per = len(periods)
+    counts = [0] * (n_per + 1)   # 末位 = 不落在任何具体周期上的差异（如 periods 顶层长度差异）
+    for d in diffs:
+        idx = n_per
+        if d.startswith("periods["):
+            end = d.find("]")
+            seg = d[len("periods["):end] if end > 0 else ""
+            if seg.isdigit() and int(seg) < n_per:
+                idx = int(seg)
+        counts[idx] += 1
+    parts = ["periods[%d] %s=%d" % (i, periods[i]["freq"], counts[i])
+             for i in range(n_per)]
+    parts.append("顶层=%d" % counts[n_per])
+    lines = ["按周期汇总：%s    合计 %d 条" % ("  ".join(parts), len(diffs))]
+    lines.extend("  " + d for d in diffs[:limit])
+    if len(diffs) > limit:
+        lines.append("  （明细已截断：共 %d 条，仅显示前 %d 条，其余 %d 条未显示）"
+                     % (len(diffs), limit, len(diffs) - limit))
+    return "\n".join(lines)
 
 
 def main(argv):
@@ -257,7 +295,7 @@ def main(argv):
     # ② 逐周期与基线一致（一次报出所有周期的差异）
     d_all = diff(got["periods"], want["periods"], "periods")
     check("② 逐周期 bars / 信号 / 逐笔 / 汇总 == 基线（五周期）",
-          not d_all, "\n".join(d_all))
+          not d_all, summarize_diffs(d_all, got["periods"]))
 
     # ③ ★ 派生不变量：放行信号数 == 开仓笔数
     #    "放行" = seen − 过滤 − 拒收；每笔交易由一次放行开仓产生 ⇒ 两者必须相等。
