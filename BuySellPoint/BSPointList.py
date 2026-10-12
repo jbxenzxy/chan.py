@@ -1433,18 +1433,18 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           n_high=stroke_n._high(), peak_high=pivot_a.peak_high)
             return
 
-        # ㈣ 笔N 与 笔N-2 MACD DIF 背驰判定：分型极值 DIF 到 0 轴距离比例
-        # 买点（笔N/笔N-2 均向下）：A = 笔N-2 底分型极值 DIF 绝对值（到 0 轴距离），B = 笔N 底分型极值 DIF 绝对值
-        # 卖点（笔N/笔N-2 均向上）：A = 笔N-2 顶分型极值 DIF 绝对值（到 0 轴距离），B = 笔N 顶分型极值 DIF 绝对值
-        # 两方向统一取笔末端分型极值K线（get_end_klu：向下笔=底分型极值、向上笔=顶分型极值）
+        # ㈣ 笔N 与 笔N-2 MACD DIF 背驰判定：笔内 DIF 峰值到 0 轴距离比例
+        # 买点（笔N/笔N-2 均向下）：A = 笔N-2 笔内 DIF 负侧峰值（到 0 轴距离），B = 笔N 笔内 DIF 负侧峰值
+        # 卖点（笔N/笔N-2 均向上）：A = 笔N-2 笔内 DIF 正侧峰值（到 0 轴距离），B = 笔N 笔内 DIF 正侧峰值
+        # 峰值口径 = Cal_MACD_dif（整笔扫描方向侧 |DIF| 最大者；无方向侧柱子时取 eps 兜底）
         # 要求 (A-B)/A >= config.retrace_zero_axis_ratio（默认 0.618）才算背驰
-        # 笔N-2 极值 DIF 恰在 0 轴时，比值无定义，视为不满足
-        nm2_dist = abs(stroke_nm2.get_end_klu().macd.DIF)
-        n_dist = abs(stroke_n.get_end_klu().macd.DIF)
+        # 笔N-2 取到 eps 兜底时，比值 <= 0，视为不满足
+        nm2_dist = stroke_nm2.cal_macd_metric(MACD_ALGO.DIF)
+        n_dist = stroke_n.cal_macd_metric(MACD_ALGO.DIF)
         dif_ratio = (nm2_dist - n_dist) / nm2_dist if nm2_dist != 0 else None
         ratio_ok = dif_ratio is not None and dif_ratio >= config.retrace_zero_axis_ratio
         if not ratio_ok:
-            self._dbg_bs1('cal_bs1point', '跳过: 分型极值DIF回0轴比例不足',
+            self._dbg_bs1('cal_bs1point', '跳过: 笔内DIF峰值回0轴比例不足',
                           n_idx=stroke_n.idx, nm2_idx=stroke_nm2.idx,
                           nm2_dist=round(nm2_dist, 4), n_dist=round(n_dist, 4),
                           dif_ratio=None if dif_ratio is None else round(dif_ratio, 4),
