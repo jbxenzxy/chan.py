@@ -552,7 +552,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
     # REPLAY_MODE 已移除：原为进程级类变量，现由模块级线程局部函数
     # set_replay_mode() / in_replay_mode() 承担（见本文件顶部）
     BS0_ZS_BREAK_RATIO = 0.8       # 离开笔有效突破中枢的比例阈值
-    ZS_ENTRY_AMP_RATIO = 1.2       # 中枢进入笔振幅比例阈值（进入笔振幅 >= 构成中枢第三笔振幅 × 该比例）
+    ZS_ENTRY_AMP_RATIO = 1.2       # 中枢进入笔 ≥ 下一笔(中枢第一笔候选) * 1.2
     NESTED_MACD_DIVER_RATIO = 0.8  # 次级别单笔或多笔，MACD背驰判断阈值
 
     def __init__(self, bs_point_config):
@@ -1041,14 +1041,8 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             return
 
         # ㈡ 离开笔4有效突破(中枢A)
-        if not self._is_valid_out_bi(stroke_n, pivot_a):
-            threshold, actual, cond = self._out_bi_break_threshold(stroke_n, pivot_a)
-            self._dbg_bs0(' _cal_bs0point_4th', '跳过: 离开笔未有效突破中枢',
-                          stroke_high=stroke_n._high(), stroke_low=stroke_n._low(),
-                          zs_high=pivot_a.high, zs_low=pivot_a.low,
-                          zs_height=round(pivot_a.high - pivot_a.low, 2),
-                          threshold=round(threshold, 2), actual=round(actual, 2),
-                          condition=cond)
+        if not self._is_valid_out_bi(stroke_n, pivot_a,
+                                     ' _cal_bs0point_4th', '跳过: 离开笔未有效突破中枢'):
             return
 
         # ㈢ 进入笔MACD同侧围栏（柱面积主导 + 黄白线同侧，二者都通过才继续）
@@ -1142,14 +1136,8 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         # self._dbg_bs0('_cal_bs0point_nth_nzs', '中枢B有效', zs_b_high=zs_b.high, zs_b_low=zs_b.low)
 
         # ㈡ 离开笔有效突破(中枢B)
-        if not self._is_valid_out_bi(stroke_n, zs_b):
-            threshold, actual, cond = self._out_bi_break_threshold(stroke_n, zs_b)
-            self._dbg_bs0('_cal_bs0point_nth_nzs', '跳过: 离开笔未有效突破中枢',
-                          stroke_high=stroke_n._high(), stroke_low=stroke_n._low(),
-                          zs_b_high=zs_b.high, zs_b_low=zs_b.low,
-                          zs_height=round(zs_b.high - zs_b.low, 2),
-                          threshold=round(threshold, 2), actual=round(actual, 2),
-                          condition=cond)
+        if not self._is_valid_out_bi(stroke_n, zs_b,
+                                     '_cal_bs0point_nth_nzs', '跳过: 离开笔未有效突破中枢'):
             return False
 
         # ㈢ 进入笔MACD同侧围栏（柱面积主导 + 黄白线同侧，二者都通过才继续）
@@ -1307,14 +1295,8 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                       stroke_dir='up' if stroke_n.is_up() else 'down')
 
         # ㈠ 离开笔6/8有效突破(中枢A)
-        if not self._is_valid_out_bi(stroke_n, pivot_a):
-            threshold, actual, cond = self._out_bi_break_threshold(stroke_n, pivot_a)
-            self._dbg_bs0('_cal_bs0point_nth_ozs_68th', '跳过: 离开笔未有效突破中枢',
-                          stroke_high=stroke_n._high(), stroke_low=stroke_n._low(),
-                          zs_high=pivot_a.high, zs_low=pivot_a.low,
-                          zs_height=round(pivot_a.high - pivot_a.low, 2),
-                          threshold=round(threshold, 2), actual=round(actual, 2),
-                          condition=cond)
+        if not self._is_valid_out_bi(stroke_n, pivot_a,
+                                     '_cal_bs0point_nth_ozs_68th', '跳过: 离开笔未有效突破中枢'):
             return
 
         # ㈡ 进入笔MACD同侧围栏（柱面积主导 + 黄白线同侧，二者都通过才继续）
@@ -1786,15 +1768,15 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
     @staticmethod
     def _out_bi_break_threshold(stroke_n, zs):
         """
-        离开笔有效突破的**阈值**（中枢高度口径）—— 供 _is_valid_out_bi 判定与三处 dbg 复用
+        离开笔有效突破的**阈值**（中枢高度口径）—— 唯一来源，由 _is_valid_out_bi 调用
 
-        上涨中枢(离开笔向上)：阈值 = 中枢下沿 + 中枢高度 × BS0_ZS_BREAK_RATIO，比较笔末端高点
-        下跌中枢(离开笔向下)：阈值 = 中枢上沿 - 中枢高度 × BS0_ZS_BREAK_RATIO，比较笔末端低点
+        上涨中枢（离开笔向上）：阈值 = 中枢下沿 + 中枢高度 × BS0_ZS_BREAK_RATIO，比较笔末端高点
+        下跌中枢（离开笔向下）：阈值 = 中枢上沿 - 中枢高度 × BS0_ZS_BREAK_RATIO，比较笔末端低点
 
-        返回值：
+        Returns:
             (threshold, actual, cond): 阈值 / 待比较的末端极值 / 判据文案（仅 dbg 用）
         """
-        zs_height = zs.high - zs.low           # 中枢高度(重叠区间 ZD~ZG)
+        zs_height = zs.high - zs.low           # 中枢高度（重叠区间 ZD~ZG）
         r = CMyBSPointList.BS0_ZS_BREAK_RATIO  # 0.8
         if stroke_n.is_up():
             threshold = zs.low + zs_height * r
@@ -1806,14 +1788,26 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             cond = f'need low(={actual:.2f}) <= zs_high - zs_height*{r}(={threshold:.2f})'
         return threshold, actual, cond
 
-    @staticmethod
-    def _is_valid_out_bi(stroke_n, zs):
+    def _is_valid_out_bi(self, stroke_n, zs, dbg_tag=None, dbg_msg=None):
         """
-        离开笔是否有效突破中枢：末端极值越过阈值（向上一律 >= ，向下一律 <=）
+        检查离开笔是否有效突破中枢：末端极值越过阈值（向上一律 >= ，向下一律 <=）
         阈值口径见 _out_bi_break_threshold
+
+        判 False 且传了 dbg_tag / dbg_msg 时，顺带打印诊断字段
+        （阈值 / 末端极值 / 判据文案），调用方无需再算一遍
         """
-        threshold, actual, _ = CMyBSPointList._out_bi_break_threshold(stroke_n, zs)
-        return actual >= threshold if stroke_n.is_up() else actual <= threshold
+        threshold, actual, cond = self._out_bi_break_threshold(stroke_n, zs)
+        ok = actual >= threshold if stroke_n.is_up() else actual <= threshold
+        if ok:
+            return True
+        if dbg_tag:
+            self._dbg_bs0(dbg_tag, dbg_msg,
+                          stroke_high=stroke_n._high(), stroke_low=stroke_n._low(),
+                          zs_high=zs.high, zs_low=zs.low,
+                          zs_height=round(zs.high - zs.low, 2),
+                          threshold=round(threshold, 2), actual=round(actual, 2),
+                          condition=cond)
+        return False
 
     @staticmethod
     def _is_stroke_divergence(n, nm2, macd_algo, config):
