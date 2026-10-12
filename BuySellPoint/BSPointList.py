@@ -552,7 +552,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
     # REPLAY_MODE 已移除：原为进程级类变量，现由模块级线程局部函数
     # set_replay_mode() / in_replay_mode() 承担（见本文件顶部）
     BS0_ZS_BREAK_RATIO = 0.8       # 离开笔有效突破中枢的比例阈值
-    ZS_ENTRY_AMP_RATIO = 1.2       # 中枢进入笔 ≥ 下一笔(中枢第一笔候选) * 1.2
+    ZS_ENTRY_AMP_RATIO = 1.2       # 进入笔振幅 ≥ 反向第一笔(中枢第一笔候选) * 1.2
     NESTED_MACD_DIVER_RATIO = 0.8  # 次级别单笔或多笔，MACD背驰判断阈值
 
     def __init__(self, bs_point_config):
