@@ -459,9 +459,9 @@ class CBi:
     @make_cache
     def is_macd_lines_same_side(self):
         """
-        整笔区间内黄白线(DIF/DEA)与笔方向同侧且均在 0 轴下(上)。
-          - 向下笔: 要求 DIF<0 且 DEA<0（整笔每一根）
-          - 向上笔: 要求 DIF>0 且 DEA>0（整笔每一根）
+        整笔区间内 DIF（白线）与笔方向同侧且位于 0 轴下(上)。
+          - 向下笔: 要求 DIF<0（整笔每一根）
+          - 向上笔: 要求 DIF>0（整笔每一根）
         任一 K 线不满足即返回 False。空笔返回 False。
         """
         klus = [k for klc in self.klc_lst for k in klc.lst]
@@ -469,7 +469,7 @@ class CBi:
             return False
         expected = -1 if self.is_down() else 1
         for k in klus:
-            if k.macd.DIF * expected <= 0 or k.macd.DEA * expected <= 0:
+            if k.macd.DIF * expected <= 0:
                 return False
         return True
 

@@ -1045,7 +1045,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                                      ' _cal_bs0point_4th', '跳过: 离开笔未有效突破中枢'):
             return
 
-        # ㈢ 进入笔MACD同侧围栏（柱面积主导 + 黄白线同侧，二者都通过才继续）
+        # ㈢ 进入笔MACD同侧围栏（柱面积主导 + DIF同侧，二者都通过才继续）
         fence_dominant = entry_bi.is_macd_same_side_dominant()
         fence_lines = entry_bi.is_macd_lines_same_side()
         if not (fence_dominant and fence_lines):
@@ -1140,7 +1140,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                                      '_cal_bs0point_nth_nzs', '跳过: 离开笔未有效突破中枢'):
             return False
 
-        # ㈢ 进入笔MACD同侧围栏（柱面积主导 + 黄白线同侧，二者都通过才继续）
+        # ㈢ 进入笔MACD同侧围栏（柱面积主导 + DIF同侧，二者都通过才继续）
         fence_dominant = entry_bi.is_macd_same_side_dominant()
         fence_lines = entry_bi.is_macd_lines_same_side()
         if not (fence_dominant and fence_lines):
@@ -1299,7 +1299,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                                      '_cal_bs0point_nth_ozs_68th', '跳过: 离开笔未有效突破中枢'):
             return
 
-        # ㈡ 进入笔MACD同侧围栏（柱面积主导 + 黄白线同侧，二者都通过才继续）
+        # ㈡ 进入笔MACD同侧围栏（柱面积主导 + DIF同侧，二者都通过才继续）
         fence_dominant = entry_bi.is_macd_same_side_dominant()
         fence_lines = entry_bi.is_macd_lines_same_side()
         if not (fence_dominant and fence_lines):
