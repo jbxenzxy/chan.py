@@ -337,6 +337,18 @@ class MacdStream:
 # 由 `Test/test_bottom_slots.py` 的「RSI 周期同源」护栏逐条校验（只看数字、不看注释）。
 RSI_CYCLE = 12
 
+# ── RSI 超买 / 超卖阈值：与 **K 线图副图的「分段着色」判据同源** ──
+# 扫描（`AppScan.scan_one` 的 `rsi` 模式）与前端画图必须用**同一对**阈值，否则会出现
+# 「图上把这一段画成超买红、扫描却不报」的错位 —— 用户只会当成 bug 来查。
+#   · 前端 `Frontend/app.js`：`RSI_REF_VALUES`（中轴 + 超买 / 超卖两条参考线，值只写在那里），
+#     分段着色阈值直接取它的 max / min（`RSI_SEG_OVER` / `RSI_SEG_UNDER`）；
+#   · 本处三个常量是它在 Python 侧的对应物，超买/超卖同样由 max / min 派生
+#     （**不写字面量阈值**，防两处各自改数）。
+# 由 `Test/test_scan_rsi_mode.py` 的「阈值同源」护栏逐条校验（只看数字、不看注释）。
+RSI_REF_VALUES = (50, 80, 20)
+RSI_OVERBOUGHT = max(RSI_REF_VALUES)   # 超买上沿：≥ 此值即超买（**含边界**，与副图同口径）
+RSI_OVERSOLD = min(RSI_REF_VALUES)     # 超卖下沿：≤ 此值即超卖（**含边界**）
+
 
 def calculate_rsi(closes, period=RSI_CYCLE):
     """计算 RSI（口径逐字照抄核心 Math/RSI.py，避免两套实现打架）。

@@ -574,10 +574,15 @@ def part6():
           "仍带 ?v= 版本号或缺 app.js 引用")
 
     appjs = io.open(APPJS, encoding="utf-8").read()
+    # 白名单的契约是「**包含**这些模式值」（顺序无功能意义）。原断言把相邻
+    #   顺序也写死：2026-10-12 新增 "rsi"（插在 lianzhang 与 backtest 之间）
+    #   后立刻假红。这里改为解析整条 if 条件取集合、断言包含关系。
+    _wl_m = re.search(
+        r'if \(savedMode === "\w+"(?: \|\| savedMode === "\w+")*\)', appjs)
+    _whitelist = re.findall(r'savedMode === "(\w+)"', _wl_m.group(0)) if _wl_m else []
     check("⑥ localStorage 白名单收 backtest（否则重开弹窗回落到标注模式）",
-          bool(re.search(r'savedMode === "fx_d" \|\| savedMode === "fangliang" '
-                         r'\|\| savedMode === "lianzhang" \|\| savedMode === "backtest"', appjs)),
-          "白名单未含 backtest")
+          "backtest" in _whitelist,
+          "白名单未含 backtest，实际=" + str(_whitelist))
     check("⑥ 结果面板标题分支存在（日K 回测）",
           'freqLabel + " 回测"' in appjs, "缺标题分支")
 

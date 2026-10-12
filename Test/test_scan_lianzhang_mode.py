@@ -434,8 +434,8 @@ def part4():
           bool(re.search(r'value="lianzhang"[^>]*onchange="updateScanRecentDisabled\(\)"',
                          html)), "缺 onchange")
     n_opts = len(re.findall(r'name="scan-mode"\s+value="', html))
-    check("④ 扫描模式选项总数为 7（标注/均线/放量/连涨/底分型/买-卖点/回测）",
-          n_opts == 7, n_opts)
+    check("④ 扫描模式选项总数为 8（标注/均线/放量/连涨/RSI/底分型/买-卖点/回测）",
+          n_opts == 8, n_opts)
     check("④ 资源为裸 app.js 引用（?v= 人工版本号 2026-10-09 已废除，"
           "缓存击穿由 FrontAPI no-cache 头接管）",
           'app.js?v=' not in html and 'src="app.js"' in html,

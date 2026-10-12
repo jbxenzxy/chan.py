@@ -34,6 +34,11 @@ from App.AppData import app_data, make_live_key
 # 配置中心（扫描预过滤阈值等）
 from App.AppConfig import app_config
 
+# RSI 扫描判据的**唯一来源**：周期与超买/超卖阈值（与 K 线图副图同源，见 AppUtils
+# 里那三个常量的注释）。这里走模块级导入 —— AppUtils 不反向依赖本模块，无循环风险
+# （已实测 `from App.AppScan import Scanner` + `from App.AppUtils import ...` 同时成立）。
+from App.AppUtils import RSI_CYCLE, RSI_OVERBOUGHT, RSI_OVERSOLD, calculate_rsi
+
 # 板块成分读取（扫描来源 page_index）
 from DataAPI.TdxAPI import get_index_stocks
 
@@ -943,6 +948,78 @@ class Scanner:
                     "gain_pct": gain_pct,
                     "date_from": seg[0].get("date", ""),
                     "date_to": seg[-1].get("date", ""),
+                }
+
+            # ── RSI 扫描模式 ──
+            # 判据（与 K 线图副图**同一条 RSI 线**、**同一对阈值**）：
+            #   rsi = calculate_rsi(全量收盘序列)（周期 = RSI_CYCLE，与副图同源）；
+            #   取最近 N 根窗口 win = rsi[-N:]；命中 ⟺ any(v >= 超买) or any(v <= 超卖)
+            #   —— 是「窗口内**出现过**」而非「只看最后一根」，N 由页面「最近N根」给出。
+            #   注意必须在**全量序列**上算完再切片：RSI 是递推平滑量，只喂窗口内的 N 根
+            #   会得到与图上完全不同的数（前 period-1 根走的是简单平均播种）。
+            # 归类（决定结果面板的排序分组；口径由用户 2026-10-12 拍板「按最近一根的
+            #   RSI 归类，末根中性时按极值兜底」）：
+            #     ① 先看**窗口最后一根** rsi_last：<= 超卖 → 超卖组 / >= 超买 → 超买组；
+            #     ② 末根落在 (超卖, 超买) 开区间（已回到中性区）→ 按极值兜底：
+            #        窗口内出现过超卖即归超卖组，否则归超买组（此时必然出现过超买）。
+            #        即末根中性时**超卖优先** —— 与「小于20的排在大于80的前面」同向。
+            # 边界：K 线数 < max(N, RSI_CYCLE+1) ⇒ 未命中，静默跳过（与连涨/放量同约定）。
+            #   门槛取 max 而非 N 的原因：只有超过 RSI_CYCLE 根之后，窗口内的 RSI 才全部
+            #   脱离**播种区**（前 period-1 根用简单平均，数值与递推段不可比，不该参与判定）。
+            if mode == "rsi":
+                need_bars = max(recent_days, RSI_CYCLE + 1)
+                closes = [k.get("close", 0) or 0 for k in klines]
+                # 两条前置门槛，任一不满足都按「未命中」静默跳过（输出形与连涨/放量同款：
+                # 只回 code + is_rsi=False，不进结果列表、由页面计入「跳过」）：
+                #   ① K 线数 < max(N, RSI_CYCLE+1)：窗口内的 RSI 会落进**播种区**（前
+                #      period-1 根走简单平均，见 calculate_rsi 的 docstring），数值与递推段
+                #      不可比，不该参与判定；
+                #   ② 整条收盘序列**一个价都没变**（停牌 / 一字板 / 无成交）：RSI 会走
+                #      公式的边界分支（downs == 0 → 按 ups > 0 给 100 否则给 0）得 0，
+                #      那是**退化值不是超卖**。K 线图副图对这类票同样画出一条贴 0 的平线，
+                #      但它不会被误读成"曾经超卖"，扫描侧更不该把它们当命中报出来。
+                if len(closes) < need_bars or min(closes) == max(closes):
+                    mkt, cd = _m._get_market_code(qualified_code)
+                    if mkt and cd:
+                        app_data.cache_remove(make_live_key(mkt, cd, freq))
+                    return {"code": code, "is_rsi": False}
+
+                rsi_series = calculate_rsi(closes)
+                win = rsi_series[-recent_days:]
+                hit_under = sum(1 for v in win if v <= RSI_OVERSOLD)
+                hit_over = sum(1 for v in win if v >= RSI_OVERBOUGHT)
+                if not hit_under and not hit_over:
+                    mkt, cd = _m._get_market_code(qualified_code)
+                    if mkt and cd:
+                        app_data.cache_remove(make_live_key(mkt, cd, freq))
+                    return {"code": code, "is_rsi": False}
+
+                rsi_last = win[-1]
+                if rsi_last <= RSI_OVERSOLD:
+                    rsi_group = "under"
+                elif rsi_last >= RSI_OVERBOUGHT:
+                    rsi_group = "over"
+                else:
+                    rsi_group = "under" if hit_under else "over"
+                rsi_min, rsi_max = min(win), max(win)
+                t_filter = time.time() - t0
+                t_total = time.time() - t_scan_start
+                log.info(f"[耗时-扫描-RSI] {code} 总{t_total:.3f}s(分析{t_analyze:.3f}s "
+                         f"过滤{t_filter:.3f}s) 最近{recent_days}根 末值={rsi_last:.2f} "
+                         f"最小={rsi_min:.2f} 最大={rsi_max:.2f} 组={rsi_group} "
+                         f"越界{hit_under + hit_over}根(超卖{hit_under}/超买{hit_over})")
+                return {
+                    "code": market + code, "name": stock_name,
+                    "is_rsi": True,
+                    "freq": freq,
+                    "recent_days": recent_days,
+                    "rsi_group": rsi_group,
+                    "rsi_last": round(rsi_last, 2),
+                    "rsi_min": round(rsi_min, 2),
+                    "rsi_max": round(rsi_max, 2),
+                    "rsi_hit_under": hit_under,
+                    "rsi_hit_over": hit_over,
+                    "last_close": klines[-1]["close"] if klines else 0,
                 }
 
             # ── 回测扫描模式 ──

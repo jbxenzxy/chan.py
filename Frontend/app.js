@@ -289,7 +289,7 @@
 
         let _scanTaskId = null; // 当前批量扫描 task_id（中止时立即经 /api/stocks/scan/{task_id}/cancel 传播）
 
-        let _scanMode = "ann"; // "ann" = 标注扫描, "ma" = 均线分类扫描, "fangliang" = 放量扫描, "lianzhang" = 连涨扫描, "fx_d" = 底分型扫描, "bsp" = 买卖点扫描, "backtest" = 回测扫描
+        let _scanMode = "ann"; // "ann" = 标注扫描, "ma" = 均线分类扫描, "fangliang" = 放量扫描, "lianzhang" = 连涨扫描, "rsi" = RSI 超买超卖扫描, "fx_d" = 底分型扫描, "bsp" = 买卖点扫描, "backtest" = 回测扫描
 
         let _scanRecentDays = 1; // 最近N根K线，默认1
 
@@ -6435,7 +6435,7 @@
         // 均线分类扫描：按最新收盘价分类，与日期无关，输入框置灰；扫描来源可用
         // 回测扫描：整条加载序列参与回测，与"最近N根"无关，输入框置灰；
         //           扫描来源与扫描周期**都可用**（回测必须知道扫谁、按什么周期扫）
-        // 买卖点/放量/连涨扫描：需要按最近N根K线过滤，输入框可用
+        // 买卖点/放量/连涨/RSI 扫描：需要按最近N根K线过滤，输入框可用
         function updateScanRecentDisabled() {
             var row = document.getElementById("scan-recent-row");
             var input = document.getElementById("scan-recent-days");
@@ -6446,6 +6446,7 @@
             var isFxD = selected && selected.value === "fx_d";
             var isBacktest = selected && selected.value === "backtest";
             var isLianzhang = selected && selected.value === "lianzhang";
+            var isRsi = selected && selected.value === "rsi";
             if (row && input) {
                 if (isAnn || isMa || isFxD || isBacktest) {
                     row.style.opacity = "0.35";
@@ -6455,9 +6456,9 @@
                     row.style.opacity = "1";
                     row.style.pointerEvents = "";
                     input.disabled = false;
-                    // 连涨：「最近N根」是核心参数，N=1（单根收红）几乎无意义
-                    //   ⇒ 进入本模式时若当前值 < 2 自动填 3（用户仍可改）。
-                    if (isLianzhang && (parseInt(input.value, 10) || 0) < 2) {
+                    // 连涨 / RSI：「最近N根」是核心参数，N=1（单根收红 / 单根 RSI）
+                    //   几乎无意义 ⇒ 进入本模式时若当前值 < 2 自动填 3（用户仍可改）。
+                    if ((isLianzhang || isRsi) && (parseInt(input.value, 10) || 0) < 2) {
                         input.value = 3;
                     }
                 }
@@ -6615,6 +6616,8 @@
                 document.getElementById("scan-title").textContent = freqLabel + " 回测";
             } else if (_scanMode === "lianzhang") {
                 document.getElementById("scan-title").textContent = freqLabel + " " + _scanRecentDays + "连涨";
+            } else if (_scanMode === "rsi") {
+                document.getElementById("scan-title").textContent = freqLabel + " " + _scanRecentDays + "根RSI";
             } else {
                 // 标注扫描：显示全周期，不再显示当前周期
                 document.getElementById("scan-title").textContent = "全周期 标注";
@@ -6640,7 +6643,7 @@
             // 从 localStorage 恢复上次的选择
             try {
                 var savedMode = localStorage.getItem("scan_mode");
-                if (savedMode === "bsp" || savedMode === "ann" || savedMode === "ma" || savedMode === "fx_d" || savedMode === "fangliang" || savedMode === "lianzhang" || savedMode === "backtest") {
+                if (savedMode === "bsp" || savedMode === "ann" || savedMode === "ma" || savedMode === "fx_d" || savedMode === "fangliang" || savedMode === "lianzhang" || savedMode === "rsi" || savedMode === "backtest") {
                     _scanMode = savedMode;
                     var radio = document.querySelector('input[name="scan-mode"][value="' + savedMode + '"]');
                     if (radio) radio.checked = true;
@@ -7277,6 +7280,33 @@
                 return;
             }
 
+            // rsi：RSI 超买 / 超卖扫描（最近 N 根内**任一根**的 RSI 值越过阈值即命中）。
+            //   判据与阈值全在后端 AppScan.scan_one 的 rsi 分支（同一句话见那里的注释）；
+            //   前端只做分组计数与渲染，**不重算 RSI**。
+            if (_scanMode === "rsi") {
+                runScan({
+                    mode: "rsi",
+                    recent: _scanRecentDays,
+                    errLabel: "RSI扫描",
+                    initialSummary: function(preSkipped, total) {
+                        return '<div class="scan-loading"><div class="spinner"></div><br>正在扫描 0/' + total + '，跳过 ' + preSkipped + ' 只，超卖 0 只，超买 0 只</div>';
+                    },
+                    progressLine: function(completed, total, preSkipped, skipped, results) {
+                        var underCount = 0, overCount = 0;
+                        for (var i = 0; i < results.length; i++) {
+                            if (_rsiGroupOf(results[i]) === "under") { underCount++; } else { overCount++; }
+                        }
+                        return '<div class="scan-loading"><div class="spinner"></div><br>正在扫描 ' + (completed + "/" + total) + '，跳过 ' + (preSkipped + skipped) + ' 只，超卖 ' + underCount + ' 只，超买 ' + overCount + ' 只</div>';
+                    },
+                    classify: function(data) { return !!data.is_rsi; },
+                    renderRows: function(results) { return _renderRsiRows(results); },
+                    renderFinal: function(results, total, skipped, interrupted) {
+                        renderRsiScanResults(results, total, skipped, interrupted);
+                    }
+                });
+                return;
+            }
+
             // 买卖点扫描模式（默认）：按最新买卖点类型排序，先买点后卖点
             runScan({
                 mode: "",
@@ -7598,6 +7628,98 @@
                 html += '<div class="scan-no-result">当前周期下未发现连涨标的</div>';
             } else {
                 html += _renderLianzhangRows(results);
+            }
+            body.innerHTML = html;
+            updateScanSaveBtn();
+        }
+
+        // ── RSI 扫描（rsi 模式）─────────────────────────────────────────
+        // 组别读取：后端 rsi_group 是归类判定的**唯一事实源**（口径见
+        //   AppScan.scan_one 的 rsi 分支：先看窗口末根，末根中性时超卖优先）。
+        //   字段缺失（异常行 / 旧缓存）时按 rsi_last 兜底推断，保证渲染不因
+        //   缺字段而把行画错组。
+        function _rsiGroupOf(r) {
+            if (r && r.rsi_group === "under") return "under";
+            if (r && r.rsi_group === "over") return "over";
+            var v = Number((r || {}).rsi_last);
+            return (isFinite(v) && v <= RSI_SEG_UNDER) ? "under" : "over";
+        }
+
+        // RSI 标签HTML：配色与 K 线图副图 RSI **分段着色**同源（rsiColorOf）——
+        //   超买 → MACD 红（.fl-rise = COLORS.macdUp）、超卖 → MACD 青
+        //   （.fl-fall = COLORS.macdDown），正是副图折线越过上/下沿时的两段取色。
+        //   文本 = 组名 + 关键极值（超卖取窗口最小 / 超买取窗口最大，**与排序键
+        //   同一取值**，标签与排序不许各算一份）+ 越界根数/窗口根数。
+        function buildRsiTagHtml(r) {
+            var isUnder = _rsiGroupOf(r) === "under";
+            var n = Number(r.recent_days || _scanRecentDays) || 0;
+            var hits = Number(isUnder ? r.rsi_hit_under : r.rsi_hit_over) || 0;
+            var v = Number(isUnder ? r.rsi_min : r.rsi_max);
+            var txt = (isUnder ? "超卖 " : "超买 ") + (isFinite(v) ? v.toFixed(1) : "--");
+            if (n > 0) { txt += " (" + hits + "/" + n + ")"; }
+            return '<span class="scan-bsp-tag ' + (isUnder ? "fl-fall" : "fl-rise") + '">' + txt + '</span>';
+        }
+
+        // RSI 口径披露行 —— 与连涨/放量披露行**同构**（同 class + 同字号/颜色），
+        //   进度期与终态共用同一份（防两处漂移）。
+        //   「含边界」必须点明：RSI 恰好 = 阈值也算命中 —— 与副图折线分段着色
+        //   同口径（rsiColorOf 用 >= / <=）。不写清楚，用户看到「图上一条线正压在
+        //   超买虚线上却没被扫出来」只会当成 bug 来查。
+        //   阈值取自 RSI_SEG_OVER / RSI_SEG_UNDER（派生自 RSI_REF_VALUES），
+        //   **不写第二遍 80 / 20 字面量**。
+        function _rsiCaliberHtml() {
+            return '<div class="scan-summary" style="font-size:10px;color:#7a8399;">'
+                + '最近 ' + _scanRecentDays + ' 根 · 判据：其中任一根 RSI ≥ ' + RSI_SEG_OVER
+                + '（超买）或 ≤ ' + RSI_SEG_UNDER + '（超卖），含边界'
+                + ' · 同 K 线图 RSI 副图一条线、一对阈值 · 超卖组排超买组前</div>';
+        }
+
+        // RSI 结果行渲染（进度期与终态共用同一份，避免两处漂移）
+        //   列：股票名 · 代码 ·「超卖/超买 + 极值 + 越界根数」标签
+        //   组间（用户 2026-10-12 拍板）：**超卖组整体**排在超买组之前。
+        //   组内（用户拍板「按极值」）：
+        //     超卖组 → 窗口**最小** RSI 升序（跌得最深的排最前）；
+        //     超买组 → 窗口**最大** RSI 降序（冲得最高的排最前）。
+        //   勾选：命中即勾 —— 每行都已满足判据，与连涨/放量同约定。
+        function _renderRsiRows(results) {
+            var html = _scanMarketSummaryHtml(results);
+            html += _rsiCaliberHtml();
+            results.sort(function(a, b) {
+                var ga = _rsiGroupOf(a), gb = _rsiGroupOf(b);
+                if (ga !== gb) { return ga === "under" ? -1 : 1; }
+                if (ga === "under") {
+                    return (Number(a.rsi_min) || 0) - (Number(b.rsi_min) || 0);
+                }
+                return (Number(b.rsi_max) || 0) - (Number(a.rsi_max) || 0);
+            });
+            for (var i = 0; i < results.length; i++) {
+                var r = results[i];
+                html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\', \'' + _scanFreq + '\')" title="点击查看K线图">';
+                html += chkBox(r.code, true);
+                html += '<span class="scan-col-name">' + r.name + '</span>';
+                html += '<span class="scan-col-code">' + r.code + '</span>';
+                html += '<span class="scan-col-tags">' + buildRsiTagHtml(r) + '</span>';
+                html += '</div>';
+            }
+            return html;
+        }
+
+        // RSI 扫描结果渲染（终态）
+        function renderRsiScanResults(results, total, skipped, interrupted) {
+            var body = document.getElementById("scan-body");
+            var label = interrupted ? "（已中断）" : "";
+            var sourceLabel = _scanSourceLabel();
+            var underCount = 0, overCount = 0;
+            for (var i = 0; i < results.length; i++) {
+                if (_rsiGroupOf(results[i]) === "under") { underCount++; } else { overCount++; }
+            }
+            var html = '<div class="scan-summary">' + sourceLabel + ' <b>' + total + '</b> 只，跳过 <b>' + skipped + '</b> 只，扫描 <b>' + (total - skipped) + '</b> 只，超卖 <b>' + underCount + '</b> 只，超买 <b>' + overCount + '</b> 只' + label + '</div>';
+            if (results.length === 0) {
+                // 空结果同样给披露行（口径不该只在有票时才出现）—— 与放量同约定。
+                html += _rsiCaliberHtml();
+                html += '<div class="scan-no-result">当前周期下未发现 RSI 超买/超卖标的</div>';
+            } else {
+                html += _renderRsiRows(results);
             }
             body.innerHTML = html;
             updateScanSaveBtn();

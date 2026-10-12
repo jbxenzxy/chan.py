@@ -262,13 +262,18 @@
                 <span>根</span>
             </div>
             <div style="margin-bottom:10px;font-size:12px;color:#e94560;">扫描模式</div>
-            <!-- 扫描模式两行布局：第1行 标注 均线 放量 连涨；第2行 底分型 买/卖点 回测（4 列网格） -->
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px 16px;font-size:13px;color:#a8b2d1;margin-bottom:14px;">
+            <!-- 扫描模式两行布局：第1行 标注 均线 放量 连涨 RSI；第2行 底分型 买/卖点 回测（5 列网格） -->
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:8px 16px;font-size:13px;color:#a8b2d1;margin-bottom:14px;">
                 <label style="cursor:pointer;"><input type="radio" name="scan-mode" value="ann" checked="" onchange="updateScanRecentDisabled()" style="accent-color:#e94560;margin-right:4px;">标注</label>
                 <label style="cursor:pointer;"><input type="radio" name="scan-mode" value="ma" onchange="updateScanRecentDisabled()" style="accent-color:#e94560;margin-right:4px;">均线</label>
                 <label style="cursor:pointer;"><input type="radio" name="scan-mode" value="fangliang" onchange="updateScanRecentDisabled()" style="accent-color:#e94560;margin-right:4px;">放量</label>
                 <!-- 连涨：最近N根K线逐根收红（口径 = K线图红色：close>open，平盘白线不算），需「最近N根」 -->
                 <label style="cursor:pointer;"><input type="radio" name="scan-mode" value="lianzhang" onchange="updateScanRecentDisabled()" style="accent-color:#e94560;margin-right:4px;">连涨</label>
+                <!-- RSI 扫描：最近 N 根 K 线中**任意一根**的 RSI 值越过超买 / 超卖阈值即命中
+                     （**含边界**）。阈值与 K 线图副图的**分段着色**同源（RSI_SEG_OVER /
+                     RSI_SEG_UNDER 派生自 RSI_REF_VALUES），周期与副图同源（RSI_CYCLE）；
+                     需要「最近N根」。归类与排序见 app.js 的 renderRsiScanResults。 -->
+                <label style="cursor:pointer;"><input type="radio" name="scan-mode" value="rsi" onchange="updateScanRecentDisabled()" style="accent-color:#e94560;margin-right:4px;">RSI</label>
                 <label style="cursor:pointer;"><input type="radio" name="scan-mode" value="fx_d" onchange="updateScanRecentDisabled()" style="accent-color:#e94560;margin-right:4px;">底分型</label>
                 <label style="cursor:pointer;"><input type="radio" name="scan-mode" value="bsp" onchange="updateScanRecentDisabled()" style="accent-color:#e94560;margin-right:4px;">买/卖点</label>
                 <!-- 回测扫描：对来源内每票跑一遍与页面「回测」按钮同一套内核，

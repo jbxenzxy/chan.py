@@ -6,14 +6,15 @@
   ⑴ 扫描来源：三行 → 两行
        第1行：自选股  成分股  全A股
        第2行：板块指数2  板块指数3
-  ⑵ 扫描模式：单行 → 两行
-       第1行：标注  均线  放量  连涨
+  ⑵ 扫描模式：单行 → 两行（2026-10-12 第二轮：第1行尾部追加「RSI」）
+       第1行：标注  均线  放量  连涨  RSI
        第2行：底分型  买/卖点  回测
 
 实现（Frontend/app.html）：
   · 来源网格 2 列 → 3 列；并把「全A股」块移到「板块指数2」之前 —— DOM 顺序
     zxg → page_index → all_a → tdxhy2 → tdxhy3，自动落位 = 3+2；
-  · 模式容器 display:flex → 4 列网格 —— DOM 顺序不动，自动落位 = 4+3。
+  · 模式容器 display:flex → 5 列网格 —— DOM 顺序不动，自动落位 = 5+3。
+    追加 RSI 时实测：4 列会让 RSI 掉到第 2 行行首（第1行只剩 4 项），故必须 5 列。
   （两处各带一行「两行布局」说明注释，本用例把注释也纳入契约防静默回退。）
 
 两层守护
@@ -45,12 +46,12 @@ FRONTEND_DIR = os.path.join(ROOT, "Frontend")
 
 _OK = []
 
-# 契约：DOM 顺序即落位顺序（源 = 3 列 / 模式 = 4 列网格）
+# 契约：DOM 顺序即落位顺序（源 = 3 列 / 模式 = 5 列网格）
 EXPECT_SOURCES = [("zxg", "自选股"), ("page_index", "成分股"), ("all_a", "全A股"),
                   ("tdxhy2", "板块指数2"), ("tdxhy3", "板块指数3")]
 EXPECT_MODES = [("ann", "标注"), ("ma", "均线"), ("fangliang", "放量"),
-                ("lianzhang", "连涨"), ("fx_d", "底分型"), ("bsp", "买/卖点"),
-                ("backtest", "回测")]
+                ("lianzhang", "连涨"), ("rsi", "RSI"), ("fx_d", "底分型"),
+                ("bsp", "买/卖点"), ("backtest", "回测")]
 
 
 def check(name, cond, detail=""):
@@ -112,20 +113,23 @@ def part_static():
 
     # ── ⑵ 扫描模式 ──
     mp = pairs(mode_sec, "scan-mode")
-    check("② 模式 7 项、DOM 顺序不变（标注…回测）",
+    check("② 模式 8 项、DOM 顺序不变（标注…连涨 RSI 底分型…回测）",
           mp == EXPECT_MODES, mp)
-    check("② 模式容器为 4 列网格（自动落位 = 4+3）",
-          re.search(r'display:grid;\s*grid-template-columns:\s*1fr 1fr 1fr 1fr;',
+    check("② 模式容器为 5 列网格（自动落位 = 5+3）",
+          re.search(r'display:grid;\s*grid-template-columns:\s*1fr 1fr 1fr 1fr 1fr;',
                     mode_sec) is not None, mode_sec[:180])
+    check("② 旧 4 列模式网格零残留（全文件；4 列会让 RSI 掉到第 2 行）",
+          'grid-template-columns:1fr 1fr 1fr 1fr;' not in html,
+          "仍存在 4 列声明")
     check("② 旧 flex 单行写法零残留（全文件）",
           'display:flex;gap:16px;font-size:13px;color:#a8b2d1;margin-bottom:14px;'
           not in html, "仍存在旧 flex 容器")
-    check("② 4 列落位 ⇒ 第1行 标注 均线 放量 连涨",
-          [lbl for _, lbl in mp][:4] == ["标注", "均线", "放量", "连涨"],
-          [lbl for _, lbl in mp][:4])
-    check("② 4 列落位 ⇒ 第2行 底分型 买/卖点 回测（共 3 项）",
-          [lbl for _, lbl in mp][4:] == ["底分型", "买/卖点", "回测"],
-          [lbl for _, lbl in mp][4:])
+    check("② 5 列落位 ⇒ 第1行 标注 均线 放量 连涨 RSI",
+          [lbl for _, lbl in mp][:5] == ["标注", "均线", "放量", "连涨", "RSI"],
+          [lbl for _, lbl in mp][:5])
+    check("② 5 列落位 ⇒ 第2行 底分型 买/卖点 回测（共 3 项）",
+          [lbl for _, lbl in mp][5:] == ["底分型", "买/卖点", "回测"],
+          [lbl for _, lbl in mp][5:])
 
     # ── 需求留痕（两个布局注释）──
     check("①② 两处「两行布局」说明注释在位（需求留痕，防静默回退）",
@@ -261,8 +265,8 @@ def part_render():
     check("① 真渲染：第1行 = 自选股 成分股 全A股", rs[:1] == [["自选股", "成分股", "全A股"]], rs)
     check("① 真渲染：第2行 = 板块指数2 板块指数3", rs[1:2] == [["板块指数2", "板块指数3"]], rs)
     check("② 真渲染：扫描模式**恰好 2 行**（改前为 1 行）", len(rm) == 2, rm)
-    check("② 真渲染：第1行 = 标注 均线 放量 连涨",
-          rm[:1] == [["标注", "均线", "放量", "连涨"]], rm)
+    check("② 真渲染：第1行 = 标注 均线 放量 连涨 RSI（改前 4 项）",
+          rm[:1] == [["标注", "均线", "放量", "连涨", "RSI"]], rm)
     check("② 真渲染：第2行 = 底分型 买/卖点 回测",
           rm[1:2] == [["底分型", "买/卖点", "回测"]], rm)
 
@@ -271,12 +275,12 @@ def part_render():
           len(data["sources"]) == 5
           and all(it["h"] <= 34 for it in data["sources"]),
           [(it["text"], it["h"]) for it in data["sources"] if it["h"] > 34])
-    check("② 真渲染：7 个模式项全部单行（无 padding 的单行高 17px，折行会到 34+）",
-          len(data["modes"]) == 7
+    check("② 真渲染：8 个模式项全部单行（无 padding 的单行高 17px，折行会到 34+）",
+          len(data["modes"]) == 8
           and all(it["h"] <= 26 for it in data["modes"]),
           [(it["text"], it["h"]) for it in data["modes"] if it["h"] > 26])
     box = data["box"]
-    check("② 真渲染：12 个复选项全部不越出对话框盒子",
+    check("② 真渲染：13 个复选项全部不越出对话框盒子",
           all(box["left"] <= it["left"] and it["right"] <= box["right"]
               for it in all_items),
           [(it["text"], it["left"], it["right"], box) for it in all_items
@@ -285,7 +289,7 @@ def part_render():
 
 def main():
     print("=" * 68)
-    print("扫描对话框两行布局契约（来源 3+2 / 模式 4+3）")
+    print("扫描对话框两行布局契约（来源 3+2 / 模式 5+3）")
     print("=" * 68)
     part_static()
     part_render()
