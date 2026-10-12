@@ -1437,12 +1437,12 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         # 买点（笔N/笔N-2 均向下）：A = 笔N-2 笔内 DIF 负侧峰值（到 0 轴距离），B = 笔N 笔内 DIF 负侧峰值
         # 卖点（笔N/笔N-2 均向上）：A = 笔N-2 笔内 DIF 正侧峰值（到 0 轴距离），B = 笔N 笔内 DIF 正侧峰值
         # 峰值口径 = Cal_MACD_dif（整笔扫描方向侧 |DIF| 最大者；无方向侧柱子时取 eps 兜底）
-        # 要求 (A-B)/A >= config.retrace_zero_axis_ratio（默认 0.618）才算背驰
+        # 要求 (A-B)/A > config.retrace_zero_axis_ratio（默认 0.618）才算背驰
         # 笔N-2 取到 eps 兜底时，比值 <= 0，视为不满足
         nm2_dist = stroke_nm2.cal_macd_metric(MACD_ALGO.DIF)
         n_dist = stroke_n.cal_macd_metric(MACD_ALGO.DIF)
         dif_ratio = (nm2_dist - n_dist) / nm2_dist if nm2_dist != 0 else None
-        ratio_ok = dif_ratio is not None and dif_ratio >= config.retrace_zero_axis_ratio
+        ratio_ok = dif_ratio is not None and dif_ratio > config.retrace_zero_axis_ratio
         if not ratio_ok:
             self._dbg_bs1('cal_bs1point', '跳过: 笔内DIF峰值回0轴比例不足',
                           n_idx=stroke_n.idx, nm2_idx=stroke_nm2.idx,
