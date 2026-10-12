@@ -459,17 +459,19 @@ class CBi:
     @make_cache
     def is_macd_lines_same_side(self):
         """
-        整笔区间内 DIF（白线）与笔方向同侧且位于 0 轴下(上)。
-          - 向下笔: 要求 DIF<0（整笔每一根）
-          - 向上笔: 要求 DIF>0（整笔每一根）
-        任一 K 线不满足即返回 False。空笔返回 False。
+        整笔区间内 DIF（白线）不得与笔方向反侧（0 轴视为不反侧）。
+          - 向下笔: 要求 DIF<=0（整笔每一根）
+          - 向上笔: 要求 DIF>=0（整笔每一根）
+        任一 K 线反侧即返回 False。空笔返回 False。
+        DIF==0 判通过：与 BuySellPoint._dif_all_same_side 的边界口径统一。
         """
         klus = [k for klc in self.klc_lst for k in klc.lst]
         if not klus:
             return False
         expected = -1 if self.is_down() else 1
         for k in klus:
-            if k.macd.DIF * expected <= 0:
+            # 反侧才拒（DIF==0 判通过，与 _dif_all_same_side 边界口径统一）
+            if k.macd.DIF * expected < 0:
                 return False
         return True
 

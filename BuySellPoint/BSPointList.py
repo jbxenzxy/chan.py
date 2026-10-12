@@ -923,7 +923,8 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
     @staticmethod
     def _dif_all_same_side(bi, positive: bool) -> bool:
         """整笔每根 DIF 是否全在 0 轴趋势侧：positive=True 要求全 >=0，False 要求全 <=0
-        DIF 恰为 0 视为「在 0 轴上」。带参方法不加 @make_cache（装饰器只允许 (self)）
+        DIF 恰为 0 视为「在 0 轴上」判通过（与 Bi.is_macd_lines_same_side 边界口径统一）。
+        带参方法不加 @make_cache（装饰器只允许 (self)）
         """
         for klc in bi.klc_lst:
             for k in klc.lst:
