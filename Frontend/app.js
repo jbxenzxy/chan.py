@@ -6854,12 +6854,18 @@
         }
 
         // 实际执行扫描（由对话框确认后调用）
-        // 辅助：市场分布摘要（上海/深圳/北京/香港 计数），fx_d / fangliang / bsp 共用
+        // 辅助：市场分布摘要（上海/深圳/北京/香港 计数），**全部 6 个扫描模式共用**
+        //   （fx_d / fangliang / bsp / lianzhang / rsi / backtest）。
+        //   code 契约（后端 `App/AppUtils.py::_get_stock_market_code`）：market(小写) + code(数字)、
+        //   market 在前、**无任何连接符**（例 sh600519 / sz000001 / hk00700）；扫描链路的 market
+        //   由 `AppScan.scan_one` 的 `_PREFIX_MAP` 产出，取值只有 sh / sz / bj / hk 四个。
+        //   ⇒ 市场前缀取 code 的**前两字符**，大写化后与下面的字面量比较。
+        //   ⚠ 不得改回按 "." 分段：点号形态（600519.SH 之类）在全链路**从未存在过** ——
+        //     历史版本据此取市场，导致 4 个计数恒为 0、摘要恒为空串（2026-09-29 引入 → 2026-10-13 修复）。
         function _scanMarketSummaryHtml(results) {
             var shCount = 0, szCount = 0, bjCount = 0, hkCount = 0;
             for (var i = 0; i < results.length; i++) {
-                var parts = results[i].code.split(".");
-                var mkt = parts.length > 1 ? parts[1] : "";
+                var mkt = results[i].code.slice(0, 2).toUpperCase();
                 if (mkt === "SH") { shCount++; }
                 else if (mkt === "SZ") { szCount++; }
                 else if (mkt === "BJ") { bjCount++; }
@@ -6870,6 +6876,8 @@
             if (szCount > 0) marketParts.push("深圳 <b>" + szCount + "</b> 只");
             if (bjCount > 0) marketParts.push("北京 <b>" + bjCount + "</b> 只");
             if (hkCount > 0) marketParts.push("香港 <b>" + hkCount + "</b> 只");
+            // 无匹配市场（ds 指数 / 期货代码 / 无前缀裸数字）时不留空 div —— 免得白撑 8px 空白。
+            if (marketParts.length === 0) { return ""; }
             return '<div class="scan-summary" style="margin-top:8px;">' + marketParts.join("，") + '</div>';
         }
 
