@@ -35,7 +35,7 @@
      N=1 与 N 超长 / 返回字段与裸码约定；
   ② 阈值同源与判据方向（源码锚点 + 真导入 + 跨语言同值 + rsi 分支内无 80/20 副本）；
   ③ 前端真函数（node 抽 app.js 真代码）：排序（组间超卖全前 + 组内按极值）/
-     标签文本与配色类 / 披露行（阈值随变量走 + 含边界）/ 空结果态 / 缺字段兜底；
+     标签文本与配色类 / 披露行（阈值随变量走、只留判据句）/ 空结果态 / 缺字段兜底；
   ④ 接线完整性：模式枚举 / 持久化白名单 / 自动补 3 / 标题 / runScan 分支指向 /
      app.html 选项与 DOM 顺序。
 
@@ -357,6 +357,10 @@ _ROWS = [
      "rsi_hit_under": 1, "rsi_hit_over": 0},
 ]
 
+# 披露行的「判据句」判别词 —— 面板只留这一句（不含阈值数字，随变量插值）。
+#   用它而非「含边界」探测披露行存在性：后者已按要求从面板移除。
+_CAL_MARK = "判据：其中任一根"
+
 
 def part3():
     print("══ ③ 前端真函数（node 抽段；node 不在位则 SKIP）══")
@@ -470,17 +474,20 @@ def part3():
           calvals == [RSI_OVERBOUGHT, RSI_OVERSOLD]
           and (">= " in cal.replace("≥", ">=")) and ("<= " in cal.replace("≤", "<=")),
           (calvals, cal))
-    check("③ 披露行：点明「含边界」（否则「压在阈值线上却没扫到」必被当 bug）",
-          "\u542b\u8fb9\u754c" in cal, cal)
-    check("③ 披露行：写明最近 N 根（取自 _scanRecentDays = 3）与「超卖组排超买组前」",
-          "\u6700\u8fd1 3 \u6839" in cal and "\u8d85\u5356\u7ec4\u6392\u8d85\u4e70\u7ec4\u524d" in cal, cal)
+    check("③ 披露行：**只留判据一句话** —— 不含「含边界 / 副图同源 / 排序」等实现侧话术",
+          all(w not in cal for w in ("\u542b\u8fb9\u754c", "\u526f\u56fe",
+                                     "\u8d85\u5356\u7ec4\u6392\u8d85\u4e70\u7ec4\u524d",
+                                     "\u4e00\u5bf9")), cal)
+    check("③ 披露行：以「最近 N 根（取自 _scanRecentDays = 3）+ 判据句」收尾，句后无追加",
+          "\u6700\u8fd1 3 \u6839" in cal
+          and cal.rstrip().endswith("\uff08\u8d85\u5356\uff09</div>"), cal)
     check("③ 披露行样式与连涨/放量口径行同构（class=scan-summary + 同字号/颜色）",
           'class="scan-summary"' in cal and "font-size:10px" in cal
           and "#7a8399" in cal, cal)
 
     rows_html = json.loads(kv["ROWS"])
     check("③ renderRows：市场分布 + 披露行 + 6 行数据共存（披露不挤掉结果）",
-          "<mkt:6>" in rows_html and "\u542b\u8fb9\u754c" in rows_html
+          "<mkt:6>" in rows_html and _CAL_MARK in rows_html
           and rows_html.count("scan-stock-row") == 6, rows_html[:200])
 
     fin = json.loads(kv["FIN"])
@@ -488,13 +495,13 @@ def part3():
           "\u8d85\u5356 <b>4</b> \u53ea" in fin and "\u8d85\u4e70 <b>2</b> \u53ea" in fin,
           fin[:400])
     check("③ 终态：含披露行 + 6 行数据行",
-          "\u542b\u8fb9\u754c" in fin and fin.count("scan-stock-row") == 6, fin[:300])
+          _CAL_MARK in fin and fin.count("scan-stock-row") == 6, fin[:300])
     check("③ 终态：勾选框按 code 生成（复用 chkBox，命中即勾）",
           fin.count("<chk:") == 6, fin.count("<chk:"))
 
     empty = json.loads(kv["EMPTY"])
     check("③ 空结果态：披露行仍在（口径不该只在有票时才出现）+ 零数据行",
-          "\u542b\u8fb9\u754c" in empty and "scan-stock-row" not in empty
+          _CAL_MARK in empty and "scan-stock-row" not in empty
           and "\u672a\u53d1\u73b0 RSI" in empty, empty[:300])
 
     check("③ 进度期与终态**共用** _renderRsiRows（防两处漂移）",

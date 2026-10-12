@@ -7670,16 +7670,15 @@
 
         // RSI 口径披露行 —— 与连涨/放量披露行**同构**（同 class + 同字号/颜色），
         //   进度期与终态共用同一份（防两处漂移）。
-        //   「含边界」必须点明：RSI 恰好 = 阈值也算命中 —— 与副图折线分段着色
-        //   同口径（rsiColorOf 用 >= / <=）。不写清楚，用户看到「图上一条线正压在
-        //   超买虚线上却没被扫出来」只会当成 bug 来查。
+        //   **面板只留判据一句话**：含边界口径、与副图同源、排序规则等**实现侧
+        //   保证一律不上面板** —— 它们分别由 AppScan 分支的 >= / <= 判据、rsiColorOf
+        //   与 Test/test_scan_rsi_mode.py 钉住；写上面板只会变成读者看不懂的术语堆叠。
         //   阈值取自 RSI_SEG_OVER / RSI_SEG_UNDER（派生自 RSI_REF_VALUES），
-        //   **不写第二遍 80 / 20 字面量**。
+        //   **不写第二遍阈值数字**。
         function _rsiCaliberHtml() {
             return '<div class="scan-summary" style="font-size:10px;color:#7a8399;">'
                 + '最近 ' + _scanRecentDays + ' 根 · 判据：其中任一根 RSI ≥ ' + RSI_SEG_OVER
-                + '（超买）或 ≤ ' + RSI_SEG_UNDER + '（超卖），含边界'
-                + ' · 同 K 线图 RSI 副图一条线、一对阈值 · 超卖组排超买组前</div>';
+                + '（超买）或 ≤ ' + RSI_SEG_UNDER + '（超卖）</div>';
         }
 
         // RSI 结果行渲染（进度期与终态共用同一份，避免两处漂移）
