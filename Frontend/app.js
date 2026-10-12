@@ -127,6 +127,11 @@
         // RSI 纵轴刻度档位 = 参考线同一组值，只按上→下排序（单一来源，不再写第二遍字面量）。
         //   刻度与参考线因此天然同位：标签画在哪一档，那条虚线就在哪一行。
         const RSI_AXIS_LEVELS = RSI_REF_VALUES.slice().sort((a, b) => b - a);
+        // RSI 折线**分段着色**的两个阈值 = 超买 / 超卖参考线的值本身（同一份 RSI_REF_VALUES
+        //   派生，不写第二遍 80 / 20）：≥ 上沿用 MACD 红柱色、≤ 下沿用 MACD 绿柱色、其余白。
+        //   取色只认**值**，与翻转视图无关（翻转只翻 Y 位置，见 drawRsi）。
+        const RSI_SEG_OVER = Math.max.apply(null, RSI_REF_VALUES);
+        const RSI_SEG_UNDER = Math.min.apply(null, RSI_REF_VALUES);
 
         // 双窗口模式逐窗布局参数（fix#1+#2）：
         // 双窗时每个 canvas 高度被砍半，若沿用单窗的 PADDING/GAP 绝对值与 0.2 占比，
@@ -2097,12 +2102,37 @@
                 : area.y + area.h - (v - range.min) / span * area.h;
         }
 
-        // RSI 折线（单线）+ 50 中轴 + 80/20 超买超卖参考线。
+        // 折线**分段取色**：值 → 颜色。三档色全走 COLORS 引用（不写颜色字面量）——
+        //   ≥ 超买阈值 → MACD 红柱色、≤ 超卖阈值 → MACD 绿柱色、其余 → 白（COLORS.rsi）。
+        //   纯函数（不碰 area / range / 翻转）：取色只看值 ⇒ 翻转视图下颜色序列不变。
+        function rsiColorOf(v) {
+            if (v >= RSI_SEG_OVER) return COLORS.macdUp;
+            if (v <= RSI_SEG_UNDER) return COLORS.macdDown;
+            return COLORS.rsi;
+        }
+
+        // 相邻两点之间的**变色点**：返回 (0, 1) 内的 t（升序），两端 0 / 1 由调用方补。
+        //   值沿相邻两点线性 ⇒ 与两条阈值线各解一次交点即可；一段同时跨两条（如 10 → 90）
+        //   给两个 t。t 落在 0 / 1 上（端点恰好压在阈值上）不算断点 —— 这类「擦线」不产生
+        //   零长段，归色一律交给 rsiColorOf 按**子段中点**判（≥ 归红 / ≤ 归绿只写一次）。
+        function rsiSegmentCuts(v0, v1) {
+            const dv = v1 - v0;
+            if (dv === 0) return [];
+            return [RSI_SEG_OVER, RSI_SEG_UNDER]
+                .map(th => (th - v0) / dv)
+                .filter(t => t > 0 && t < 1)
+                .sort((a, b) => a - b);
+        }
+
+        // RSI 折线（单线**分段着色**）+ 50 中轴 + 80/20 超买超卖参考线。
         // 三条水平线的 y **全部走同一个 rsiToY(v)**，禁止手写 area.h * 0.2 / * 0.8 之类
         // 相对比例 —— MACD 那条 0 轴踩过的坑正是"同一条线用两个式子算"。
         // 值域自适应后参考线可能整体出界（放大到趋势段时 20/80 都在窗外）：出界那条
         //   直接不画 —— 照画会落到相邻区域上（MACD 的 0 轴就有这个隐患）。
-        // 翻转视图：三条线整体镜像（80 ↔ 20 互换、50 是不动点）；单线单色
+        // 折线按超买 / 超卖**分段着色**（见 rsiColorOf）：≥ 上沿 → MACD 红柱色、≤ 下沿 →
+        //   MACD 绿柱色、其余 → 白；变色点取在与阈值线的交点上（rsiSegmentCuts 线性插值），
+        //   同色连续的子段合并成一条 path，只在变色处断笔。
+        // 翻转视图：三条线与折线整体镜像（80 ↔ 20 互换、50 是不动点）；取色只看值
         //   ⇒ 只翻 Y 位置，不改颜色、不改数值。
         function drawRsi(klines, area, range, barStep, subPixelOffset) {
             // 三条线**同一套线型**（细点虚线），只靠明度区分中轴与超买超卖：
@@ -2116,19 +2146,47 @@
                 ctx.beginPath(); ctx.moveTo(area.x, y); ctx.lineTo(area.x + area.w, y); ctx.stroke();
             });
             ctx.setLineDash([]);
-            // 折线：k.rsi 缺失的点不画（与 k.dif 缺失时 ZERO_MACD_VALS 兜底同思路）
-            ctx.strokeStyle = COLORS.rsi; ctx.lineWidth = 1;
-            ctx.beginPath();
-            let started = false;
+            // 折线：k.rsi 缺失的点不画（与 k.dif 缺失时 ZERO_MACD_VALS 兜底同思路）。
+            // 分段着色：相邻两根之间按 rsiSegmentCuts 切开，逐子段用 rsiColorOf 取色；
+            //   **同色连续的子段合并进同一条 path**（保留折线拐点连接），只在变色处断笔。
+            //   整段归色不行 —— 一段从 79 拉到 85 的线若整段判色，越过阈值的那半截会跟着
+            //   另一半的色走（80 → 10 的长段更明显：整段判红，超卖区那截却没上绿）。
+            ctx.lineWidth = 1;
+            let prev = null;      // 上一根有值的点 {x, v}
+            let run = null;       // 当前同色段 {color, pts: [{x, v}]}
+            const flushRun = () => {
+                if (!run) return;
+                ctx.strokeStyle = run.color;
+                ctx.beginPath();
+                run.pts.forEach((p, j) => {
+                    const y = rsiToY(p.v, area, range);
+                    if (j === 0) ctx.moveTo(p.x, y); else ctx.lineTo(p.x, y);
+                });
+                ctx.stroke();
+                run = null;
+            };
             klines.forEach((k, i) => {
                 const v = rsiOf(k);
-                if (v === null) { started = false; return; }
+                if (v === null) { flushRun(); prev = null; return; }   // 缺值 ⇒ 断笔
                 const x = area.x + barStep * i + barStep / 2 - subPixelOffset;
-                const y = rsiToY(v, area, range);
-                if (started) ctx.lineTo(x, y);
-                else { ctx.moveTo(x, y); started = true; }
+                if (prev === null) { prev = { x: x, v: v }; return; }
+                const ts = [0].concat(rsiSegmentCuts(prev.v, v), [1]);
+                for (let j = 0; j < ts.length - 1; j++) {
+                    const ta = ts[j], tb = ts[j + 1];
+                    // 断点处的 x / v 按同一比例线性插值（v 线性 ⇒ y 仍走 rsiToY 同源）
+                    const pa = { x: prev.x + (x - prev.x) * ta, v: prev.v + (v - prev.v) * ta };
+                    const pb = { x: prev.x + (x - prev.x) * tb, v: prev.v + (v - prev.v) * tb };
+                    const col = rsiColorOf((pa.v + pb.v) / 2);    // 归色看子段中点
+                    if (!run || run.color !== col) {
+                        flushRun();                               // 变色：上一段收口（末点 = pa）
+                        run = { color: col, pts: [pa, pb] };
+                    } else {
+                        run.pts.push(pb);
+                    }
+                }
+                prev = { x: x, v: v };
             });
-            ctx.stroke();
+            flushRun();
             ctx.setLineDash([]);
         }
 

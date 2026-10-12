@@ -29,7 +29,8 @@
      · drawRsiAxis 档位 = 与参考线同源的语义档位 80 / 50 / 20（非 MACD 的零线 "0"）
      · RSI 分支不做颜色对调（只翻 Y 位置、不改颜色）
   ⑤ RSI 观感契约（颜色 / 参考线 / chip / 标签行分割线 / 点虚线）
-     · 曲线色 ≡ MACD 白线色（COLORS.rsi == COLORS.dif）；标签数值用 COLORS.dif
+     · 曲线色 ≡ MACD 白线色（COLORS.rsi == COLORS.dif）；白 = 20~80 中间段，
+       超买 / 超卖两段的取值见 ⑩；标签数值用 COLORS.dif
      · 三条参考线 = [50, 80, 20]，统一「细点虚线」[1, 3]（不再各自 setLineDash）
      · chip 短名 'RSI'（标签行仍带参数 RSI(12):，与 MACD 槽「chip=MACD / 标签带参数」同构）
      · 槽 1..n-1 的标签行上沿补分割线（槽 0 那条已由主图末条网格线给出，不叠画两遍）
@@ -48,6 +49,13 @@
      · 随机 300 组 × 4 个周期 + 边界（首根 / 全平 / 单调 / 样本<period / 切换点）
      · tick 用法：n−1 处快照 `copy().feed(末根)` ≡ 全量末根，且快照不被污染
      · 源码反锚点：SSE tick 路径不再有 `calculate_rsi(closes)` 全量调用
+  ⑩ RSI 折线分段着色（node 真执行 rsiColorOf / rsiSegmentCuts / drawRsi + 桩 ctx）
+     · 取色映射：≥ 超买阈值（80）→ MACD 红柱色、≤ 超卖阈值（20）→ MACD 绿柱色、其余 → 白
+     · 变色点 = 与阈值线的交点（线性插值）；擦线（端点恰好压在阈值上）不产生零长段
+     · 端到端（真跑 drawRsi 记 stroke）：红段每点 ≥ 80 / 绿段每点 ≤ 20 / 白段居中，
+       且各段首尾逐点重合（无断口 / 无重叠）
+     · 翻转视图颜色序列逐段不变、y 逐点镜像；缺值处断笔不连桥
+     · 源码反锚点：两个阈值由 RSI_REF_VALUES 派生、三档取色全走 COLORS 引用
 
 零网络、零浏览器、秒级。跑法：python Test/test_bottom_slots.py
 """
@@ -564,10 +572,14 @@ def test_mirror():
     rec("④", "一档都不在窗内时退化为值域上下沿（纵轴不留白；也无写死的 \"0\" / \"100\"）",
         "range.max.toFixed(2)" in axis and "range.min.toFixed(2)" in axis
         and '"0"' not in axis and '"100"' not in axis, "")
-    rec("④", "RSI 分支不做颜色对调（只翻 Y 位置、不改颜色）：无涨跌色 / COLORS.up|down",
+    rec("④", "RSI 分支不做颜色对调（只翻 Y 位置、不改颜色）：无涨跌色字面量 / COLORS.up|down",
         all(k not in draw + axis for k in ("#FF3C3C", "#00F0F0", "COLORS.up", "COLORS.down")), "")
-    rec("④", "RSI 折线为单色 COLORS.rsi（与红绿涨跌体系不冲突）",
-        "COLORS.rsi" in draw and "setLineDash" in draw, "")
+    rec("④", "折线取色只看值：drawRsi / rsiColorOf 里都不出现 _isMirrorMode（翻转不改颜色），"
+              "三档色由 rsiColorOf 一处给出",
+        "rsiColorOf(" in draw and "_isMirrorMode" not in draw
+        and "_isMirrorMode" not in fn_src(js, "rsiColorOf")
+        and all(k in fn_src(js, "rsiColorOf")
+                for k in ("COLORS.macdUp", "COLORS.macdDown", "COLORS.rsi")), "")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -617,7 +629,7 @@ def test_rsi_style_and_range():
     # ① 曲线色 = MACD 白线色；标签数值同色
     dif = re.search(r"\bdif:\s*\"([^\"]+)\"", js)
     rsi = re.search(r"\brsi:\s*\"([^\"]+)\"", js)
-    rec("①", "RSI 曲线色 ≡ MACD 白线色（COLORS.rsi 与 COLORS.dif 取同一色值）",
+    rec("①", "RSI 曲线色 ≡ MACD 白线色（COLORS.rsi 与 COLORS.dif 取同一色值；白 = 20~80 中间段）",
         bool(dif and rsi and dif.group(1).upper() == rsi.group(1).upper()),
         "dif=%s rsi=%s" % (dif.group(1) if dif else None, rsi.group(1) if rsi else None))
     lbl = fn_src(js, "drawRsiSlotLabel")
@@ -909,6 +921,189 @@ def test_rsi_incremental():
 
 
 # ══════════════════════════════════════════════════════════════════
+# ⑩ RSI 折线分段着色
+# ══════════════════════════════════════════════════════════════════
+SEG_STUB = r"""
+// 桩 ctx：只记录每次 stroke 的颜色 / 线型 / 点序列（drawRsi 用到的绘图 API 就这几个）
+function makeCtx() {
+  return {
+    lineWidth: 1, strokeStyle: "", fillStyle: "", _dash: [], _path: [], strokes: [],
+    setLineDash(a) { this._dash = a.slice(); },
+    beginPath() { this._path = []; },
+    moveTo(x, y) { this._path.push([x, y]); },
+    lineTo(x, y) { this._path.push([x, y]); },
+    stroke() {
+      this.strokes.push({ color: this.strokeStyle, dash: this._dash.slice(),
+                          pts: this._path.slice() });
+    },
+  };
+}
+const AREA = { x: 0, y: 100, w: 400, h: 200 };
+const RANGE = { min: 0, max: 100 };
+const STEP = 10;
+function ks(vals) { return vals.map(v => ({ rsi: v })); }
+// y → 值（rsiToY 的逆）：把桩里记到的像素点还原成 RSI 值，用来判「这一段落在哪个区」
+function yToV(y) {
+  return _isMirrorMode ? RANGE.min + (y - AREA.y) / AREA.h * (RANGE.max - RANGE.min)
+                       : RANGE.min + (AREA.y + AREA.h - y) / AREA.h * (RANGE.max - RANGE.min);
+}
+function segStrokes(klines, mirror) {
+  _isMirrorMode = mirror;
+  ctx.strokes = [];
+  drawRsi(klines, AREA, RANGE, STEP, 0);
+  return ctx.strokes
+    .filter(s => s.color === COLORS.rsi || s.color === COLORS.macdUp
+              || s.color === COLORS.macdDown)
+    .map(s => ({ color: s.color, dash: s.dash,
+                 pts: s.pts.map(p => ({ x: p[0], y: p[1], v: yToV(p[1]) })) }));
+}
+"""
+
+SEG_TAIL = r"""
+const SERIES = [50, 95, 50, 5, 50];     // 白 → 红 → 白 → 绿 → 白
+const out = {
+  colorsConst: { up: COLORS.macdUp, down: COLORS.macdDown, white: COLORS.rsi },
+  colors: [0, 20, 19.999999999, 20.000000001, 50, 79.999999999, 80, 80.000000001, 100]
+            .map(v => ({ v: v, c: rsiColorOf(v) })),
+  cuts: {
+    plateau:  rsiSegmentCuts(90, 90),      // 等值：无断点
+    inside:   rsiSegmentCuts(60, 70),      // 段内不跨阈值
+    upCross:  rsiSegmentCuts(50, 90),      // 上行跨超买线：t = 0.75
+    dnCross:  rsiSegmentCuts(90, 50),      // 下行跨超买线：t = 0.25
+    both:     rsiSegmentCuts(90, 10),      // 同时跨两条：0.125 / 0.875
+    onEdgeLo: rsiSegmentCuts(80, 70),      // 端点恰压在阈值上：不算断点
+    onEdgeHi: rsiSegmentCuts(70, 80),
+  },
+  e2e: segStrokes(ks(SERIES), false),
+  mir: segStrokes(ks(SERIES), true),
+  gap: segStrokes([{ rsi: 90 }, { rsi: 95 }, { rsi: null }, { rsi: 5 }, { rsi: 3 }], false),
+  noField: segStrokes([{ close: 1 }, { close: 2 }], false),
+  refDash: (function () {
+    _isMirrorMode = false; ctx.strokes = [];
+    drawRsi(ks(SERIES), AREA, RANGE, STEP, 0);
+    return ctx.strokes.filter(s => s.dash.length).map(s => s.dash.join(","));
+  })(),
+  step: STEP,
+};
+process.stdout.write(JSON.stringify(out));
+"""
+
+
+def _seg_driver(js):
+    return "\n".join([
+        const_line(js, r"const RSI_REF_VALUES = \[[^\]]*\];"),
+        const_line(js, r"const RSI_REF_DASH = \[[^\]]*\];"),
+        const_line(js, r"const RSI_SEG_OVER = [^\n]*"),
+        const_line(js, r"const RSI_SEG_UNDER = [^\n]*"),
+        const_line(js, r"const COLORS = \{[^}]*\};"),
+        "let _isMirrorMode = false;",
+        fn_src(js, "rsiOf"),
+        fn_src(js, "rsiToY"),
+        fn_src(js, "rsiColorOf"),
+        fn_src(js, "rsiSegmentCuts"),
+        fn_src(js, "drawRsi"),
+        SEG_STUB,
+        "const ctx = makeCtx();",
+        SEG_TAIL,
+    ])
+
+
+def test_rsi_segment_colors():
+    print("\n⑩ RSI 折线分段着色（node 真执行 rsiColorOf / rsiSegmentCuts / drawRsi）")
+    js = read(APP_JS)
+    d = run_node(_seg_driver(js), "⑩")
+    if d is None:
+        return
+    up = d["colorsConst"]["up"]
+    dn = d["colorsConst"]["down"]
+    wh = d["colorsConst"]["white"]
+
+    # ① 取色映射（真执行 rsiColorOf 打表）
+    col = d["colors"]
+    got = [row["c"] for row in col]
+    rec("⑩", "取值映射：v ≥ 80 → MACD 红柱色、v ≤ 20 → MACD 绿柱色、20 < v < 80 → 白",
+        got == [dn, dn, dn, wh, wh, wh, up, up, up],
+        "打表 %s" % [(row["v"], row["c"]) for row in col])
+    mu = re.search(r'\bmacdUp:\s*"([^"]+)"', js)
+    md = re.search(r'\bmacdDown:\s*"([^"]+)"', js)
+    mw = re.search(r'\brsi:\s*"([^"]+)"', js)
+    rec("⑩", "返回的正是 COLORS 里那三个值（不是复制出来的第二份字面量）",
+        bool(mu and md and mw and up == mu.group(1) and dn == md.group(1)
+             and wh == mw.group(1)),
+        "up=%s down=%s white=%s" % (up, dn, wh))
+
+    # ② 变色点 = 与阈值线的交点
+    cuts = d["cuts"]
+    rec("⑩", "变色点是**交点**不是整段归色：50→90 一处（t=0.75）、90→10 两处（0.125 / 0.875）",
+        [round(t, 6) for t in cuts["upCross"]] == [0.75]
+        and [round(t, 6) for t in cuts["both"]] == [0.125, 0.875], str(cuts))
+    rec("⑩", "下行同解（90→50 的 t=0.25）；不跨阈值与「擦线」（80→70 / 70→80）都不切",
+        [round(t, 6) for t in cuts["dnCross"]] == [0.25]
+        and cuts["plateau"] == [] and cuts["inside"] == []
+        and cuts["onEdgeLo"] == [] and cuts["onEdgeHi"] == [], str(cuts))
+
+    # ③ 端到端：桩 ctx 真跑 drawRsi
+    e2e = d["e2e"]
+    seq = [s["color"] for s in e2e]
+    rec("⑩", "端到端颜色序列（50→95→50→5→50）= 白 / 红 / 白 / 绿 / 白",
+        seq == [wh, up, wh, dn, wh], str(seq))
+    red = [p["v"] for s in e2e if s["color"] == up for p in s["pts"]]
+    grn = [p["v"] for s in e2e if s["color"] == dn for p in s["pts"]]
+    wht = [p["v"] for s in e2e if s["color"] == wh for p in s["pts"]]
+    rec("⑩", "红段每点 v ≥ 80、绿段每点 v ≤ 20（变色点恰好压在阈值线上）",
+        bool(red) and min(red) >= 80 - 1e-9 and bool(grn) and max(grn) <= 20 + 1e-9,
+        "red_min=%.9f grn_max=%.9f" % (min(red), max(grn)))
+    rec("⑩", "白段每点 20 ≤ v ≤ 80（白段不侵占超买 / 超卖区）",
+        bool(wht) and min(wht) >= 20 - 1e-9 and max(wht) <= 80 + 1e-9,
+        "white=[%.9f, %.9f]" % (min(wht), max(wht)))
+    joints = [(a["pts"][-1], b["pts"][0]) for a, b in zip(e2e, e2e[1:])]
+    badj = [j for j in joints
+            if abs(j[0]["x"] - j[1]["x"]) > 1e-9 or abs(j[0]["y"] - j[1]["y"]) > 1e-9]
+    x0, xN = e2e[0]["pts"][0]["x"], e2e[-1]["pts"][-1]["x"]
+    rec("⑩", "分段无断口 / 无重叠：各段交接逐点重合，整体覆盖 4 段 × 10px 的 x 跨度",
+        not badj and abs((xN - x0) - 4 * d["step"]) < 1e-9
+        and abs(x0 - d["step"] / 2.0) < 1e-9,
+        "坏接头=%d x=[%.1f, %.1f]" % (len(badj), x0, xN))
+
+    # ④ 翻转：只翻 Y、不改颜色
+    mir = d["mir"]
+    rec("⑩", "翻转视图颜色序列逐段不变（取色只看值，不随视角换色）",
+        [s["color"] for s in mir] == seq, str([s["color"] for s in mir]))
+    sums = sorted(set(round(a["y"] + b["y"], 9)
+                      for sa, sb in zip(e2e, mir) for a, b in zip(sa["pts"], sb["pts"])))
+    rec("⑩", "翻转视图 y 逐点镜像（y + y' ≡ 2×area.y + area.h = 400），点数一一对应",
+        len(mir) == len(e2e)
+        and [len(s["pts"]) for s in mir] == [len(s["pts"]) for s in e2e]
+        and sums == [400.0], "sums=%s 段数=%d/%d" % (sums, len(mir), len(e2e)))
+
+    # ⑤ 缺值断笔 + 参考线线型
+    gap = d["gap"]
+    rec("⑩", "缺值处断笔不连桥（红段 / 绿段各成一段，x 正好跳过缺值那一根）",
+        len(gap) == 2 and gap[0]["color"] == up and gap[1]["color"] == dn
+        and abs((gap[1]["pts"][0]["x"] - gap[0]["pts"][-1]["x"]) - 2 * d["step"]) < 1e-9,
+        str([(s["color"], s["pts"][0]["x"], s["pts"][-1]["x"]) for s in gap]))
+    rec("⑩", "整窗无 rsi 字段 ⇒ 一段都不画（不把缺值连成直线）",
+        d["noField"] == [], str(d["noField"]))
+    rec("⑩", "三条参考线仍是细点虚线（分段着色没把线型带跑）",
+        d["refDash"] == ["1,3"] * 3, str(d["refDash"]))
+
+    # ⑥ 源码反锚点：阈值同源、抽色全走 COLORS 引用
+    m1 = re.search(r"const RSI_SEG_OVER = ([^;]+);", js)
+    m2 = re.search(r"const RSI_SEG_UNDER = ([^;]+);", js)
+    rec("⑩", "两个阈值由 RSI_REF_VALUES 派生（超买 / 超卖参考线本身，不写第二遍 80 / 20）",
+        bool(m1 and m2 and "RSI_REF_VALUES" in m1.group(1)
+             and "RSI_REF_VALUES" in m2.group(1)),
+        "%s | %s" % (m1.group(1).strip() if m1 else None,
+                     m2.group(1).strip() if m2 else None))
+    colsrc = fn_src(js, "rsiColorOf")
+    rec("⑩", "三档取色全走 COLORS 引用、无颜色字面量（#rrggbb / rgba(...)）",
+        "#" not in colsrc and "rgba(" not in colsrc, colsrc.replace("\n", " ")[:110])
+    seg = strip_comments(fn_src(js, "rsiSegmentCuts"))
+    rec("⑩", "drawRsi / rsiSegmentCuts 里不出现 80 / 20 字面量（阈值只从 RSI_SEG_* 取）",
+        not re.search(r"\b(80|20)\b", strip_comments(fn_src(js, "drawRsi")) + seg), "")
+
+
+# ══════════════════════════════════════════════════════════════════
 def main():
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -925,6 +1120,7 @@ def main():
     test_rsi_cycle_ssot()
     test_core_rsi_same_source()
     test_rsi_incremental()
+    test_rsi_segment_colors()
     print("-" * 64)
     if _failed:
         for f in _failed:
