@@ -60,13 +60,18 @@ SAMPLE = "sz002190_d.json"
 # 2026-10-06 4th/nzs/68th 新增「DIF 背驰前置闸」（_is_stroke_divergence(MACD_ALGO.DIF)，
 # 要求离开笔DIF峰值 < 进入笔DIF峰值；面积判据保留于后）——4th 原 2 笔 T0（2023/04）
 # 过面积但未过 DIF 闸而归零，以下三项随新口径重冻：
+# 2026-10-12 0 类点离开笔突破阈值由基准区间 smoothstep 改为 zs_height
+# （BSPointList._out_bi_break_threshold，有意放宽）——本样本 4th 新增 3 个 T0
+# （2024/04/18、19、22；宽松/严格口径下相同，闸门只影响 57th），随实测重冻。
+# 57th 自身口径未变（宽松 6 / 严格 0），三处 57th 基线保持。
 BASE_ENTER_57TH = 30
-BASE_LOOSE_T0_DATES = ["2025/07/17", "2025/07/18", "2025/07/21", "2025/07/22",
+BASE_LOOSE_T0_DATES = ["2024/04/18", "2024/04/19", "2024/04/22",
+                       "2025/07/17", "2025/07/18", "2025/07/21", "2025/07/22",
                        "2025/08/18", "2025/08/19"]
-BASE_STRICT_T0_DATES = []
+BASE_STRICT_T0_DATES = ["2024/04/18", "2024/04/19", "2024/04/22"]
 BASE_LOOSE_57TH_T0_COUNT = 6
 BASE_STRICT_57TH_T0_COUNT = 0
-BASE_4TH_T0_COUNT = 0
+BASE_4TH_T0_COUNT = 3
 BASE_T3_COUNT = 3
 
 BRANCHES = (

@@ -36,25 +36,25 @@
    "file": "sz002190_d.json",
    "freq": "d",
    "metrics": {
-    "avg_bars_held": 6.0,
-    "avg_net_return": 0.0601421207,
+    "avg_bars_held": 7.66666667,
+    "avg_net_return": 0.0558028143,
     "e": 0,
-    "expectancy_r": 1.7224,
+    "expectancy_r": 1.51788333,
     "l": 4,
     "max_loss_r": -1.4214,
     "max_win_r": 12.7201,
-    "n": 5,
-    "profit_factor": 2.32101897,
+    "n": 6,
+    "profit_factor": 2.47084756,
     "u": 0,
-    "w": 1,
-    "win_rate": 0.2
+    "w": 2,
+    "win_rate": 0.3333333333
    },
    "note": "日线；基准样本（p0_sz002190_d.json 详版在 bt01）",
    "run": {
     "bars_total": 1393,
     "signals_filtered": 0,
-    "signals_rejected": 4,
-    "signals_seen": 9,
+    "signals_rejected": 6,
+    "signals_seen": 12,
     "type_appended_after_freeze": 0
    },
    "sha256": "56083668fff052dbfc5edceda3f7c7ae46e7a99f31db094c9e46d0727583fdc0",
@@ -108,6 +108,22 @@
      "trade_id": 3
     },
     {
+     "bars_held": 16,
+     "bsp_type": "0",
+     "entry_date": "2024-04-18",
+     "entry_price": 15.218,
+     "exit_date": "2024-05-15",
+     "exit_price": 15.748,
+     "exit_reason": "breakeven",
+     "net_return": 0.034106282,
+     "open": false,
+     "r_distance": 1.07,
+     "r_multiple": 0.4953,
+     "shares": 3300,
+     "side": "long",
+     "trade_id": 4
+    },
+    {
      "bars_held": 11,
      "bsp_type": "0",
      "entry_date": "2025-07-17",
@@ -121,7 +137,7 @@
      "r_multiple": -1.4214,
      "shares": 1400,
      "side": "long",
-     "trade_id": 4
+     "trade_id": 5
     },
     {
      "bars_held": 6,
@@ -137,7 +153,7 @@
      "r_multiple": 12.7201,
      "shares": 1400,
      "side": "long",
-     "trade_id": 5
+     "trade_id": 6
     }
    ]
   },
@@ -494,25 +510,25 @@
    "file": "sz002190_5m.json",
    "freq": "5m",
    "metrics": {
-    "avg_bars_held": 19.02173913,
-    "avg_net_return": -0.0028758305,
+    "avg_bars_held": 19.61702128,
+    "avg_net_return": -0.0026100994,
     "e": 0,
-    "expectancy_r": -1.08380217,
+    "expectancy_r": -1.02882766,
     "l": 30,
     "max_loss_r": -31.5,
     "max_win_r": 5.0476,
-    "n": 46,
-    "profit_factor": 0.60369303,
+    "n": 47,
+    "profit_factor": 0.6324931,
     "u": 0,
-    "w": 16,
-    "win_rate": 0.347826087
+    "w": 17,
+    "win_rate": 0.3617021277
    },
    "note": "5m（vipdoc fzline 原始周期）",
    "run": {
     "bars_total": 11616,
     "signals_filtered": 0,
     "signals_rejected": 47,
-    "signals_seen": 93,
+    "signals_seen": 94,
     "type_appended_after_freeze": 0
    },
    "sha256": "fc4f7ae44f53e31cc777214d0a4398dccf58e2c47108240b31980e865c61a95f",
@@ -918,6 +934,22 @@
      "trade_id": 25
     },
     {
+     "bars_held": 47,
+     "bsp_type": "0",
+     "entry_date": "2026-04-15 09:55",
+     "entry_price": 32.0,
+     "exit_date": "2026-04-16 09:50",
+     "exit_price": 31.67,
+     "exit_reason": "trailing",
+     "net_return": 0.0096135312,
+     "open": false,
+     "r_distance": 0.22,
+     "r_multiple": 1.5,
+     "shares": 1600,
+     "side": "short",
+     "trade_id": 26
+    },
+    {
      "bars_held": 10,
      "bsp_type": "3",
      "entry_date": "2026-04-20 14:15",
@@ -931,7 +963,7 @@
      "r_multiple": 4.75,
      "shares": 1600,
      "side": "long",
-     "trade_id": 26
+     "trade_id": 27
     },
     {
      "bars_held": 14,
@@ -947,7 +979,7 @@
      "r_multiple": -1.5,
      "shares": 1600,
      "side": "short",
-     "trade_id": 27
+     "trade_id": 28
     },
     {
      "bars_held": 8,
@@ -963,7 +995,7 @@
      "r_multiple": 2.0,
      "shares": 1800,
      "side": "long",
-     "trade_id": 28
+     "trade_id": 29
     },
     {
      "bars_held": 11,
@@ -979,7 +1011,7 @@
      "r_multiple": -1.0526,
      "shares": 1500,
      "side": "long",
-     "trade_id": 29
+     "trade_id": 30
     },
     {
      "bars_held": 9,
@@ -995,7 +1027,7 @@
      "r_multiple": -3.8889,
      "shares": 1700,
      "side": "short",
-     "trade_id": 30
+     "trade_id": 31
     },
     {
      "bars_held": 15,
@@ -1011,7 +1043,7 @@
      "r_multiple": -1.7219,
      "shares": 1800,
      "side": "short",
-     "trade_id": 31
+     "trade_id": 32
     },
     {
      "bars_held": 18,
@@ -1027,7 +1059,7 @@
      "r_multiple": -1.1071,
      "shares": 1800,
      "side": "long",
-     "trade_id": 32
+     "trade_id": 33
     },
     {
      "bars_held": 88,
@@ -1043,7 +1075,7 @@
      "r_multiple": -1.0105,
      "shares": 1800,
      "side": "long",
-     "trade_id": 33
+     "trade_id": 34
     },
     {
      "bars_held": 20,
@@ -1059,7 +1091,7 @@
      "r_multiple": 2.8,
      "shares": 1900,
      "side": "short",
-     "trade_id": 34
+     "trade_id": 35
     },
     {
      "bars_held": 26,
@@ -1075,7 +1107,7 @@
      "r_multiple": 0.963,
      "shares": 1900,
      "side": "long",
-     "trade_id": 35
+     "trade_id": 36
     },
     {
      "bars_held": 16,
@@ -1091,7 +1123,7 @@
      "r_multiple": 1.8554,
      "shares": 2000,
      "side": "long",
-     "trade_id": 36
+     "trade_id": 37
     },
     {
      "bars_held": 2,
@@ -1107,7 +1139,7 @@
      "r_multiple": -1.5455,
      "shares": 2000,
      "side": "short",
-     "trade_id": 37
+     "trade_id": 38
     },
     {
      "bars_held": 30,
@@ -1123,7 +1155,7 @@
      "r_multiple": 5.0476,
      "shares": 2000,
      "side": "long",
-     "trade_id": 38
+     "trade_id": 39
     },
     {
      "bars_held": 29,
@@ -1139,7 +1171,7 @@
      "r_multiple": 1.3306,
      "shares": 2200,
      "side": "short",
-     "trade_id": 39
+     "trade_id": 40
     },
     {
      "bars_held": 2,
@@ -1155,7 +1187,7 @@
      "r_multiple": -1.2,
      "shares": 2400,
      "side": "long",
-     "trade_id": 40
+     "trade_id": 41
     },
     {
      "bars_held": 2,
@@ -1171,7 +1203,7 @@
      "r_multiple": 4.2,
      "shares": 2200,
      "side": "long",
-     "trade_id": 41
+     "trade_id": 42
     },
     {
      "bars_held": 5,
@@ -1187,7 +1219,7 @@
      "r_multiple": -1.2,
      "shares": 2000,
      "side": "long",
-     "trade_id": 42
+     "trade_id": 43
     },
     {
      "bars_held": 4,
@@ -1203,7 +1235,7 @@
      "r_multiple": -1.1667,
      "shares": 2200,
      "side": "long",
-     "trade_id": 43
+     "trade_id": 44
     },
     {
      "bars_held": 2,
@@ -1219,7 +1251,7 @@
      "r_multiple": -1.0833,
      "shares": 2200,
      "side": "long",
-     "trade_id": 44
+     "trade_id": 45
     },
     {
      "bars_held": 3,
@@ -1235,7 +1267,7 @@
      "r_multiple": -1.5,
      "shares": 1900,
      "side": "long",
-     "trade_id": 45
+     "trade_id": 46
     },
     {
      "bars_held": 1,
@@ -1251,7 +1283,7 @@
      "r_multiple": -2.3333,
      "shares": 2000,
      "side": "short",
-     "trade_id": 46
+     "trade_id": 47
     }
    ]
   }

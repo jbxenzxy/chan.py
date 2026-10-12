@@ -62,13 +62,13 @@
    ],
    "drift_count": 3,
    "ever_but_not_final": [],
-   "ever_seen": 9,
+   "ever_seen": 12,
    "field_revision_signals": [
     "2021-08-23 type=3 buy=True",
     "2021-12-22 type=3 buy=True",
     "2022-05-24 type=3 buy=False"
    ],
-   "final_alive": 9,
+   "final_alive": 12,
    "fixture": {
     "bars": 1393,
     "file": "sz002190_d.json",
@@ -83,7 +83,7 @@
     "2021-12-22 type=3 buy=True": 1,
     "2022-05-24 type=3 buy=False": 4
    },
-   "signals_total": 9,
+   "signals_total": 12,
    "xcheck": {
     "drift_trade_rows": [
      {
@@ -118,8 +118,8 @@
      }
     ],
     "r_lt_A_last_count": 2,
-    "signals_seen": 9,
-    "trades": 5
+    "signals_seen": 12,
+    "trades": 6
    }
   },
   {

@@ -229,12 +229,12 @@ def main(argv):
             print("         %-6s 严格 filled=%d 期望R=%s | 放宽 filled=%d 期望R=%s"
                   % (name, A[name]["filled"], A[name]["expectancy_r"],
                      B[name]["filled"], B[name]["expectancy_r"]))
-        return 0
+        return True
 
     if not os.path.exists(SNAP_PATH):
         check("基线文件存在", False,
               "缺 %s —— 先跑 --freeze 生成" % os.path.relpath(SNAP_PATH, ROOT))
-        return 1
+        return False
 
     with io.open(SNAP_PATH, encoding="utf-8") as f:
         want = json.load(f)

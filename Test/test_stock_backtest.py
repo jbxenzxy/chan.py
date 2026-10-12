@@ -123,12 +123,15 @@ def part1():
     # 2026-10-08 重冻（以 custom-dev 最新代码 ae6a5e2 为准）：该版恢复了
     #   BSPointList 的 `_has_bsp_for_bi`（笔N-2需有买卖点）拦截 ⇒ 内核不再输出
     #   2 类买卖点，本切片笔数 6→5。拦截是**内核行为**，基线必须跟着内核走。
-    check("交易笔数 = 5（P0-④ 基线）", run["filled"] == 5, "filled=%r" % run["filled"])
-    check("胜负平 = 1/4/0", (s["w"], s["l"], s["e"]) == (1, 4, 0),
+    # 2026-10-12 重冻（0 类点离开笔突破阈值由基准区间 smoothstep 改为 zs_height，
+    #   见 BSPointList._out_bi_break_threshold）⇒ 本切片新增 1 笔 0 类
+    #   （2024-04-18 入场、保本出场 R=+0.4953），5→6 笔。
+    check("交易笔数 = 6（P0-④ 基线）", run["filled"] == 6, "filled=%r" % run["filled"])
+    check("胜负平 = 2/4/0", (s["w"], s["l"], s["e"]) == (2, 4, 0),
           "w/l/e=%r" % ((s["w"], s["l"], s["e"]),))
-    check("实际胜率 = 1/5 = 0.2", abs(s["win_rate"] - 1.0 / 5.0) < 1e-6,
+    check("实际胜率 = 2/6 = 0.333333", abs(s["win_rate"] - 2.0 / 6.0) < 1e-6,
           "win_rate=%r" % s["win_rate"])
-    check("期望 R ≈ 1.7224（L3 启动阈值 2R 口径）", abs(s["expectancy_r"] - 1.7224) < 1e-3,
+    check("期望 R ≈ 1.517883（L3 启动阈值 2R 口径）", abs(s["expectancy_r"] - 1.517883) < 1e-3,
           "expectancy_r=%r" % s["expectancy_r"])
     check("区间 [2021-01-04, 2026-09-30] 且 bars=1393",
           tgt["date_from"] == "2021-01-04" and tgt["date_to"] == "2026-09-30"
@@ -253,8 +256,8 @@ def part3(kl, base_exp):
     d032 = _call("sz002190", "d", kl, bsp_types="0,2,3")
     d_empty = _call("sz002190", "d", kl, bsp_types="")
 
-    check('"0" → 2 笔 / R≈5.64935',
-          d0["run"]["filled"] == 2 and abs(d0["summary"]["expectancy_r"] - 5.64935) < 1e-3,
+    check('"0" → 3 笔 / R≈3.931333',
+          d0["run"]["filled"] == 3 and abs(d0["summary"]["expectancy_r"] - 3.931333) < 1e-3,
           "filled=%r R=%r" % (d0["run"]["filled"], d0["summary"]["expectancy_r"]))
     check('"3" → 3 笔 / R≈-0.8956',
           d3["run"]["filled"] == 3 and abs(d3["summary"]["expectancy_r"] + 0.8956) < 1e-3,
@@ -266,10 +269,10 @@ def part3(kl, base_exp):
           d2["run"]["filled"] == 0,
           'filled=%r' % d2["run"]["filled"])
     check('"0,3" ≡ 全放行（切片无 2 类可差）',
-          d03["run"]["filled"] == d_none["run"]["filled"] == 5,
+          d03["run"]["filled"] == d_none["run"]["filled"] == 6,
           "filled=%r 全放行=%r" % (d03["run"]["filled"], d_none["run"]["filled"]))
     check('"0,2,3" ≡ 全放行（多勾不存在的 2 类不改变结果）',
-          d032["run"]["filled"] == d_none["run"]["filled"] == 5
+          d032["run"]["filled"] == d_none["run"]["filled"] == 6
           and abs(d032["summary"]["expectancy_r"] - base_exp) < 1e-9,
           "filled=%r R=%r base=%r" % (d032["run"]["filled"],
                                       d032["summary"]["expectancy_r"], base_exp))
