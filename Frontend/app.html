@@ -218,7 +218,8 @@
             <div class="annotation-dialog-title">股票扫描</div>
             <div id="scan-source-section">
             <div style="margin-bottom:10px;font-size:12px;color:#e94560;">扫描来源</div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+            <!-- 扫描来源两行布局：第1行 自选股 成分股 全A股；第2行 板块指数2 板块指数3（3 列网格） -->
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px;">
                 <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#a8b2d1;padding:6px 10px;border-radius:4px;background:#1a1a2e;" onmouseover="this.style.background='#0f3460'" onmouseout="this.style.background='#1a1a2e'">
                     <input type="checkbox" name="scan-source" value="zxg" checked="" style="accent-color:#e94560;">
                     自选股
@@ -228,16 +229,16 @@
                     成分股
                 </label>
                 <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#a8b2d1;padding:6px 10px;border-radius:4px;background:#1a1a2e;" onmouseover="this.style.background='#0f3460'" onmouseout="this.style.background='#1a1a2e'">
+                    <input type="checkbox" name="scan-source" value="all_a" style="accent-color:#e94560;">
+                    全A股
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#a8b2d1;padding:6px 10px;border-radius:4px;background:#1a1a2e;" onmouseover="this.style.background='#0f3460'" onmouseout="this.style.background='#1a1a2e'">
                     <input type="checkbox" name="scan-source" value="tdxhy2" style="accent-color:#e94560;">
                     板块指数2
                 </label>
                 <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#a8b2d1;padding:6px 10px;border-radius:4px;background:#1a1a2e;" onmouseover="this.style.background='#0f3460'" onmouseout="this.style.background='#1a1a2e'">
                     <input type="checkbox" name="scan-source" value="tdxhy3" style="accent-color:#e94560;">
                     板块指数3
-                </label>
-                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#a8b2d1;padding:6px 10px;border-radius:4px;background:#1a1a2e;" onmouseover="this.style.background='#0f3460'" onmouseout="this.style.background='#1a1a2e'">
-                    <input type="checkbox" name="scan-source" value="all_a" style="accent-color:#e94560;">
-                    全A股
                 </label>
             </div>
             <div style="display:flex;gap:6px;margin-bottom:14px;">
@@ -261,7 +262,8 @@
                 <span>根</span>
             </div>
             <div style="margin-bottom:10px;font-size:12px;color:#e94560;">扫描模式</div>
-            <div style="display:flex;gap:16px;font-size:13px;color:#a8b2d1;margin-bottom:14px;">
+            <!-- 扫描模式两行布局：第1行 标注 均线 放量 连涨；第2行 底分型 买/卖点 回测（4 列网格） -->
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px 16px;font-size:13px;color:#a8b2d1;margin-bottom:14px;">
                 <label style="cursor:pointer;"><input type="radio" name="scan-mode" value="ann" checked="" onchange="updateScanRecentDisabled()" style="accent-color:#e94560;margin-right:4px;">标注</label>
                 <label style="cursor:pointer;"><input type="radio" name="scan-mode" value="ma" onchange="updateScanRecentDisabled()" style="accent-color:#e94560;margin-right:4px;">均线</label>
                 <label style="cursor:pointer;"><input type="radio" name="scan-mode" value="fangliang" onchange="updateScanRecentDisabled()" style="accent-color:#e94560;margin-right:4px;">放量</label>

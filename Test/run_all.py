@@ -819,6 +819,15 @@ COMPONENTS = [
     #   ④ 静态契约（披露单一来源 / 后端严格 `>` / 配置 SSOT / 版本号 v=73）。
     ("scan_fangliang",
      [sys.executable, os.path.join("Test", "test_scan_fangliang_mode.py")]),
+    # 扫描对话框两处布局契约（2026-10-12 需求：来源三行→两行 / 模式单行→两行）：
+    #   ① 来源 5 项改 3 列网格 + DOM 顺序 自选股→成分股→全A股→板块指数2→板块指数3
+    #      ⇒ 第1行 自选股 成分股 全A股；第2行 板块指数2 板块指数3；
+    #   ② 模式 7 项改 4 列网格（DOM 顺序不动）⇒ 第1行 标注 均线 放量 连涨；
+    #      第2行 底分型 买/卖点 回测。
+    #   两层守护：[静态] 列数 / 成员顺序 / 标签文本逐字比对 + 旧写法零残留；
+    #   [真渲染] 无头 Chrome 量取 rect 按 top 分行 == 恰好 2 行，且不折行、不越出盒子。
+    ("scan_dialog_layout",
+     [sys.executable, os.path.join("Test", "test_scan_dialog_layout.py")]),
     # 未定义全局名静态护栏（2026-10-08 期货选点 NameError 事故防回潮）：
     #   db6f886 把「定位」段的 `config = _make_chan_config()` 换成
     #   `init_chan_symbol(...)`，下方 Step 4 的 `config=config` 遂成孤立引用
