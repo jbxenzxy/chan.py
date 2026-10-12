@@ -1042,24 +1042,12 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
 
         # ㈡ 离开笔4有效突破(中枢A)
         if not self._is_valid_out_bi(stroke_n, pivot_a):
-            base_range, ratio, _ = self._compute_base_range(pivot_a)
-            r = self.BS0_ZS_BREAK_RATIO
-            if stroke_n.is_up():
-                threshold = pivot_a.low + base_range * r
-                actual = stroke_n._high()
-                cond = f'need high(={actual:.2f}) >= zs_low + base_range*{r}(={threshold:.2f})'
-            else:
-                threshold = pivot_a.high - base_range * r
-                actual = stroke_n._low()
-                cond = f'need low(={actual:.2f}) <= zs_high - base_range*{r}(={threshold:.2f})'
-            self._dbg_bs0(' _cal_bs0point_4th', '跳过: 离开笔未有效突破中枢A',
+            threshold, actual, cond = self._out_bi_break_threshold(stroke_n, pivot_a)
+            self._dbg_bs0(' _cal_bs0point_4th', '跳过: 离开笔未有效突破中枢',
                           stroke_high=stroke_n._high(), stroke_low=stroke_n._low(),
                           zs_high=pivot_a.high, zs_low=pivot_a.low,
-                          zs_range=round(pivot_a.high - pivot_a.low, 2),
-                          peak_range=round(pivot_a.peak_high - pivot_a.peak_low, 2),
-                          ratio=round(ratio, 2),
-                          base_range=round(base_range, 2),
-                          threshold=round(threshold, 2), actual=actual,
+                          zs_height=round(pivot_a.high - pivot_a.low, 2),
+                          threshold=round(threshold, 2), actual=round(actual, 2),
                           condition=cond)
             return
 
@@ -1155,24 +1143,12 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
 
         # ㈡ 离开笔有效突破(中枢B)
         if not self._is_valid_out_bi(stroke_n, zs_b):
-            base_range, ratio, _ = self._compute_base_range(zs_b)
-            r = self.BS0_ZS_BREAK_RATIO
-            if stroke_n.is_up():
-                threshold = zs_b.low + base_range * r
-                actual = stroke_n._high()
-                cond = f'need high(={actual:.2f}) >= zs_low + base_range*{r}(={threshold:.2f})'
-            else:
-                threshold = zs_b.high - base_range * r
-                actual = stroke_n._low()
-                cond = f'need low(={actual:.2f}) <= zs_high - base_range*{r}(={threshold:.2f})'
-            self._dbg_bs0('_cal_bs0point_nth_nzs', '跳过: 离开笔未有效突破中枢B',
+            threshold, actual, cond = self._out_bi_break_threshold(stroke_n, zs_b)
+            self._dbg_bs0('_cal_bs0point_nth_nzs', '跳过: 离开笔未有效突破中枢',
                           stroke_high=stroke_n._high(), stroke_low=stroke_n._low(),
                           zs_b_high=zs_b.high, zs_b_low=zs_b.low,
-                          zs_range=round(zs_b.high - zs_b.low, 2),
-                          peak_range=round(zs_b.peak_high - zs_b.peak_low, 2),
-                          ratio=round(ratio, 2),
-                          base_range=round(base_range, 2),
-                          threshold=round(threshold, 2), actual=actual,
+                          zs_height=round(zs_b.high - zs_b.low, 2),
+                          threshold=round(threshold, 2), actual=round(actual, 2),
                           condition=cond)
             return False
 
@@ -1332,24 +1308,12 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
 
         # ㈠ 离开笔6/8有效突破(中枢A)
         if not self._is_valid_out_bi(stroke_n, pivot_a):
-            base_range, ratio, _ = self._compute_base_range(pivot_a)
-            r = self.BS0_ZS_BREAK_RATIO
-            if stroke_n.is_up():
-                threshold = pivot_a.low + base_range * r
-                actual = stroke_n._high()
-                cond = f'need high(={actual:.2f}) >= zs_low + base_range*{r}(={threshold:.2f})'
-            else:
-                threshold = pivot_a.high - base_range * r
-                actual = stroke_n._low()
-                cond = f'need low(={actual:.2f}) <= zs_high - base_range*{r}(={threshold:.2f})'
-            self._dbg_bs0('_cal_bs0point_nth_ozs_68th', '跳过: 离开笔未有效突破中枢A',
+            threshold, actual, cond = self._out_bi_break_threshold(stroke_n, pivot_a)
+            self._dbg_bs0('_cal_bs0point_nth_ozs_68th', '跳过: 离开笔未有效突破中枢',
                           stroke_high=stroke_n._high(), stroke_low=stroke_n._low(),
                           zs_high=pivot_a.high, zs_low=pivot_a.low,
-                          zs_range=round(pivot_a.high - pivot_a.low, 2),
-                          peak_range=round(pivot_a.peak_high - pivot_a.peak_low, 2),
-                          ratio=round(ratio, 2),
-                          base_range=round(base_range, 2),
-                          threshold=round(threshold, 2), actual=actual,
+                          zs_height=round(pivot_a.high - pivot_a.low, 2),
+                          threshold=round(threshold, 2), actual=round(actual, 2),
                           condition=cond)
             return
 
@@ -1816,63 +1780,40 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         if zs_low > zs_high:
             return False, None
 
-        # peak_high/peak_low：中枢内所有笔（bi1/bi2/bi3）的极值，即波动区间
-        zs_peak_high = max(bi1._high(), bi2._high(), bi3._high())
-        zs_peak_low = min(bi1._low(), bi2._low(), bi3._low())
-        zs = type('_ZS', (), {
-            'high': zs_high, 'low': zs_low,
-            'peak_high': zs_peak_high, 'peak_low': zs_peak_low,
-        })()
+        zs = type('_ZS', (), {'high': zs_high, 'low': zs_low})()
         return True, zs
+
+    @staticmethod
+    def _out_bi_break_threshold(stroke_n, zs):
+        """
+        离开笔有效突破的**阈值**（中枢高度口径）—— 供 _is_valid_out_bi 判定与三处 dbg 复用
+
+        上涨中枢(离开笔向上)：阈值 = 中枢下沿 + 中枢高度 × BS0_ZS_BREAK_RATIO，比较笔末端高点
+        下跌中枢(离开笔向下)：阈值 = 中枢上沿 - 中枢高度 × BS0_ZS_BREAK_RATIO，比较笔末端低点
+
+        返回值：
+            (threshold, actual, cond): 阈值 / 待比较的末端极值 / 判据文案（仅 dbg 用）
+        """
+        zs_height = zs.high - zs.low           # 中枢高度(重叠区间 ZD~ZG)
+        r = CMyBSPointList.BS0_ZS_BREAK_RATIO  # 0.8
+        if stroke_n.is_up():
+            threshold = zs.low + zs_height * r
+            actual = stroke_n._high()
+            cond = f'need high(={actual:.2f}) >= zs_low + zs_height*{r}(={threshold:.2f})'
+        else:
+            threshold = zs.high - zs_height * r
+            actual = stroke_n._low()
+            cond = f'need low(={actual:.2f}) <= zs_high - zs_height*{r}(={threshold:.2f})'
+        return threshold, actual, cond
 
     @staticmethod
     def _is_valid_out_bi(stroke_n, zs):
         """
-        检查离开笔是否有效突破中枢
-        向上笔高点 >= 中枢下沿 + 基准区间 × BS0_ZS_BREAK_RATIO(0.8)
-        向下笔低点 <= 中枢上沿 - 基准区间 × BS0_ZS_BREAK_RATIO(0.8)
+        离开笔是否有效突破中枢：末端极值越过阈值（向上一律 >= ，向下一律 <=）
+        阈值口径见 _out_bi_break_threshold
         """
-        
-        # 基准区间 由 _compute_base_range 计算（smoothstep 平滑过渡）
-        base_range, _, _ = CMyBSPointList._compute_base_range(zs)
-        if base_range < 0:
-            return False
-
-        r = CMyBSPointList.BS0_ZS_BREAK_RATIO  # 0.8
-        if stroke_n.is_up():
-            return stroke_n._high() >= zs.low + base_range * r
-        else:
-            return stroke_n._low() <= zs.high - base_range * r
-
-    @staticmethod
-    def _compute_base_range(zs):
-        """计算有效突破判断的基准区间（smoothstep 平滑过渡）
-
-        - zs_range = zs.high - zs.low（中枢重叠区间高度）
-        - peak_range = zs.peak_high - zs.peak_low（中枢波动区间高度）
-        - 当 peak_range / zs_range 在 [1.0, 2.0] 之间时，用 smoothstep
-          在 zs_range 和 peak_range 之间平滑过渡。
-        - ratio <= 1.0 → 返回 zs_range
-        - ratio >= 2.0 → 返回 peak_range
-
-        Returns:
-            (base_range, ratio, used_zs_range): 基准区间、波动比例、是否仅用重叠区间
-        """
-        zs_range = zs.high - zs.low
-        if zs_range <= 0:
-            return zs_range, 0.0, True
-
-        peak_range = zs.peak_high - zs.peak_low
-        ratio = peak_range / zs_range
-        if ratio <= 1.0:
-            return zs_range, ratio, True
-        elif ratio >= 2.0:
-            return peak_range, ratio, False
-        else:
-            # smoothstep: 3t² - 2t³, 在两端一阶导数为0，过渡自然
-            t = ratio - 1.0          # 将 [1.0, 2.0] 映射到 [0, 1]
-            weight = t * t * (3 - 2 * t)
-            return zs_range + (peak_range - zs_range) * weight, ratio, False
+        threshold, actual, _ = CMyBSPointList._out_bi_break_threshold(stroke_n, zs)
+        return actual >= threshold if stroke_n.is_up() else actual <= threshold
 
     @staticmethod
     def _is_stroke_divergence(n, nm2, macd_algo, config):
