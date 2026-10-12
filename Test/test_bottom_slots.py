@@ -56,6 +56,8 @@
        且各段首尾逐点重合（无断口 / 无重叠）
      · 翻转视图颜色序列逐段不变、y 逐点镜像；缺值处断笔不连桥
      · 源码反锚点：两个阈值由 RSI_REF_VALUES 派生、三档取色全走 COLORS 引用
+     · 值级位置规则：两个柱色的字面量值全文件各只出现一次（就是 COLORS 里的定义）
+       —— 函数级扫描看不见「值被复制到函数外」，值级计数能看见
 
 零网络、零浏览器、秒级。跑法：python Test/test_bottom_slots.py
 """
@@ -1011,6 +1013,47 @@ def _seg_driver(js):
 def test_rsi_segment_colors():
     print("\n⑩ RSI 折线分段着色（node 真执行 rsiColorOf / rsiSegmentCuts / drawRsi）")
     js = read(APP_JS)
+
+    # ⚠ 以下「源码反锚点」全是**静态**检查（只读 js 源码，不依赖 node），
+    #   必须放在 run_node **之前**：否则 node 一失败就 return，整段被跳过。
+    #   而「把色值复制到函数外」恰恰是会让 node 驱动器报 ReferenceError 的那类
+    #   改动 —— 静态反锚点被跳过时，漏掉的正是最该抓的那一改。
+    #   （2026-10-12 变异实测：端到端硬编码在旧结构下只被 ④ 组抓住。）
+    # ⑥ 源码反锚点：阈值同源、抽色全走 COLORS 引用、值级位置规则（值不可复制）
+    m1 = re.search(r"const RSI_SEG_OVER = ([^;]+);", js)
+    m2 = re.search(r"const RSI_SEG_UNDER = ([^;]+);", js)
+    rec("⑩", "两个阈值由 RSI_REF_VALUES 派生（超买 / 超卖参考线本身，不写第二遍 80 / 20）",
+        bool(m1 and m2 and "RSI_REF_VALUES" in m1.group(1)
+             and "RSI_REF_VALUES" in m2.group(1)),
+        "%s | %s" % (m1.group(1).strip() if m1 else None,
+                     m2.group(1).strip() if m2 else None))
+    colsrc = fn_src(js, "rsiColorOf")
+    rec("⑩", "三档取色全走 COLORS 引用、无颜色字面量（#rrggbb / rgba(...)）",
+        "#" not in colsrc and "rgba(" not in colsrc, colsrc.replace("\n", " ")[:110])
+    # ⚠ 上面那条是**函数级**扫描：把值复制到函数外（模块级 const / 别的函数）就看不见。
+    #   补一条**值级**规则：两个柱色的字面量值，全文件各只允许出现 1 次 —— 且那一次
+    #   必须是 COLORS 里的定义本身。值只要被复制到第二处，出现次数就 > 1，必红。
+    #   （COLORS.rsi / COLORS.dif = #FFFFFF 与 MA_COLORS[5] 共用同一色值，天生存多份，
+    #     不能套「出现一次」；白线由 ⑤ 组的 dif ≡ rsi 断言守护。）
+    _cm = re.search(r"const COLORS = \{[^}]*\};", js)
+    _dupes = []
+    for _k in ("macdUp", "macdDown"):
+        _vm = re.search(r"\b%s:\s*\"([^\"]+)\"" % _k, js)
+        if not _vm:
+            _dupes.append((_k, "缺定义", 0))
+            continue
+        _val = _vm.group(1)
+        _cnt = js.count(_val)
+        _first = js.index(_val)
+        if _cnt != 1 or not (_cm and _cm.start() <= _first < _cm.end()):
+            _dupes.append((_k, _val, _cnt))
+    rec("⑩", "值级位置规则：两个柱色的字面量值全文件各只出现一次（= COLORS 里的定义），"
+             "值被复制到函数外也算硬编码",
+        not _dupes, "越界/重复=%s" % _dupes)
+    seg = strip_comments(fn_src(js, "rsiSegmentCuts"))
+    rec("⑩", "drawRsi / rsiSegmentCuts 里不出现 80 / 20 字面量（阈值只从 RSI_SEG_* 取）",
+        not re.search(r"\b(80|20)\b", strip_comments(fn_src(js, "drawRsi")) + seg), "")
+
     d = run_node(_seg_driver(js), "⑩")
     if d is None:
         return
@@ -1086,21 +1129,6 @@ def test_rsi_segment_colors():
         d["noField"] == [], str(d["noField"]))
     rec("⑩", "三条参考线仍是细点虚线（分段着色没把线型带跑）",
         d["refDash"] == ["1,3"] * 3, str(d["refDash"]))
-
-    # ⑥ 源码反锚点：阈值同源、抽色全走 COLORS 引用
-    m1 = re.search(r"const RSI_SEG_OVER = ([^;]+);", js)
-    m2 = re.search(r"const RSI_SEG_UNDER = ([^;]+);", js)
-    rec("⑩", "两个阈值由 RSI_REF_VALUES 派生（超买 / 超卖参考线本身，不写第二遍 80 / 20）",
-        bool(m1 and m2 and "RSI_REF_VALUES" in m1.group(1)
-             and "RSI_REF_VALUES" in m2.group(1)),
-        "%s | %s" % (m1.group(1).strip() if m1 else None,
-                     m2.group(1).strip() if m2 else None))
-    colsrc = fn_src(js, "rsiColorOf")
-    rec("⑩", "三档取色全走 COLORS 引用、无颜色字面量（#rrggbb / rgba(...)）",
-        "#" not in colsrc and "rgba(" not in colsrc, colsrc.replace("\n", " ")[:110])
-    seg = strip_comments(fn_src(js, "rsiSegmentCuts"))
-    rec("⑩", "drawRsi / rsiSegmentCuts 里不出现 80 / 20 字面量（阈值只从 RSI_SEG_* 取）",
-        not re.search(r"\b(80|20)\b", strip_comments(fn_src(js, "drawRsi")) + seg), "")
 
 
 # ══════════════════════════════════════════════════════════════════

@@ -30,6 +30,11 @@
           逐字同构）；品种口径由标签行**右端 chip**（成交额 / 成交量）标识，不再另画
         且标签里的 DIF 数值 ≡ Python 侧 calculate_macd 在同一根K线上的结果；
         切回柱状图白线/橙线消失（双向实时）；翻转视图下白线/橙线照常在。
+        · RSI 槽：折线本体白 + 超买段红 / 超卖段青（COLORS.macdUp / macdDown）。
+          槽内不得出现旧色 #22D3EE 的**核心指纹**像素（分层：像素层）；且全仓
+          #22D3EE 只允许留在 MA_COLORS（MA55 均线色）—— 源码层。
+          注：「槽内青像素 = 0」是单色折线时代的口径，分段着色后会误伤合法的
+          超卖段青（COLORS.macdDown），已废弃。
         另：槽位交互（默认双槽 / chip 单击循环 + 落盘 / 双击不切换且不重置视图）
         与 RSI 槽的自适应纵轴（值域 = 可见窗口 rsi 的 min/max 各留 5%，再夹回
         指标定义域 [0,100]；刻度 = 语义档位 {80,50,20} ∩ 值域；一档都不在窗内时
@@ -423,9 +428,9 @@ RSI_LINE_PROBE_JS = r"""
   const h = Math.max(1, Math.round((y1 - y0) * dpr));
   const img = g.getImageData(Math.round(x0 * dpr), Math.round(y0 * dpr), w, h).data;
   const rows = [];
-  let whiteMin = null, whiteMax = null, whiteRows = 0, whitePix = 0, cyanPix = 0;
+  let whiteMin = null, whiteMax = null, whiteRows = 0, whitePix = 0, cyanPix = 0, legacyPix = 0;
   for (let yy = 0; yy < h; yy++) {
-    let cnt = 0, wy = 0, cy = 0;
+    let cnt = 0, wy = 0, cy = 0, lg = 0;
     for (let xx = 0; xx < w; xx++) {
       const i = (yy * w + xx) * 4;
       const r = img[i], gg = img[i + 1], b = img[i + 2], a = img[i + 3];
@@ -439,8 +444,15 @@ RSI_LINE_PROBE_JS = r"""
           && r >= 33 && r <= 115) cnt++;
       // RSI 折线：与 MACD 白线同色 #FFFFFF（r=g=b≈255）—— 靠「近白」与上面那类灰线区分
       if (r >= 200 && gg >= 200 && b >= 200) wy++;
-      // 旧青蓝 #22D3EE 残留探测（改白之后应为 0）
+      // 【仅统计·不作断言】松散「青」像素。#22D3EE（34,211,238）会命中，
+      //   **分段着色的超卖段**（COLORS.macdDown = rgba(0,240,240,0.6) 叠底
+      //   ≈ rgb(10,154,154)）同样会命中 —— 分段着色落地后「青」不再等价于
+      //   「旧色残留」，故只报数、不断言。
       if (gg > 100 && b > 100 && r + 40 < gg && r + 40 < b) cy++;
+      // 【断言用】旧青蓝 #22D3EE 的**核心指纹**：r≈34 / g≈211 / b≈238，
+      //   蓝绿分量差 b−g ≈ 27。叠底后的 macdDown 是 (10,154,154)：
+      //   g 只有 154（< 180）、且 b−g ≈ 0 —— 与本指纹不重叠，不会误判。
+      if (r <= 90 && gg >= 180 && b >= 200 && (b - gg) >= 10 && (b - gg) <= 60) lg++;
     }
     rows.push(cnt / w);
     if (wy > 0) {
@@ -450,9 +462,10 @@ RSI_LINE_PROBE_JS = r"""
       if (whiteMax === null || y > whiteMax) whiteMax = y;
     }
     cyanPix += cy;
+    legacyPix += lg;
   }
   return { rows, dpr, w, h, whiteMinY: whiteMin, whiteMaxY: whiteMax,
-           whiteRows, whitePix, cyanPix, area: { x0, y0, x1, y1 } };
+           whiteRows, whitePix, cyanPix, legacyPix, area: { x0, y0, x1, y1 } };
 }
 """
 
@@ -1066,11 +1079,27 @@ def test_real_render(failures):
                    and (rsi_probe_m.get("whitePix") or 0) > 200,
                    "白像素数：非翻转=%s 翻转=%s" % (rsi_probe_n.get("whitePix"),
                                                    rsi_probe_m.get("whitePix"))))
-    checks.append(("RSI 折线不再用旧青蓝 #22D3EE（槽 1 内青像素 = 0）",
-                   (rsi_probe_n.get("cyanPix") or 0) == 0
-                   and (rsi_probe_m.get("cyanPix") or 0) == 0,
-                   "青像素数：非翻转=%s 翻转=%s" % (rsi_probe_n.get("cyanPix"),
-                                                   rsi_probe_m.get("cyanPix"))))
+    # ⚠ 旧口径（「槽 1 青像素 = 0」）是**单色折线时代**的遗留：当时折线要么旧青蓝、
+    #   要么白，故「有青 = 没改干净」。分段着色落地后，超卖段的**合法**取色
+    #   COLORS.macdDown（青系）同样落在旧口径里，该断言必然红（实测青像素 非翻转=370 / 翻转=352）。
+    #   改判为两条：
+    #     (a) 像素层：槽内**旧色 #22D3EE 核心指纹**像素 = 0（与叠底 macdDown 不重叠）；
+    #     (b) 源码层：#22D3EE 只允许留在 MA_COLORS（见下一条 checks）。
+    checks.append(("RSI 折线内无旧青蓝 #22D3EE 的**核心指纹**像素（松散青像素不作断言："
+                   "超卖段合法的 COLORS.macdDown 就是青系）",
+                   (rsi_probe_n.get("legacyPix") or 0) == 0
+                   and (rsi_probe_m.get("legacyPix") or 0) == 0,
+                   "核心指纹像素：非翻转=%s 翻转=%s（参考·松散青像素：非翻转=%s 翻转=%s）"
+                   % (rsi_probe_n.get("legacyPix"), rsi_probe_m.get("legacyPix"),
+                      rsi_probe_n.get("cyanPix"), rsi_probe_m.get("cyanPix"))))
+    _js = read(APP_JS)
+    _ma = re.search(r"const MA_COLORS = \{[^}]*\};", _js)
+    _occs = [m.start() for m in re.finditer(r"#22D3EE", _js, re.I)]
+    _outside = [i for i in _occs if not (_ma and _ma.start() <= i < _ma.end())]
+    checks.append(("「#22D3EE」只允许留在 MA_COLORS（MA55 均线色）：非 MA_COLORS 处 %d 处、"
+                   "全文件共 %d 处" % (len(_outside), len(_occs)),
+                   bool(_ma) and not _outside,
+                   "MA_COLORS 块在位=%s 越界位置=%s" % (bool(_ma), _outside)))
     if rsi_probe_n.get("whiteMinY") is not None and rsi_probe_m.get("whiteMinY") is not None:
         _flip = 2 * s1_plot_top + slotH      # Y 轴镜像：y ↦ flip − y
         checks.append(("RSI 折线随翻转镜像：翻转前后 y 的 {min,max} 互换（各自之和 ≡ 2×槽上沿＋槽高）",
