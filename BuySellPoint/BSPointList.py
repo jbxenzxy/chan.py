@@ -689,6 +689,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             return None
 
         # ㈢ 分型检查（过滤弱分型/中继）
+        '''
         fx_strength = self._is_strong_fx(stroke_n)
         if fx_strength == 0:
             self._dbg_bs('cal_bsp_precondition', '前置检查「跳过」: 弱分型............',
@@ -702,7 +703,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                      stroke_n_idx=stroke_n.idx,
                      bi_dir='up' if stroke_n.is_up() else 'down',
                      stroke_high=stroke_n._high(), stroke_low=stroke_n._low())
-
+        '''
         return (pivot_a, stroke_n)
 
     def check_nesting_divergence(self, bi_list, zs_list):
