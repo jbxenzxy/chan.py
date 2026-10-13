@@ -456,6 +456,10 @@
             padding: 0 4px; line-height: 1;
         }
         .scan-close:hover { color: #e94560; }
+        /* 扫描进行中：× 灰化。closeScanPanel 内 `if (_scanRunning) return` 会静默无效，
+           故灰化 + title 明示原因，消除「点了没反应」（class 由 _setScanRunning 单点同步） */
+        .scan-close.disabled { opacity: 0.35; cursor: not-allowed; }
+        .scan-close.disabled:hover { color: #8892b0; }
         .scan-header-right {
             display: flex; align-items: center; gap: 0;
             flex-shrink: 0;
@@ -468,6 +472,9 @@
         }
         .scan-minimize:hover { color: #64ffda; }
         .scan-panel.minimized .scan-body { display: none; }
+        /* 最小化态只留「+」恢复键：× 只在展开态提供 —— 关闭会清后端扫描缓存（不可逆），
+           收起后误点代价高；要关就先「+」展开再点（2026-10-13 需求） */
+        .scan-panel.minimized .scan-close { display: none; }
         .scan-panel.minimized {
             width: auto; min-width: 200px;
             max-height: none;

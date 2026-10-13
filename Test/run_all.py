@@ -122,6 +122,15 @@ CI / 迁移每阶段的验收门禁）。
                                                      一次 / AST 位置律 + 真跑提交与
                                                      worker + 真跑前端抽屉 / 运行值
                                                      单源棘轮（第二份副本即红）
+ 39. 扫描面板收起交互  test_scan_panel_collapse.py 点绘图区（#chart-container）
+                                                     ≡ 点「-」最小化（幂等：
+                                                     未展开 / 已最小化 return；
+                                                     只观察不拦截；mousedown）
+                                                     / 最小化态隐藏 ×（只留 +）
+                                                     / Esc 逐层收起（末层 = 最小
+                                                     化，非关闭）/ 扫描中 × 灰化
+                                                     （_setScanRunning 唯一写入
+                                                     点）/ 静态 + 无头 Chrome 真点
 每组件独立子进程执行，超时 300s 按失败终止（防死循环挂死）。
 
 登记在 `CLEAN_CREDENTIALS_COMPONENTS` 的组件（当前 p20 / p60）额外**清空凭据
@@ -903,6 +912,25 @@ COMPONENTS = [
     #   取色阈值只许在阈值对 slice(1) 上取 max/min）。
     ("scan_rsi_thresholds",
      [sys.executable, os.path.join("Test", "test_scan_rsi_thresholds.py")]),
+    # 扫描结果面板收起交互（2026-10-13 需求，用户指定）：
+    #   ① 面板**展开**时，点 K 线绘图区 / 指标绘图区 ≡ 点「-」最小化 —— 判定锚点
+    #      = #chart-container（主图 canvas、双窗下窗 subCanvas、十字光标 / MA 两个
+    #      浮层都在其中）；未展开 / 已最小化一律 return（幂等，不能复用 toggle ——
+    #      否则最小化态点一下绘图区会把收起的面板又弹开）；**只观察不拦截**
+    #      （不 preventDefault / stopPropagation）；用 mousedown 非 click（面板内
+    #      按下、面板外松开时 click 的 target 是公共祖先，会被误判）；
+    #   ② 最小化态只留「+」—— × 只在展开态提供（关闭会 POST /scan/close 清缓存，
+    #      不可逆；收起后误点代价高）；
+    #   ③ Esc 逐层收起（设置抽屉 → 扫描模式对话框 → 区间选择 → 面板最小化），
+    #      一次只收一层，末层做最小化而非关闭；
+    #   ④ 扫描中 × 灰化 + title 说明原因（消除 closeScanPanel 静默 return 的
+    #      「点了没反应」）；_setScanRunning 收敛原 8 处 _scanRunning 裸赋值。
+    #   两层守护：[静态] 结构与唯一写入点计数（classList.toggle("minimized" 恰 1 处、
+    #   _applyScanMinimized 恰 4 处、window 面零新增防 phase6 白名单红）；
+    #   [真渲染] 无头 Chrome 真点 绘图区 / 面板内 / 顶部按钮 / Esc，验状态迁移与
+    #   × 的 computed display（最小化态 === 'none'）。
+    ("scan_panel_collapse",
+     [sys.executable, os.path.join("Test", "test_scan_panel_collapse.py")]),
     # 未定义全局名静态护栏（2026-10-08 期货选点 NameError 事故防回潮）：
     #   db6f886 把「定位」段的 `config = _make_chan_config()` 换成
     #   `init_chan_symbol(...)`，下方 Step 4 的 `config=config` 遂成孤立引用

@@ -6925,7 +6925,7 @@
             panel.classList.add("show");
             panel.classList.remove("minimized");
             btn.classList.add("active");
-            _scanRunning = true;
+            _setScanRunning(true);
             _scanAborted = false;
 
             var freq = _scanFreq;
@@ -6938,7 +6938,7 @@
                 fetch("/api/stocks/scan/annotation")
                 .then(function(resp) { return resp.json(); })
                 .then(function(annData) {
-                    _scanRunning = false;
+                    _setScanRunning(false);
                     btn.classList.remove("active");
                     btn.textContent = "股票扫描";
 
@@ -6986,7 +6986,7 @@
                     updateScanSaveBtn();
                 })
                 .catch(function(err) {
-                    _scanRunning = false;
+                    _setScanRunning(false);
                     btn.classList.remove("active");
                     btn.textContent = "股票扫描";
                     body.innerHTML = '<div class="scan-no-result">查询失败: ' + err.message + '</div>';
@@ -7019,7 +7019,7 @@
                     .then(function(resps) {
                         return resps[0].json().then(function(scanStartData) {
                             if (scanStartData.need_refresh) {
-                                _scanRunning = false;
+                                _setScanRunning(false);
                                 btn.classList.remove("active");
                                 body.innerHTML = '<div class="scan-no-result" style="text-align:center;padding:20px;">' +
                                     '<div style="font-size:14px;color:#e94560;margin-bottom:12px;">&#9888; ' + scanStartData.msg + '</div>' +
@@ -7035,7 +7035,7 @@
                     .then(function(data) {
                         if (data === null) return;
                         if (!data || !data.stocks || data.stocks.length === 0) {
-                            _scanRunning = false;
+                            _setScanRunning(false);
                             btn.classList.remove("active");
                             body.innerHTML = '<div class="scan-no-result">' + sourceLabel + '列表为空或文件不存在</div>';
                             return;
@@ -7103,7 +7103,7 @@
                         }, function(err, interrupted) {
                             if (err) {
                                 console.error("[" + spec.errLabel + "] " + err);
-                                _scanRunning = false;
+                                _setScanRunning(false);
                                 _scanAborted = false;
                                 btn.classList.remove("active");
                                 btn.disabled = false;
@@ -7111,7 +7111,7 @@
                                 body.innerHTML = '<div class="scan-no-result">扫描失败: ' + err + '</div>';
                                 return;
                             }
-                            _scanRunning = false;
+                            _setScanRunning(false);
                             _scanAborted = false;
                             btn.classList.remove("active");
                             btn.disabled = false;
@@ -7120,7 +7120,7 @@
                         });
                     })
                     .catch(function(err) {
-                        _scanRunning = false;
+                        _setScanRunning(false);
                         btn.classList.remove("active");
                         btn.textContent = "股票扫描";
                         body.innerHTML = '<div class="scan-no-result">读取' + sourceLabel + '失败: ' + err.message + '</div>';
@@ -7966,6 +7966,20 @@
             });
         };
 
+        // 扫描运行态的**唯一写入点**（原 8 处 `_scanRunning = x` 裸赋值全部收敛到这里）。
+        //   收敛动因：× 的禁用态必须与扫描态同步 —— 扫描中 closeScanPanel 直接 return
+        //   （见下），旧交互是「点了没反应」；现在灰化 + title 说明原因。
+        //   护栏：Test/test_scan_panel_collapse.py ③ 钉「模块内再无裸赋值」。
+        function _setScanRunning(v) {
+            _scanRunning = v;
+            var panel = document.getElementById("scan-panel");
+            var closeBtn = panel && panel.querySelector(".scan-close");
+            if (closeBtn) {
+                closeBtn.classList.toggle("disabled", !!v);
+                closeBtn.title = v ? "扫描中不可关闭（请先点「股票扫描」中断）" : "关闭面板";
+            }
+        }
+
         window.closeScanPanel = function() {
             // 扫描中不允许关闭面板，用户需通过"中断扫描"按钮停止
             if (_scanRunning) return;
@@ -7974,16 +7988,44 @@
             fetch("/api/stocks/scan/close", { method: "POST" }).catch(function() {});
         };
 
+        // 最小化 / 恢复的**统一入口**（按钮、点绘图区、Esc 三处都走这里 —— 保证
+        //   按钮图标与 title 恒跟面板状态一致；toggle 只负责算目标态，不直接摸 DOM）。
+        function _applyScanMinimized(min) {
+            var panel = document.getElementById("scan-panel");
+            if (!panel) { return; }
+            panel.classList.toggle("minimized", !!min);
+            var btn = panel.querySelector(".scan-minimize");
+            if (btn) {
+                btn.innerHTML = min ? "+" : "-";
+                btn.title = min ? "恢复面板" : "最小化面板";
+            }
+        }
+
         window.toggleScanMinimize = function() {
             // 最小化/恢复扫描面板，扫描可后台继续不中断
             var panel = document.getElementById("scan-panel");
-            var btn = document.querySelector(".scan-minimize");
-            panel.classList.toggle("minimized");
-            if (btn) {
-                btn.innerHTML = panel.classList.contains("minimized") ? "+" : "-";
-                btn.title = panel.classList.contains("minimized") ? "恢复面板" : "最小化面板";
-            }
+            if (panel) { _applyScanMinimized(!panel.classList.contains("minimized")); }
         };
+
+        // 面板**展开**时，在 K 线绘图区 / 指标绘图区按下鼠标 ≡ 点「-」最小化
+        //   （2026-10-13 需求；范围经用户拍板：只认绘图区，不含顶部工具栏按钮等区域）。
+        //   · 判定锚点 = #chart-container：主图 canvas、双窗下窗 subCanvas、以及
+        //     「十字光标 / MA 提示」两个浮层都在其中 —— 用 container 判定既不依赖
+        //     canvas 变量（双窗重建会换对象），也不怕浮层挡住事件 target；
+        //   · **幂等**：未展开 / 已最小化一律不响应 —— 不能复用 toggle，
+        //     否则最小化态点一下绘图区会把收起的面板又弹开；
+        //   · 只观察不拦截：不 preventDefault / stopPropagation，K 线拖拽平移、
+        //     双击缩放、图上选点等原有交互原样生效；
+        //   · 用 mousedown 而非 click：从面板内按下、拖到面板外松开时 click 的 target
+        //     是公共祖先，会被误判成「点了绘图区」（与 AmoPanel 的关外逻辑同款）。
+        document.addEventListener("mousedown", function(e) {
+            var panel = document.getElementById("scan-panel");
+            if (!panel || !panel.classList.contains("show")) { return; }
+            if (panel.classList.contains("minimized")) { return; }
+            if (!e.target || !e.target.closest) { return; }
+            if (!e.target.closest("#chart-container")) { return; }
+            _applyScanMinimized(true);
+        });
 
         window.loadScanResult = function(code, freq) {
             // 加载该股票到当前页面，不关闭面板
@@ -9661,7 +9703,10 @@
             underInput.addEventListener("change", _commitRsiThresholds);
         })();
 
-        // Esc键取消区间选择 / 关闭设置抽屉
+        // Esc键逐层收起浮层：设置抽屉 → 扫描模式对话框 → 区间选择 → 扫描面板最小化
+        //   （2026-10-13 追加后两层；一次 Esc 只收最上面一层，故每层处理完 return。
+        //    末层做「最小化」而不是「关闭」：关闭会清后端扫描缓存，属不可逆动作，
+        //    必须显式点 ×）
         document.addEventListener('keydown', function(e) {
             if (e.key === 'Escape') {
                 var drawer = document.getElementById("bsp-filter-dialog");
@@ -9669,10 +9714,21 @@
                     closeBspSettings();
                     return;
                 }
+                var scanDlg = document.getElementById("scan-mode-dialog");
+                if (scanDlg.classList.contains("show")) {
+                    scanModeDialogCancel();
+                    return;
+                }
                 if (_rangeSelect.mode === 'SELECTED_A') {
                     _rangeSelect = { mode: 'IDLE', startIdx: null, startFreq: null, startSymbol: null };
                     showToast("区间选择已取消");
                     render();
+                    return;
+                }
+                var scanPanel = document.getElementById("scan-panel");
+                if (scanPanel && scanPanel.classList.contains("show")
+                        && !scanPanel.classList.contains("minimized")) {
+                    _applyScanMinimized(true);
                 }
             }
         });
