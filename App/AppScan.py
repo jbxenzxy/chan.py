@@ -48,6 +48,12 @@ from DataAPI.ElTdxAPI import fetch_float_mc
 from App.AppLog import get_logger
 log = get_logger(__name__)
 
+# 非法 RSI 阈值告警的「每进程只报一次」闸门（消费点：Scanner.scan_one 的 rsi 分支）。
+#   阈值是**请求级**入参 —— 同一批扫描里每一票拿到的都是同一对值，按票告警会在全 A 股
+#   （约 5000 票）时刷出 5000 条同文 warning，把同期真正的问题日志淹掉。改为进程级
+#   闸门后，进程池场景下最多 worker 数条，且首批就能看到原始入参。
+_RSI_BAD_THRESHOLD_WARNED = False
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # 扫描态 + 预过滤 / 行业索引读取
@@ -982,8 +988,16 @@ class Scanner:
                 except (TypeError, ValueError):
                     _rsi_over, _rsi_under = RSI_OVERBOUGHT, RSI_OVERSOLD
                 if not (0 < _rsi_under < _rsi_over < 100):
-                    log.warning(f"[扫描-RSI] 阈值参数非法(超买={rsi_over} 超卖={rsi_under})，"
-                                f"回退默认 {RSI_OVERBOUGHT}/{RSI_OVERSOLD}")
+                    # 告警闸门（模块级 `_RSI_BAD_THRESHOLD_WARNED`，见其定义处注释）：
+                    #   同一批扫描里每票的入参都相同 ⇒ 按票告警会刷出 N(票) 条同文
+                    #   warning。这里只在本进程首次命中时告警（带上原始入参，够定位），
+                    #   之后静默回退默认 —— 回退**行为**不变，只是不再重复刷屏。
+                    global _RSI_BAD_THRESHOLD_WARNED
+                    if not _RSI_BAD_THRESHOLD_WARNED:
+                        _RSI_BAD_THRESHOLD_WARNED = True
+                        log.warning(f"[扫描-RSI] 阈值参数非法(超买={rsi_over} 超卖={rsi_under})，"
+                                    f"回退默认 {RSI_OVERBOUGHT}/{RSI_OVERSOLD}"
+                                    f"（本进程只报一次，后续同批票静默回退）")
                     _rsi_over, _rsi_under = RSI_OVERBOUGHT, RSI_OVERSOLD
                 need_bars = max(recent_days, RSI_CYCLE + 1)
                 closes = [k.get("close", 0) or 0 for k in klines]

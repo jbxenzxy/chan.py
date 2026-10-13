@@ -551,9 +551,17 @@ def part4():
 
     check("④ _scanMode 取值注释含 \"rsi\"",
           '"rsi" = RSI \u8d85\u4e70\u8d85\u5356\u626b\u63cf' in appjs, "\u6ce8\u91ca\u672a\u8865")
+    # 白名单的契约是「**包含** rsi」（各模式之间是 || 求或，顺序无功能意义）。原断言
+    #   把**相邻顺序**也写死：本次新增 "rsi" 时恰好插在 lianzhang 与 backtest 之间才没红，
+    #   下次在别处插模式（或白名单重排）即假红。这里改为解析整条 if 条件取集合、断言
+    #   包含关系（与 Test/test_scan_backtest_mode.py ⑥ 同款写法，那边 2026-10-12
+    #   已因同型写死假红过一轮）。
+    _wl_m = re.search(
+        r'if \(savedMode === "\w+"(?: \|\| savedMode === "\w+")*\)', appjs)
+    _whitelist = re.findall(r'savedMode === "(\w+)"', _wl_m.group(0)) if _wl_m else []
     check("④ 模式持久化白名单含 rsi（否则刷新后回落默认模式）",
-          'savedMode === "lianzhang" || savedMode === "rsi" || savedMode === "backtest"'
-          in appjs, "\u767d\u540d\u5355\u672a\u8865")
+          "rsi" in _whitelist,
+          "\u767d\u540d\u5355\u672a\u542b rsi\uff0c\u5b9e\u9645=" + str(_whitelist))
     check("④ 「最近N根」对 rsi 可用，且当前值 <2 时自动补 3（与连涨同款）",
           "var isRsi = selected && selected.value === \"rsi\";" in appjs
           and "(isLianzhang || isRsi) && (parseInt(input.value, 10) || 0) < 2" in appjs,

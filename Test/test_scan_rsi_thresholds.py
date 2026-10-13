@@ -223,7 +223,14 @@ def part1():
           ru.get("is_rsi") is True and ru.get("rsi_over") == RSI_OVERBOUGHT
           and ru.get("rsi_under") == 30, ru)
 
-    # ── 防御：非法组合整对回退 + 告警恰好一次 ─────────────────────
+    # ── 防御：非法组合整对回退 + 告警「每进程一次」 ────────────────
+    #   告警闸门（`AppScan._RSI_BAD_THRESHOLD_WARNED`，定义处有注释）：阈值是**请求级**
+    #   入参 —— 同一批扫描里每票拿到的都是同一对值，按票告警会在全 A 股（约 5000 票）
+    #   时刷出 5000 条同文 warning，把同期真正的问题日志淹掉。故本进程**首次**命中才
+    #   告警（带上原始入参，够定位），之后静默回退 —— 回退**行为**不变，只有日志条数变。
+    #   这里显式复位闸门再跑，把「首次 1 条 / 后续 0 条」的完整语义钉住（写成每组都
+    #   ==1 会与闸门互斥；不复位则会依赖本段是不是进程内第一次非法调用）。
+    _sc._RSI_BAD_THRESHOLD_WARNED = False
     illegals = [
         ("反序 30/70", dict(rsi_over=30, rsi_under=70)),
         ("相等 70/70", dict(rsi_over=70, rsi_under=70)),
@@ -232,21 +239,31 @@ def part1():
         ("负值 -5/20", dict(rsi_over=-5, rsi_under=20)),
         ("零值 70/0", dict(rsi_over=70, rsi_under=0)),
     ]
-    for tag, kw in illegals:
+    for _i, (tag, kw) in enumerate(illegals):
         with _LogCapture() as lc:
             r = _run(K87, **kw)
         warn_n = lc.text().count("阈值参数非法")
-        check("① 防御 · %s：整对回退默认（回 %s/%s）+ 告警恰好 1 次 + 判据仍按默认命中"
-              % (tag, RSI_OVERBOUGHT, RSI_OVERSOLD),
-              r.get("is_rsi") is True and r.get("rsi_group") == "over"
-              and r.get("rsi_over") == RSI_OVERBOUGHT
-              and r.get("rsi_under") == RSI_OVERSOLD and warn_n == 1,
-              (r, lc.text()[:200]))
+        _ok_fallback = (r.get("is_rsi") is True and r.get("rsi_group") == "over"
+                        and r.get("rsi_over") == RSI_OVERBOUGHT
+                        and r.get("rsi_under") == RSI_OVERSOLD)
+        if _i == 0:
+            check("① 防御 · %s：整对回退默认（回 %s/%s）+ 告警 1 次（本进程首次命中）"
+                  " + 判据仍按默认命中"
+                  % (tag, RSI_OVERBOUGHT, RSI_OVERSOLD),
+                  _ok_fallback and warn_n == 1, (warn_n, r, lc.text()[:200]))
+        else:
+            check("① 防御 · %s：整对回退默认（回 %s/%s）+ **不再重复告警**（闸门已置位，"
+                  "warn_n=%d）+ 判据仍按默认命中" % (tag, RSI_OVERBOUGHT, RSI_OVERSOLD, warn_n),
+                  _ok_fallback and warn_n == 0, (warn_n, r, lc.text()[:200]))
 
+    # 闸门此时已被上面 6 组置位 ⇒ 不复位的话，下面这条「不告警」断言是**假通过**
+    #   （就算非法组合路径真被误触发，闸门也会把它吞掉）。复位后才重新有判别力。
+    _sc._RSI_BAD_THRESHOLD_WARNED = False
     with _LogCapture() as lc:
         r_bad = _run(K87, rsi_over="abc", rsi_under=20)
     check("① 防御 · 非数 'abc'/20：类型错走静默兜底（整对回退默认、不抛异常、不阻断本票）"
-          "，且**不**触发「非法组合」告警（两条兜底路径互不重叠）",
+          "，且**不**触发「非法组合」告警（两条兜底路径互不重叠；已复位告警闸门，"
+          "否则该断言会被闸门吞成假通过）",
           r_bad.get("is_rsi") is True and r_bad.get("rsi_over") == RSI_OVERBOUGHT
           and r_bad.get("rsi_under") == RSI_OVERSOLD
           and "阈值参数非法" not in lc.text(), (r_bad, lc.text()[:200]))
@@ -292,6 +309,14 @@ def part2():
           scan_src.count("_rsi_over, _rsi_under = RSI_OVERBOUGHT, RSI_OVERSOLD"))
     check("② 非法组合回退必带告警（可观测：参数被拒时日志能看出原始入参）",
           'log.warning(f"[扫描-RSI] 阈值参数非法(超买={rsi_over} 超卖={rsi_under})' in scan_src)
+    check("② 该告警**带每进程一次闸门**（阈值是请求级入参：同一批里每票都传同一对值，"
+          "按票告警会在全 A 股约 5000 票时刷出 5000 条同文 warning，把真问题日志淹掉）"
+          "—— 模块级闸门定义 / global 声明 / 判空 / 置位各恰好一处",
+          scan_src.count("_RSI_BAD_THRESHOLD_WARNED = False") == 1
+          and scan_src.count("global _RSI_BAD_THRESHOLD_WARNED") == 1
+          and scan_src.count("if not _RSI_BAD_THRESHOLD_WARNED:") == 1
+          and scan_src.count("_RSI_BAD_THRESHOLD_WARNED = True") == 1,
+          scan_src.count("_RSI_BAD_THRESHOLD_WARNED"))
 
     check("② 判据用**变量**：命中计数 `if v <= _rsi_under` / `if v >= _rsi_over` "
           "与归类 `if rsi_last <= _rsi_under:` / `elif rsi_last >= _rsi_over:` 各恰好一处"
