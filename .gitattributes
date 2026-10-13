@@ -23,3 +23,12 @@ Test/snapshots/edge_gap.json text eol=lf
 Test/snapshots/edge_zero_vol.json text eol=lf
 Test/snapshots/futures_15s_full.json text eol=lf
 Test/snapshots/futures_15s_end_date.json text eol=lf
+# 手动选点持久化（App/double_click_dt.csv）**有意纳入版本库**（共享数据资产，非运行时垃圾）。
+#   与上面几处 JSON 相反，这里必须钉 **CRLF**：写回侧 `AppData.save_point_time /
+#   clear_saved_point_time` 走 `_atomic_write_text(..., encoding="utf-8-sig", newline="")` +
+#   `csv.DictWriter`（默认行尾 `\r\n`）⇒ 落盘恒为 **BOM + CRLF**；而库内 blob 实测是 LF
+#   （`core.autocrlf=true` 提交时归一化的结果）。
+#   钉 crlf ⇒ 任何机器 checkout 出的字节都 == 程序写回的字节 ⇒ 选一次点不会冒出全文件 diff；
+#   钉 lf 则恰好相反：工作树 LF、写回 CRLF，每次选点整文件变一遍。
+#   （BOM 不受 eol 规则影响，读侧一律 `utf-8-sig`，有无 BOM 都能读。）
+App/double_click_dt.csv text eol=crlf

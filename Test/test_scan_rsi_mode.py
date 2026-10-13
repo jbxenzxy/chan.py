@@ -23,10 +23,13 @@
           rsi_hit_under / rsi_hit_over / recent_days / freq / last_close。
 
 阈值同源（值级，不是注释级）——
-  Python 侧 `AppUtils.RSI_OVERBOUGHT / RSI_OVERSOLD` = max / min(`RSI_REF_VALUES`)；
+  Python 侧 `AppUtils.RSI_OVERBOUGHT / RSI_OVERSOLD` = max / min(`RSI_REF_VALUES[1:]`)；
   前端 `app.js` `RSI_SEG_OVER / RSI_SEG_UNDER` = max / min(`RSI_REF_VALUES.slice(1)`)
-  —— 只取三元组里的**阈值对**（[中轴 50, 超买, 超卖] 的后两位）：把中轴算进来
-  会在「超买 < 50 / 超卖 > 50」时把取色边界顶在中轴，与后端判据分叉。
+  —— 两侧**都只取三元组里的阈值对**（[中轴 50, 超买, 超卖] 的后两位），派生式逐字同形：
+  把中轴算进来会在「超买 < 50 / 超卖 > 50」时把取色边界顶在中轴，与后端判据分叉。
+  （2026-10-14 订正：此前 Python 侧写的是 `max(RSI_REF_VALUES)` —— 对整个三元组取 ——
+   默认 (50,80,20) 下与 `[1:]` 取值相同故从未翻红，但两种派生式并存本身就是分叉隐患，
+   现统一为 `[1:]`；本段的三条断言随之改成「必须是 `[1:]` 形态」的可判别形式。）
   两侧同值 ⇒ 「图上画成超买红」与「扫描报超买」永远同判据。② 段用
   **跨语言解析**把这条钉死。
 
@@ -258,12 +261,20 @@ def part2():
     appjs = io.open(APPJS, encoding="utf-8").read()
 
     check("② Python 侧：超买/超卖由 RSI_REF_VALUES 的 max/min **派生**（不写字面量）",
-          "RSI_OVERBOUGHT = max(RSI_REF_VALUES)" in src_u
-          and "RSI_OVERSOLD = min(RSI_REF_VALUES)" in src_u,
+          "RSI_OVERBOUGHT = max(RSI_REF_VALUES[1:])" in src_u
+          and "RSI_OVERSOLD = min(RSI_REF_VALUES[1:])" in src_u,
           "\u5b9a\u4e49\u5f62\u6001\u5df2\u53d8")
-    check("② 真导入：派生值 == max/min(RSI_REF_VALUES)",
-          RSI_OVERBOUGHT == max(RSI_REF_VALUES)
-          and RSI_OVERSOLD == min(RSI_REF_VALUES),
+    # 负向判别（2026-10-14 增补）：**不许**对整个三元组取 max/min —— 那会把常量中轴 50
+    #   算进来，与前端 `slice(1)` 不同形。默认 (50,80,20) 下两种写法取值**相同**，
+    #   故上面的取值断言看不出差别，**只有这条形态断言能判别**（改回 `max(RSI_REF_VALUES)`
+    #   即红 —— 这就是本次改动的变异自证）。
+    check("② Python 侧负向：max/min **只许**作用在阈值对 `[1:]` 上，不得把中轴算进来",
+          not re.search(r"RSI_OVERBOUGHT\s*=\s*max\(RSI_REF_VALUES\)", src_u)
+          and not re.search(r"RSI_OVERSOLD\s*=\s*min\(RSI_REF_VALUES\)", src_u),
+          "\u4e2d\u8f74\u88ab\u7b97\u8fdb\u6d3e\u751f\u5f0f")
+    check("② 真导入：派生值 == max/min(RSI_REF_VALUES[1:])（与前端 slice(1) 同形）",
+          RSI_OVERBOUGHT == max(RSI_REF_VALUES[1:])
+          and RSI_OVERSOLD == min(RSI_REF_VALUES[1:]),
           (RSI_OVERBOUGHT, RSI_OVERSOLD, RSI_REF_VALUES))
 
     check("② 前端：副图分段着色阈值同样由 RSI_REF_VALUES 的**阈值对**派生"
@@ -283,10 +294,11 @@ def part2():
     check("② 跨语言同源：前端默认兜底 [中轴, 超买, 超卖] == Python RSI_REF_VALUES",
           front_vals == list(RSI_REF_VALUES),
           (front_vals, list(RSI_REF_VALUES)))
-    check("② 两端 max/min 同值 ⇒ 「图上画成超买」与「扫描报超买」永远同判据",
+    check("② 两端 max/min 同值（同样只取阈值对，与 Python `[1:]` 同形）"
+          " ⇒ 「图上画成超买」与「扫描报超买」永远同判据",
           front_vals is not None
-          and max(front_vals) == RSI_OVERBOUGHT
-          and min(front_vals) == RSI_OVERSOLD,
+          and max(front_vals[1:]) == RSI_OVERBOUGHT
+          and min(front_vals[1:]) == RSI_OVERSOLD,
           (front_vals, RSI_OVERBOUGHT, RSI_OVERSOLD))
 
     # ── rsi 分支切片（锚点漂移即抛异常，不会静默空转）──

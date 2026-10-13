@@ -6793,11 +6793,18 @@
             if (opts.bsp_types !== undefined && opts.bsp_types !== null) {
                 body.bsp_types = opts.bsp_types;
             }
-            // RSI 阈值随请求走（仅 rsi 模式且用户显式配置过；未配置不带参，
-            //   后端回退默认——前端一旦写死默认值，后端默认就被架空，同市值口径）
-            if (opts.mode === "rsi" && opts.rsi_over != null && opts.rsi_under != null) {
-                body.rsi_over = opts.rsi_over;
-                body.rsi_under = opts.rsi_under;
+            // RSI 阈值随请求走（仅 rsi 模式；**按侧单独带参**）——
+            //   哪一侧显式配置过就带哪一侧，没配置的那侧**不带**，由后端
+            //   `scan_one` 的 `RSI_OVERBOUGHT if rsi_over is None` / `RSI_OVERSOLD if
+            //   rsi_under is None` **独立回退默认**。这与显示侧 `_applyRsiThresholds()`
+            //   的补齐口径逐位一致 —— 用户只填超买 70 时：副图按 70 着色、扫描也按 70 判。
+            //   ⚠ 两侧**不许**用 `&&` 捆成一句「都非 null 才整对带」（2026-10-14 修正）：
+            //   那样单侧留空时整对不带 ⇒ 后端回 80/20，而副图已按 70 显示 ⇒ **同一屏内
+            //   副图与扫描结果分叉**。后端本就支持部分配置，前端没必要替它做「整对」判断。
+            //   ⚠ 也**不许**在前端补默认值再发（会架空后端默认值 SSOT，同市值口径）。
+            if (opts.mode === "rsi") {
+                if (opts.rsi_over != null) { body.rsi_over = opts.rsi_over; }
+                if (opts.rsi_under != null) { body.rsi_under = opts.rsi_under; }
             }
             return body;
         }

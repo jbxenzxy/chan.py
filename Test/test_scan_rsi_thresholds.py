@@ -334,10 +334,12 @@ def part2():
           "阈值{_rsi_over:g}/{_rsi_under:g} " in scan_src)
 
     check("② 默认值 SSOT **未被参数化**：AppUtils 仍是 `RSI_REF_VALUES = (50, 80, 20)` "
-          "唯一一处 + `RSI_OVERBOUGHT = max(...)` / `RSI_OVERSOLD = min(...)` 派生",
+          "唯一一处 + `RSI_OVERBOUGHT = max(RSI_REF_VALUES[1:])` / "
+          "`RSI_OVERSOLD = min(RSI_REF_VALUES[1:])` 派生"
+          "（2026-10-14：派生式与前端 `slice(1)` 统一为「只取阈值对」，中轴不参与）",
           utils_src.count("RSI_REF_VALUES = (50, 80, 20)") == 1
-          and utils_src.count("RSI_OVERBOUGHT = max(RSI_REF_VALUES)") == 1
-          and utils_src.count("RSI_OVERSOLD = min(RSI_REF_VALUES)") == 1
+          and utils_src.count("RSI_OVERBOUGHT = max(RSI_REF_VALUES[1:])") == 1
+          and utils_src.count("RSI_OVERSOLD = min(RSI_REF_VALUES[1:])") == 1
           and list(RSI_REF_VALUES) == [50, 80, 20]
           and RSI_OVERBOUGHT == 80 and RSI_OVERSOLD == 20)
     check("② 默认值的权威源注释在位（配置化后 AppUtils 仍是「默认」的 SSOT，不是运行值）",
@@ -868,6 +870,12 @@ def part4():
           and d12["c31"] == "WH" and d12["c30"] == "DN" and d12["c29"] == "DN"
           and d12["cuts_40_50"] == [0.5], d12)
 
+    # ── 前端显示侧生效值存全局，供 ⑤ 段的端到端对齐取用 ──────────────
+    #   （对齐必须在 ⑤ 段做：后端入参要**由前端 body 实际带哪些键**派生，
+    #     见 ⑤ 段末尾那两条 —— 直接调 scan_one 会绕过「前端发什么」，判不出分叉。）
+    global _FRONT_SEG
+    _FRONT_SEG = {"d5": list(d5["snap"]["seg"]), "d3b": list(d3b["snap"]["seg"])}
+
 
 # ══════════════════════════════════════════════════════════════════════
 # ⑤ 请求带参条件（_scanSubmitBody 真跑 + 调用点静态负锚点）
@@ -890,9 +898,19 @@ function B(mode, ro, ru) {
 var out = [];
 out.push("E1=" + JSON.stringify(Object.keys(B("rsi", 70, 30))));
 out.push("E2=" + JSON.stringify([B("rsi", 70, 30).rsi_over, B("rsi", 70, 30).rsi_under]));
-out.push("E3=" + JSON.stringify([("rsi_over" in B("rsi", 70, null)),
-    ("rsi_over" in B("rsi", null, 30)), ("rsi_over" in B("rsi", null, null)),
-    ("rsi_over" in B("rsi", undefined, undefined))]));
+// E3：**按侧单独带参** —— 输出每种组合下 body 里实际出现的 rsi_* 键（排序后）。
+//   旧口径是「两侧都非 null 才整对带」⇒ 单侧留空时整对不带 ⇒ 后端回 80/20，
+//   而副图已按 70 显示 ⇒ 副图与扫描分叉（2026-10-14 修正）。
+function RK(mode, ro, ru) {
+    return Object.keys(B(mode, ro, ru)).filter(function (k) {
+        return k.indexOf("rsi_") === 0;
+    }).sort();
+}
+out.push("E3=" + JSON.stringify([RK("rsi", 70, null), RK("rsi", null, 30),
+    RK("rsi", null, null), RK("rsi", undefined, undefined)]));
+// E6：单侧带的是**用户原值**（不是被默认值替换后的生效值）
+out.push("E6=" + JSON.stringify([B("rsi", 70, null).rsi_over, B("rsi", null, 30).rsi_under,
+    ("rsi_under" in B("rsi", 70, null)), ("rsi_over" in B("rsi", null, 30))]));
 out.push("E4=" + JSON.stringify([("rsi_over" in B("lianzhang", 70, 30)),
     ("rsi_over" in B("ann", 70, 30)), ("rsi_over" in B("", 70, 30)),
     ("rsi_over" in B("fangliang", 70, 30))]));
@@ -923,9 +941,26 @@ console.log(out.join("\n"));
           e2 == [70, 30], e2)
 
     e3 = json.loads(kv["E3"])
-    check("⑤ 不带参：任一侧为 null（或 undefined）都**整对不带**——缺一侧时后端自己"
-          "独立回退，前端口径不掺和",
-          e3 == [False, False, False, False], e3)
+    check("⑤ **按侧单独带参**：只配超买 ⇒ 只带 rsi_over；只配超卖 ⇒ 只带 rsi_under；"
+          "两侧都没配（null / undefined）⇒ 一个都不带"
+          "（2026-10-14 修正：旧口径「任一侧 null 就整对不带」会让单侧配置的用户"
+          "副图按 70 显示、扫描按 80 判定 ⇒ 同屏分叉）",
+          e3 == [["rsi_over"], ["rsi_under"], [], []], e3)
+    e6 = json.loads(kv["E6"])
+    check("⑤ 单侧带的是**用户原值**（70 / 30），且另一侧确实**没被凭空补上默认值**"
+          "（补了就把后端 SSOT 架空）",
+          e6 == [70, 30, False, False], e6)
+    # 静态反锚点（2026-10-14 增补）：闸门**不得**用 `&&` 把两侧捆成一句 ——
+    #   那正是刚修掉的分叉写法。正则只认 _scanSubmitBody 那一段里的 rsi 带参判定。
+    _sub = _extract_any_fn(appjs, "_scanSubmitBody")
+    check("⑤ 静态反锚点：带参判定**不得**把 rsi_over / rsi_under 用 `&&` 捆成一句"
+          "（「都非 null 才整对带」= 已修掉的分叉写法）",
+          not re.search(r"rsi_over\s*!=\s*null\s*&&\s*opts\.rsi_under\s*!=\s*null", _sub)
+          and not re.search(r"rsi_over\s*!=\s*null[^;\n]*&&[^;\n]*rsi_under", _sub),
+          _sub[-400:] if _sub else "")
+    check("⑤ 静态反锚点：也不得在前端补默认值再发（回退必须发生在后端）",
+          not re.search(r"body\.rsi_(over|under)\s*=\s*(RSI_SEG_|RSI_DEFAULT_)", _sub),
+          _sub[-400:] if _sub else "")
 
     e4 = json.loads(kv["E4"])
     check("⑤ 模式闸门：lianzhang / ann / \"\"（买·卖点）/ fangliang 四种模式即使给了"
@@ -940,6 +975,40 @@ console.log(out.join("\n"));
     check("⑤ 调用点传的是**用户配置原值** `_rsiOverUser / _rsiUnderUser`"
           "（恰好一处；未配置时它们就是 null）",
           appjs.count("rsi_over: _rsiOverUser, rsi_under: _rsiUnderUser") == 1, "")
+
+    # ── 端到端对齐（2026-10-14 增补，补**真正的缺口**）───────────────
+    #   此前：④ 只测「前端显示侧生效 [50,70,20]」、① 只测「后端部分配置独立回退」，
+    #   **中间那条「前端到底把什么发给后端」没人管** —— 这正是「副图按 70 着色、
+    #   扫描按 80 判定」能溜过去的原因（两端各自都测过、都对，合起来却分叉）。
+    #   ⚠ 后端入参必须**由 E3 实测出的 body 键**派生：直接调 `scan_one(70, None)`
+    #   等于替前端把 70 送进去了，闸门改成「整对不带」也照样绿 —— 判不出分叉。
+    #   ⇒ 旧写法下 E3[0] == [] ⇒ 后端收到 None/None ⇒ 生效 80/20 ≠ 前端 70/20 ⇒ 本条红。
+    _fs = globals().get("_FRONT_SEG") or {}
+    if not _fs:
+        check("⑤ 端到端对齐：④ 段前端生效值未取到（D 段 harness 未产出）", False, _fs)
+        return
+
+    def _backend_effect(keys, klines, over_val, under_val):
+        """按 body **实际带的键**调后端（缺哪侧就不给哪侧 ⇒ 后端独立回退）。"""
+        kw = {}
+        if "rsi_over" in keys:
+            kw["rsi_over"] = over_val
+        if "rsi_under" in keys:
+            kw["rsi_under"] = under_val
+        return _run(klines, **kw)
+
+    # 单侧（只配超买 70）：K75 尾窗 ≈73.4~76.6 ⇒ 70 命中 / 80 不命中 ⇒ 判别力足够
+    _b_one = _backend_effect(e3[0], K75, 70, None)
+    check("⑤ 端到端对齐 · **单侧**（只配超买 70）：前端显示侧生效对 ≡ 后端实际收到的"
+          "入参下 scan_one 的生效对（旧写法前端整对不带 ⇒ 后端按 80/20 判 ⇒ 与副图"
+          "70/20 分叉，本条即判别器）",
+          _fs["d5"] == [_b_one.get("rsi_over"), _b_one.get("rsi_under")],
+          (_fs["d5"], _b_one.get("rsi_over"), _b_one.get("rsi_under"), e3[0]))
+    # 双侧（D3b 的 72 / 28）：K87 尾窗 ≈86.5~88.4 ⇒ 72 命中
+    _b_both = _backend_effect(e3[0] + e3[1], K87, 72, 28)
+    check("⑤ 端到端对齐 · **双侧**（72 / 28）：前端显示侧生效对 ≡ 后端 scan_one 生效对",
+          _fs["d3b"] == [_b_both.get("rsi_over"), _b_both.get("rsi_under")],
+          (_fs["d3b"], _b_both.get("rsi_over"), _b_both.get("rsi_under")))
     check("⑤ 负锚点：调用点**不得**改传生效值 `RSI_SEG_OVER / RSI_SEG_UNDER` —— "
           "那样未配置的用户也会显式发 80/20，后端默认值被架空",
           "rsi_over: RSI_SEG_OVER" not in appjs

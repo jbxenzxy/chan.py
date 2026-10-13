@@ -347,10 +347,16 @@ RSI_CYCLE = 12
 #   · 本处三个常量是**默认值的权威源**：超买/超卖同样由 max / min 派生
 #     （**不写字面量阈值**，防两处各自改数）；用户配置（设置抽屉 → localStorage →
 #     随扫描请求传参，见 `scan_one` 的 rsi_over / rsi_under）优先，未配置回退本处。
+#   ⚠ max / min 只许作用在**阈值对** `RSI_REF_VALUES[1:]`（即 [中轴, 超买, 超卖] 的
+#     后两位）上 —— 与前端 `RSI_SEG_OVER/UNDER = max/min(RSI_REF_VALUES.slice(1))`
+#     **逐字同形**。对整个三元组取会把**常量中轴 50** 算进来：日后有人把中轴调过
+#     超买（如中轴 90）⇒ 上沿被顶在 90，与前端按真实超买值判的扫描结果分叉。
+#     默认 (50, 80, 20) 下两种写法取值相同（80 / 20）⇒ 本次改动**零行为变化**，
+#     纯粹是让前后端不再各写一种派生式（防未来的分叉）。
 # 由 `Test/test_scan_rsi_mode.py` 的「阈值同源」护栏逐条校验（只看数字、不看注释）。
 RSI_REF_VALUES = (50, 80, 20)
-RSI_OVERBOUGHT = max(RSI_REF_VALUES)   # 超买上沿：≥ 此值即超买（**含边界**，与副图同口径）
-RSI_OVERSOLD = min(RSI_REF_VALUES)     # 超卖下沿：≤ 此值即超卖（**含边界**）
+RSI_OVERBOUGHT = max(RSI_REF_VALUES[1:])   # 超买上沿：≥ 此值即超买（**含边界**，与副图同口径）
+RSI_OVERSOLD = min(RSI_REF_VALUES[1:])     # 超卖下沿：≤ 此值即超卖（**含边界**）
 
 
 def calculate_rsi(closes, period=RSI_CYCLE):
