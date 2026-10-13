@@ -5,7 +5,12 @@
            → 结构上不可能漂移（改这一个值，两个控件一起变）。
            用 min-height 而非 height：窗口很窄时头部会被挤压、文字会折行撑高，
            此时两者仍各自按内容长高（与改动前一致），不会把文字压出框。 */
-        :root { --hdr-chip-h: 19px; }
+        /* ── 问答弹框的最小宽度（标注 / 扫描 / 登录方式三种框共用；2026-10-13）──
+           弹框宽度**跟内容走**：正文长的（引擎日志尾部 / 合并告警）由各自的
+           max-width 兜住；短文案的（如「登录方式」+ 两项单选）不该被撑到正文宽度。
+           下限**只在这里定义一处**，由 .annotation-dialog-box / .alert-dialog-box
+           共同引用 → 结构上不可能漂移（改这一个值，两种框一起变）。 */
+        :root { --hdr-chip-h: 19px; --dialog-min-w: 320px; }
         html { background: #1a1a2e; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
@@ -729,7 +734,7 @@
         .annotation-dialog.show { display: flex; }
         .annotation-dialog-box {
             background: #16213e; border: 1px solid #0f3460; border-radius: 8px;
-            padding: 20px 24px; min-width: 320px; box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+            padding: 20px 24px; min-width: var(--dialog-min-w); box-shadow: 0 8px 32px rgba(0,0,0,0.5);
         }
         .annotation-dialog-title {
             font-size: 14px; font-weight: 600; color: #e0e0e0; margin-bottom: 12px;
@@ -760,8 +765,11 @@
         /* 模态提示框（替代原生 alert / confirm）──
            原生 alert 只有「确定」一个出口；本组件补上点框外区域 / 按 Esc 两条出口，
            且这两条出口落在 confirm（删除类确认）上表示「取消」，不是「确定」。
-           正文可能很长（交易引擎日志尾部、一批严重告警合并），故限宽 + 限高 + 内部滚动，
-           不像 annotation-dialog 那样会被长文把窗口撑破。
+           正文可能很长（交易引擎日志尾部、一批严重告警合并），故限高 + 内部滚动 +
+           max-width 兜底，不像 annotation-dialog 那样会被长文把窗口撑破。
+           ⚠️ 宽度**跟内容走**（width:auto，2026-10-13 用户反馈「登录方式」框太宽）：
+           620px 是**上限**，不是固定宽度 —— 短正文的框（一字半句的提示、两项单选的
+           登录方式）不再占满 620px 留一片空白；下限复用 --dialog-min-w。
            按钮沿用 .annotation-dialog-btn —— 与标注/扫描弹窗同一套观感，不另造一套。 */
         .alert-dialog {
             position: fixed; top: 0; left: 0; right: 0; bottom: 0;
@@ -771,7 +779,8 @@
         .alert-dialog.show { display: flex; }
         .alert-dialog-box {
             background: #16213e; border: 1px solid #0f3460; border-radius: 8px;
-            padding: 18px 22px; width: 620px; max-width: 90vw; max-height: 80vh;
+            padding: 18px 22px; width: auto; min-width: var(--dialog-min-w);
+            max-width: min(620px, 90vw); max-height: 80vh;
             display: flex; flex-direction: column;
             box-shadow: 0 8px 32px rgba(0,0,0,0.5);
         }
