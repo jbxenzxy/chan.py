@@ -40,7 +40,8 @@
      N=1 与 N 超长 / 返回字段与裸码约定；
   ② 阈值同源与判据方向（源码锚点 + 真导入 + 跨语言同值 + rsi 分支内无 80/20 副本）；
   ③ 前端真函数（node 抽 app.js 真代码）：排序（组间超卖全前 + 组内按极值）/
-     标签文本与配色类 / 披露行（阈值随变量走、只留判据句）/ 空结果态 / 缺字段兜底；
+     标签文本与配色类 / 披露行（阈值随变量走、只留判据句）/ 空结果态 / 缺字段兜底
+     （与后端同源分层：行内阈值 → 末根 → 命中方向）；
   ④ 接线完整性：模式枚举 / 持久化白名单 / 自动补 3 / 标题 / runScan 分支指向 /
      app.html 选项与 DOM 顺序。
 
@@ -364,7 +365,8 @@ def _extract_any_fn(appjs, fn_name):
     raise AssertionError("app.js 花括号不配平: " + fn_name)
 
 
-# 混合样本：3 超卖 + 2 超买 + 1 条缺 rsi_group（按 rsi_last 兜底）。
+# 混合样本：3 超卖 + 2 超买 + 1 条缺 rsi_group（兜底：15.0 <= 当前生效 20 ⇒ under，
+#   与该行 rsi_hit_under=1 同向）。
 #   期望顺序（组间 + 组内极值）：C(0.0) → A(8.1) → F(15.0) → E(15.4) → D(92.5) → B(86.0)
 _ROWS = [
     {"code": "sz000001", "name": "A", "is_rsi": True, "recent_days": 3,
@@ -441,6 +443,13 @@ def part3():
         "out.push('GRP=' + JSON.stringify([\n"
         "  _rsiGroupOf({rsi_group:'under'}), _rsiGroupOf({rsi_group:'over'}),\n"
         "  _rsiGroupOf({rsi_last:15.0}), _rsiGroupOf({rsi_last:85.0})]));\n"
+        "out.push('GRP2=' + JSON.stringify([\n"
+        "  _rsiGroupOf({rsi_last:50.0, rsi_hit_under:2, rsi_hit_over:0}),\n"
+        "  _rsiGroupOf({rsi_last:25.0, rsi_under:30, rsi_over:70}),\n"
+        "  _rsiGroupOf({rsi_last:85.0, rsi_hit_under:3, rsi_hit_over:1}),\n"
+        "  _rsiGroupOf({rsi_hit_over:2}),\n"
+        "  _rsiGroupOf({rsi_hit_under:1, rsi_hit_over:2}),\n"
+        "  _rsiGroupOf({})]));\n"
         "out.push('CAL=' + JSON.stringify(_rsiCaliberHtml()));\n"
         "out.push('CALRT=' + JSON.stringify(_rsiCaliberHtml(\n"
         "  [{rsi_over:70, rsi_under:30}])));\n"
@@ -490,8 +499,20 @@ def part3():
           "\u6392\u5e8f\u952e\u4e0e\u6807\u7b7e\u53d6\u503c\u4e0d\u540c\u6e90")
 
     grp = json.loads(kv["GRP"])
-    check("③ _rsiGroupOf：显式字段优先；缺字段时按 rsi_last 兜底（15→under / 85→over）",
+    check("③ _rsiGroupOf：显式字段优先；缺字段时按阈值（行内 rsi_under/over 优先，"
+          "缺省退当前生效值）比较 rsi_last（15→under / 85→over）",
           grp == ["under", "over", "under", "over"], grp)
+
+    grp2 = json.loads(kv["GRP2"])
+    check("③ _rsiGroupOf 兜底与后端同源分层（旧实现只按「rsi_last <= 当前 20」判，"
+          "第 1/2/5 条即红）："
+          "① 末根中性 50 且 hit_under>0 ⇒ under；"
+          "② 阈值取该行自带 rsi_under=30 ⇒ 25 归 under（旧按当前 20 误判 over）；"
+          "③ 末根 85 越超买 ⇒ over（末根优先于 hit_under=3，顺序写反即红）；"
+          "④ 无 rsi_last ⇒ 按命中方向，仅超买 ⇒ over；"
+          "⑤ 两侧都命中 ⇒ 超卖优先 under；"
+          "⑥ 空行 ⇒ 确定性 over（不引入第三态）",
+          grp2 == ["under", "under", "over", "over", "under", "over"], grp2)
 
     tag_u = json.loads(kv["TAGU"])
     tag_o = json.loads(kv["TAGO"])

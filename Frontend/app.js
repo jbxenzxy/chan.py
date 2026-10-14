@@ -7686,13 +7686,28 @@
         // ── RSI 扫描（rsi 模式）─────────────────────────────────────────
         // 组别读取：后端 rsi_group 是归类判定的**唯一事实源**（口径见
         //   AppScan.scan_one 的 rsi 分支：先看窗口末根，末根中性时超卖优先）。
-        //   字段缺失（异常行 / 旧缓存）时按 rsi_last 兜底推断，保证渲染不因
-        //   缺字段而把行画错组。
+        //   字段缺失（异常行 / 旧缓存）时按**同源字段分层兜底** —— 重演后端
+        //   同一判据，不引入第二套口径：
+        //     ① 阈值取该行**自带**的 rsi_under / rsi_over（后端每行回传）；
+        //        无自带才退当前生效值 —— 扫描后用户改了配置时，行内字段仍是
+        //        该行扫描时的口径（与 _rsiCaliberHtml 同约定）；
+        //     ② 末根优先：rsi_last 越界即定组（与后端同序、同 <= / >= 边界）；
+        //     ③ rsi_last 缺失或中性时退命中方向 rsi_hit_under（>0 ⇒ under，
+        //        否则 over，同「超卖优先」）；
+        //     ④ 连 hit 也无（理论上不可达，后端命中行必带）：确定性默认 over，
+        //        不引入第三态。
+        //   兜底只应对异常行/旧缓存；正常链路 rsi_group 恒在（后端每行输出）。
         function _rsiGroupOf(r) {
-            if (r && r.rsi_group === "under") return "under";
-            if (r && r.rsi_group === "over") return "over";
-            var v = Number((r || {}).rsi_last);
-            return (isFinite(v) && v <= RSI_SEG_UNDER) ? "under" : "over";
+            r = r || {};
+            if (r.rsi_group === "under" || r.rsi_group === "over") return r.rsi_group;
+            var u = (r.rsi_under == null) ? RSI_SEG_UNDER : Number(r.rsi_under);
+            var o = (r.rsi_over == null) ? RSI_SEG_OVER : Number(r.rsi_over);
+            var v = Number(r.rsi_last);
+            if (isFinite(v)) {
+                if (isFinite(u) && v <= u) return "under";
+                if (isFinite(o) && v >= o) return "over";
+            }
+            return (Number(r.rsi_hit_under) || 0) ? "under" : "over";
         }
 
         // RSI 标签HTML：配色与 K 线图副图 RSI **分段着色**同源（rsiColorOf）——
