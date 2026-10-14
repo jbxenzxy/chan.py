@@ -419,7 +419,14 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
                                             saved_selection_date=saved_selection_date,
                                             is_replay=bool(end_time))
             # ★ 追加当前形成中的K线（klines[-1]），让前端立即看到新K线
-            if klines is not None and len(klines) > 0:
+            # ⚠️ 复盘态（end_time 非空）不追加：复盘语义 = 末根冻结在复盘点、
+            #   不被实时拉最新（本函数 update 循环的「复盘软断开」注释同款口径）。
+            #   klines[-1] 是**数据源最新一根**（复盘边界之外），追加会让快照
+            #   末根越界（实测：复盘 IF2409 到 2024/09/02 → 快照末根变
+            #   2024/09/20）；且前端复盘态重连以末根当复盘点（app.js 的
+            #   _replayEndMain/replayEnd3）→ 复盘点被悄悄改写为边界外时刻。
+            #   复盘快照的边界末根由 records 截断保证（已含），无需此追加。
+            if (not end_time) and klines is not None and len(klines) > 0:
                 _lr = klines.iloc[-1]; _dns = _lr.get('datetime')
                 if _dns is not None:
                     _bdt = datetime.fromtimestamp(_dns / 1e9)
@@ -881,7 +888,9 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
         _main_klines_for_init = src.get_kline_serial(symbol, main_freq_sec)
         _sub_klines_for_init = src.get_kline_serial(symbol, sub_freq_sec)
         # 上窗
-        if _main_klines_for_init is not None and len(_main_klines_for_init) > 0:
+        # ⚠️ 复盘态（end_time 非空）不追加「数据源最新一根」——同单窗口径：
+        #   复盘末根冻结在复盘点，_main_klines_for_init.iloc[-1] 在边界外。
+        if (not end_time) and _main_klines_for_init is not None and len(_main_klines_for_init) > 0:
             _lr = _main_klines_for_init.iloc[-1]; _dns = _lr.get('datetime')
             if _dns is not None:
                 _bdt = datetime.fromtimestamp(_dns / 1e9)
@@ -897,7 +906,8 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
                     _inherit_metrics_for_preview_bar(_ex)
                     main_snapshot['meta']['kline_count'] = len(_ex)
         # 下窗
-        if _sub_klines_for_init is not None and len(_sub_klines_for_init) > 0:
+        # ⚠️ 复盘态（end_time 非空）不追加——同上窗（复盘末根冻结在复盘点）。
+        if (not end_time) and _sub_klines_for_init is not None and len(_sub_klines_for_init) > 0:
             _lr = _sub_klines_for_init.iloc[-1]; _dns = _lr.get('datetime')
             if _dns is not None:
                 _bdt = datetime.fromtimestamp(_dns / 1e9)
