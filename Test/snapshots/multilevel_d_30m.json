@@ -12737,6 +12737,26 @@
   ],
   "bsps": [
    {
+    "date": "2023/03/31 11:30",
+    "fractal_high": 14.11,
+    "fractal_low": 14.02,
+    "high": 13.19,
+    "is_buy": false,
+    "low": 13.13,
+    "price": 13.16,
+    "type": "1"
+   },
+   {
+    "date": "2023/03/31 14:00",
+    "fractal_high": 14.11,
+    "fractal_low": 14.02,
+    "high": 13.21,
+    "is_buy": false,
+    "low": 13.11,
+    "price": 13.2,
+    "type": "1"
+   },
+   {
     "date": "2023/10/16 11:30",
     "fractal_high": 21.25,
     "fractal_low": 21.01,
@@ -12745,6 +12765,36 @@
     "low": 20.28,
     "price": 20.31,
     "type": "1"
+   },
+   {
+    "date": "2023/10/16 14:00",
+    "fractal_high": 21.25,
+    "fractal_low": 21.01,
+    "high": 20.62,
+    "is_buy": false,
+    "low": 20.26,
+    "price": 20.6,
+    "type": "1"
+   },
+   {
+    "date": "2023/06/16 14:00",
+    "fractal_high": 16.12,
+    "fractal_low": 15.93,
+    "high": 16.06,
+    "is_buy": true,
+    "low": 15.96,
+    "price": 15.99,
+    "type": "3"
+   },
+   {
+    "date": "2024/11/26 14:00",
+    "fractal_high": 77.11,
+    "fractal_low": 76.51,
+    "high": 74.86,
+    "is_buy": false,
+    "low": 74.38,
+    "price": 74.72,
+    "type": "3"
    },
    {
     "date": "2024/05/09 15:00",
@@ -42322,7 +42372,7 @@
   ],
   "meta": {
    "bi_count": 99,
-   "bsp_count": 3,
+   "bsp_count": 8,
    "chan_version": "chan.py",
    "date_range": "2023/01/03 10:30 ~ 2024/12/02 15:00",
    "freq": "30分钟",

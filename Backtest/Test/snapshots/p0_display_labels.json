@@ -1,15 +1,15 @@
 {
  "d": {
   "by_reason": {
-   "breakeven": 2,
-   "sl": 3,
+   "breakeven": 3,
+   "sl": 2,
    "trailing": 1
   },
   "fixture": "sz002190_d.json",
   "labels_in_trade_order": [
    "止损",
    "保本",
-   "止损",
+   "保本",
    "保本",
    "止损",
    "跟踪止盈"
@@ -17,8 +17,8 @@
   "n": 6,
   "open": 0,
   "summary_last_lines": [
-   "分类型 0:n=3 avgR=3.931, 3:n=3 avgR=-0.896",
-   "分原因 止损:n=3, 保本:n=2, 跟踪止盈:n=1"
+   "分类型 0:n=3 avgR=3.962, 3:n=3 avgR=-0.427",
+   "分原因 止损:n=2, 保本:n=3, 跟踪止盈:n=1"
   ]
  },
  "exit_reason_order": [
@@ -37,19 +37,19 @@
   "sl": "止损：收盘价落到保护线的不利侧离场（多头＝跌破、空头＝涨破）。保护线在入场价的不利侧 R 处（多头 入场价 − R、空头 入场价 + R；R = max(结构距离, atr_sl_multiple×ATR)），从未被 L3 动过。",
   "trailing": "跟踪止盈：浮盈 > 2R 后启动跟踪，保护线 = 至今最有利价向不利侧退 1R（多头 最高价 − 1R、空头 最低价 + 1R），收盘价落到该线不利侧离场（该笔锁住多少 R 见行内 R 倍数）。"
  },
- "m30": {
-  "fixture": "sz002190_30m.json",
+ "m15": {
+  "fixture": "sz002190_15m.json",
   "last_close": 22.94,
-  "n": 7,
+  "n": 14,
   "open": 1,
   "open_trade": {
-   "entry_price": 24.33,
-   "r_distance": 0.4,
+   "entry_price": 24.58,
+   "r_distance": 0.6,
    "side": "short",
-   "trade_id": 8,
-   "unrealized_net_return": 0.0564332531,
+   "trade_id": 15,
+   "unrealized_net_return": 0.0660240459,
    "unrealized_price": 22.94,
-   "unrealized_r": 3.475
+   "unrealized_r": 2.7333
   }
  },
  "note": "出场原因显示文案（三选一）与未平仓浮动估值的冻结基线。改 Backtest/Report.py 的文案或 Runner._mark_open_positions 的估值口径时，先看 diff 是不是你**故意**改的那件事，再跑 --freeze。",

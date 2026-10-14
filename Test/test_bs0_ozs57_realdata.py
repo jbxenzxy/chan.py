@@ -63,16 +63,22 @@ SAMPLE = "sz002190_d.json"
 # 2026-10-12 0 类点离开笔突破阈值由基准区间 smoothstep 改为 zs_height
 # （BSPointList._out_bi_break_threshold，有意放宽）——本样本 4th 新增 3 个 T0
 # （2024/04/18、19、22；宽松/严格口径下相同，闸门只影响 57th），随实测重冻。
-# 57th 自身口径未变（宽松 6 / 严格 0），三处 57th 基线保持。
-BASE_ENTER_57TH = 30
+# 2026-10-14 重冻：㈢ 分型检查停用（BSPointList.cal_bsp_precondition 的 ㈢ 段整段
+# 注释，59b55e8）⇒ 更多笔进入买卖点分支：57th 进入 30→51、宽松 T0 总数 9→11
+# （新增 2025/07/09、2025/07/11，均落在 57th 分支）、57th 宽松 T0 6→8。同轮
+# cal_bs3point 新增「笔N 整笔 DIF 趋势侧闸」（_dif_all_same_side），本样本
+# T3 3→6 全部来自 ㈢ 停用（6 个 T3 在新闸下逐一通过，A/B 实证 delta=0）。
+# 严格口径（BASE_STRICT_*）与 4th 基线实测逐项不变，保持原值。
+BASE_ENTER_57TH = 51
 BASE_LOOSE_T0_DATES = ["2024/04/18", "2024/04/19", "2024/04/22",
+                       "2025/07/09", "2025/07/11",
                        "2025/07/17", "2025/07/18", "2025/07/21", "2025/07/22",
                        "2025/08/18", "2025/08/19"]
 BASE_STRICT_T0_DATES = ["2024/04/18", "2024/04/19", "2024/04/22"]
-BASE_LOOSE_57TH_T0_COUNT = 6
+BASE_LOOSE_57TH_T0_COUNT = 8
 BASE_STRICT_57TH_T0_COUNT = 0
 BASE_4TH_T0_COUNT = 3
-BASE_T3_COUNT = 3
+BASE_T3_COUNT = 6
 
 BRANCHES = (
     ("_cal_bs0point_3rd", "3rd"),

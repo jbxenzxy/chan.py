@@ -4,8 +4,8 @@
  "samples": [
   {
    "alert_a_floor": 3.0,
-   "alert_first_below": 3,
-   "alert_last_below": 1,
+   "alert_first_below": 8,
+   "alert_last_below": 4,
    "disappeared_ever": 0,
    "drift": [
     {
@@ -26,6 +26,23 @@
      "type": "3"
     },
     {
+     "A_first": 1.0,
+     "A_last": 2.99,
+     "bi_end_first": "2021-08-27",
+     "bi_end_last": "2021-09-17",
+     "dA": 1.99,
+     "date": "2021-08-30",
+     "dpct": 199.0,
+     "entry": 29.268,
+     "f_high_first": 29.268,
+     "f_high_last": 26.908,
+     "f_low_first": 28.268,
+     "f_low_last": 26.278,
+     "is_buy": true,
+     "signal": "2021-08-30 type=3 buy=True",
+     "type": "3"
+    },
+    {
      "A_first": 0.71,
      "A_last": 1.06,
      "bi_end_first": "2021-12-21",
@@ -40,6 +57,40 @@
      "f_low_last": 28.638,
      "is_buy": true,
      "signal": "2021-12-22 type=3 buy=True",
+     "type": "3"
+    },
+    {
+     "A_first": 0.84,
+     "A_last": 4.75,
+     "bi_end_first": "2022-05-18",
+     "bi_end_last": "2022-06-24",
+     "dA": 3.91,
+     "date": "2022-05-20",
+     "dpct": 465.5,
+     "entry": 24.158,
+     "f_high_first": 24.998,
+     "f_high_last": 28.908,
+     "f_low_first": 23.168,
+     "f_low_last": 27.858,
+     "is_buy": false,
+     "signal": "2022-05-20 type=3 buy=False",
+     "type": "3"
+    },
+    {
+     "A_first": 0.81,
+     "A_last": 4.72,
+     "bi_end_first": "2022-05-18",
+     "bi_end_last": "2022-06-24",
+     "dA": 3.91,
+     "date": "2022-05-23",
+     "dpct": 482.7,
+     "entry": 24.188,
+     "f_high_first": 24.998,
+     "f_high_last": 28.908,
+     "f_low_first": 23.168,
+     "f_low_last": 27.858,
+     "is_buy": false,
+     "signal": "2022-05-23 type=3 buy=False",
      "type": "3"
     },
     {
@@ -58,17 +109,56 @@
      "is_buy": false,
      "signal": "2022-05-24 type=3 buy=False",
      "type": "3"
+    },
+    {
+     "A_first": 0.3,
+     "A_last": 1.89,
+     "bi_end_first": "2025-07-07",
+     "bi_end_last": "2025-07-15",
+     "dA": 1.59,
+     "date": "2025-07-09",
+     "dpct": 530.0,
+     "entry": 36.28,
+     "f_high_first": 36.64,
+     "f_high_last": 35.35,
+     "f_low_first": 35.98,
+     "f_low_last": 34.39,
+     "is_buy": true,
+     "signal": "2025-07-09 type=0 buy=True",
+     "type": "0"
+    },
+    {
+     "A_first": 0.71,
+     "A_last": 1.32,
+     "bi_end_first": "2025-07-10",
+     "bi_end_last": "2025-07-15",
+     "dA": 0.61,
+     "date": "2025-07-11",
+     "dpct": 85.9,
+     "entry": 35.71,
+     "f_high_first": 35.79,
+     "f_high_last": 35.35,
+     "f_low_first": 35.0,
+     "f_low_last": 34.39,
+     "is_buy": true,
+     "signal": "2025-07-11 type=0 buy=True",
+     "type": "0"
     }
    ],
-   "drift_count": 3,
+   "drift_count": 8,
    "ever_but_not_final": [],
-   "ever_seen": 12,
+   "ever_seen": 17,
    "field_revision_signals": [
     "2021-08-23 type=3 buy=True",
+    "2021-08-30 type=3 buy=True",
     "2021-12-22 type=3 buy=True",
-    "2022-05-24 type=3 buy=False"
+    "2022-05-20 type=3 buy=False",
+    "2022-05-23 type=3 buy=False",
+    "2022-05-24 type=3 buy=False",
+    "2025-07-09 type=0 buy=True",
+    "2025-07-11 type=0 buy=True"
    ],
-   "final_alive": 12,
+   "final_alive": 17,
    "fixture": {
     "bars": 1393,
     "file": "sz002190_d.json",
@@ -80,10 +170,15 @@
    "reappeared": 0,
    "revisions": {
     "2021-08-23 type=3 buy=True": 5,
+    "2021-08-30 type=3 buy=True": 4,
     "2021-12-22 type=3 buy=True": 1,
-    "2022-05-24 type=3 buy=False": 4
+    "2022-05-20 type=3 buy=False": 4,
+    "2022-05-23 type=3 buy=False": 4,
+    "2022-05-24 type=3 buy=False": 4,
+    "2025-07-09 type=0 buy=True": 2,
+    "2025-07-11 type=0 buy=True": 1
    },
-   "signals_total": 12,
+   "signals_total": 17,
    "xcheck": {
     "drift_trade_rows": [
      {
@@ -107,25 +202,35 @@
       "type_match": true
      },
      {
-      "A_first": 1.7,
-      "A_last": 5.61,
+      "A_first": 0.84,
+      "A_last": 4.75,
       "bsp_type": "3",
-      "r_distance": 1.7,
+      "r_distance": 0.935,
       "r_lt_A_last": true,
       "side": "short",
-      "trade_entry_date": "2022-05-24",
+      "trade_entry_date": "2022-05-20",
+      "type_match": true
+     },
+     {
+      "A_first": 0.3,
+      "A_last": 1.89,
+      "bsp_type": "0",
+      "r_distance": 1.865714,
+      "r_lt_A_last": true,
+      "side": "long",
+      "trade_entry_date": "2025-07-09",
       "type_match": true
      }
     ],
-    "r_lt_A_last_count": 2,
-    "signals_seen": 12,
+    "r_lt_A_last_count": 3,
+    "signals_seen": 17,
     "trades": 6
    }
   },
   {
    "alert_a_floor": 3.0,
-   "alert_first_below": 3,
-   "alert_last_below": 3,
+   "alert_first_below": 11,
+   "alert_last_below": 11,
    "disappeared_ever": 0,
    "drift": [
     {
@@ -146,20 +251,20 @@
      "type": "3"
     },
     {
-     "A_first": 0.15,
-     "A_last": 0.74,
-     "bi_end_first": "2026-05-06 10:30",
-     "bi_end_last": "2026-05-08 14:00",
-     "dA": 0.59,
-     "date": "2026-05-06 14:00",
-     "dpct": 393.3,
-     "entry": 29.91,
-     "f_high_first": 30.06,
-     "f_high_last": 30.65,
-     "f_low_first": 29.92,
-     "f_low_last": 30.42,
+     "A_first": 0.0,
+     "A_last": 0.1,
+     "bi_end_first": "2026-02-13 14:30",
+     "bi_end_last": "2026-02-24 14:30",
+     "dA": 0.1,
+     "date": "2026-02-24 10:00",
+     "dpct": null,
+     "entry": 36.54,
+     "f_high_first": 36.23,
+     "f_high_last": 36.64,
+     "f_low_first": 36.11,
+     "f_low_last": 36.59,
      "is_buy": false,
-     "signal": "2026-05-06 14:00 type=3 buy=False",
+     "signal": "2026-02-24 10:00 type=3 buy=False",
      "type": "3"
     },
     {
@@ -178,17 +283,161 @@
      "is_buy": true,
      "signal": "2026-06-16 11:30 type=3 buy=True",
      "type": "3"
+    },
+    {
+     "A_first": 0.09,
+     "A_last": 0.4,
+     "bi_end_first": "2026-06-16 11:00",
+     "bi_end_last": "2026-06-17 11:30",
+     "dA": 0.31,
+     "date": "2026-06-16 13:30",
+     "dpct": 344.4,
+     "entry": 26.26,
+     "f_high_first": 26.36,
+     "f_high_last": 25.98,
+     "f_low_first": 26.17,
+     "f_low_last": 25.86,
+     "is_buy": true,
+     "signal": "2026-06-16 13:30 type=3 buy=True",
+     "type": "3"
+    },
+    {
+     "A_first": 0.08,
+     "A_last": 0.38,
+     "bi_end_first": "2026-06-16 14:00",
+     "bi_end_last": "2026-06-17 11:30",
+     "dA": 0.3,
+     "date": "2026-06-16 14:30",
+     "dpct": 375.0,
+     "entry": 26.24,
+     "f_high_first": 26.28,
+     "f_high_last": 25.98,
+     "f_low_first": 26.16,
+     "f_low_last": 25.86,
+     "is_buy": true,
+     "signal": "2026-06-16 14:30 type=3 buy=True",
+     "type": "3"
+    },
+    {
+     "A_first": 0.08,
+     "A_last": 0.38,
+     "bi_end_first": "2026-06-16 14:00",
+     "bi_end_last": "2026-06-17 11:30",
+     "dA": 0.3,
+     "date": "2026-06-16 15:00",
+     "dpct": 375.0,
+     "entry": 26.24,
+     "f_high_first": 26.28,
+     "f_high_last": 25.98,
+     "f_low_first": 26.16,
+     "f_low_last": 25.86,
+     "is_buy": true,
+     "signal": "2026-06-16 15:00 type=3 buy=True",
+     "type": "3"
+    },
+    {
+     "A_first": 0.0,
+     "A_last": 0.27,
+     "bi_end_first": "2026-06-16 14:00",
+     "bi_end_last": "2026-06-17 11:30",
+     "dA": 0.27,
+     "date": "2026-06-17 10:00",
+     "dpct": null,
+     "entry": 26.13,
+     "f_high_first": 26.28,
+     "f_high_last": 25.98,
+     "f_low_first": 26.16,
+     "f_low_last": 25.86,
+     "is_buy": true,
+     "signal": "2026-06-17 10:00 type=3 buy=True",
+     "type": "3"
+    },
+    {
+     "A_first": 0.05,
+     "A_last": 2.28,
+     "bi_end_first": "2026-07-06 11:30",
+     "bi_end_last": "2026-07-09 11:30",
+     "dA": 2.23,
+     "date": "2026-07-06 13:30",
+     "dpct": 4460.0,
+     "entry": 23.72,
+     "f_high_first": 23.77,
+     "f_high_last": 21.61,
+     "f_low_first": 23.67,
+     "f_low_last": 21.44,
+     "is_buy": true,
+     "signal": "2026-07-06 13:30 type=0 buy=True",
+     "type": "0"
+    },
+    {
+     "A_first": 0.04,
+     "A_last": 1.6,
+     "bi_end_first": "2026-07-07 13:30",
+     "bi_end_last": "2026-07-09 11:30",
+     "dA": 1.56,
+     "date": "2026-07-07 14:00",
+     "dpct": 3900.0,
+     "entry": 23.04,
+     "f_high_first": 23.1,
+     "f_high_last": 21.61,
+     "f_low_first": 23.0,
+     "f_low_last": 21.44,
+     "is_buy": true,
+     "signal": "2026-07-07 14:00 type=0 buy=True",
+     "type": "0"
+    },
+    {
+     "A_first": 0.24,
+     "A_last": 0.52,
+     "bi_end_first": "2026-07-09 10:00",
+     "bi_end_last": "2026-07-09 11:30",
+     "dA": 0.28,
+     "date": "2026-07-09 10:30",
+     "dpct": 116.7,
+     "entry": 21.96,
+     "f_high_first": 22.38,
+     "f_high_last": 21.61,
+     "f_low_first": 21.72,
+     "f_low_last": 21.44,
+     "is_buy": true,
+     "signal": "2026-07-09 10:30 type=0 buy=True",
+     "type": "0"
+    },
+    {
+     "A_first": 0.15,
+     "A_last": 0.43,
+     "bi_end_first": "2026-07-30 14:00",
+     "bi_end_last": "2026-07-31 10:00",
+     "dA": 0.28,
+     "date": "2026-07-30 14:30",
+     "dpct": 186.7,
+     "entry": 22.61,
+     "f_high_first": 22.66,
+     "f_high_last": 22.75,
+     "f_low_first": 22.46,
+     "f_low_last": 22.18,
+     "is_buy": true,
+     "signal": "2026-07-30 14:30 type=0 buy=True",
+     "type": "0"
     }
    ],
-   "drift_count": 3,
+   "drift_count": 11,
    "ever_but_not_final": [],
-   "ever_seen": 10,
+   "ever_seen": 24,
    "field_revision_signals": [
     "2026-02-13 15:00 type=3 buy=False",
-    "2026-05-06 14:00 type=3 buy=False",
-    "2026-06-16 11:30 type=3 buy=True"
+    "2026-02-24 10:00 type=3 buy=False",
+    "2026-06-16 11:30 type=3 buy=True",
+    "2026-06-16 13:30 type=3 buy=True",
+    "2026-06-16 14:30 type=3 buy=True",
+    "2026-06-16 15:00 type=3 buy=True",
+    "2026-06-17 10:00 type=3 buy=True",
+    "2026-07-06 13:30 type=0 buy=True",
+    "2026-07-07 14:00 type=0 buy=True",
+    "2026-07-09 10:30 type=0 buy=True",
+    "2026-07-30 14:30 type=0 buy=True"
    ],
-   "final_alive": 10,
+   "final_alive": 24,
    "fixture": {
     "bars": 1936,
     "file": "sz002190_30m.json",
@@ -196,14 +445,22 @@
    },
    "frames": 1936,
    "freq": "30m",
-   "max_dA": 0.59,
+   "max_dA": 2.23,
    "reappeared": 0,
    "revisions": {
     "2026-02-13 15:00 type=3 buy=False": 4,
-    "2026-05-06 14:00 type=3 buy=False": 4,
-    "2026-06-16 11:30 type=3 buy=True": 4
+    "2026-02-24 10:00 type=3 buy=False": 4,
+    "2026-06-16 11:30 type=3 buy=True": 4,
+    "2026-06-16 13:30 type=3 buy=True": 4,
+    "2026-06-16 14:30 type=3 buy=True": 3,
+    "2026-06-16 15:00 type=3 buy=True": 3,
+    "2026-06-17 10:00 type=3 buy=True": 3,
+    "2026-07-06 13:30 type=0 buy=True": 15,
+    "2026-07-07 14:00 type=0 buy=True": 7,
+    "2026-07-09 10:30 type=0 buy=True": 2,
+    "2026-07-30 14:30 type=0 buy=True": 1
    },
-   "signals_total": 10,
+   "signals_total": 24,
    "xcheck": {
     "drift_trade_rows": [
      {
@@ -217,13 +474,13 @@
       "type_match": true
      },
      {
-      "A_first": 0.15,
-      "A_last": 0.74,
+      "A_first": 0.0,
+      "A_last": 0.1,
       "bsp_type": "3",
-      "r_distance": 0.15,
-      "r_lt_A_last": true,
+      "r_distance": 0.175714,
+      "r_lt_A_last": false,
       "side": "short",
-      "trade_entry_date": "2026-05-06 14:00",
+      "trade_entry_date": "2026-02-24 10:00",
       "type_match": true
      },
      {
@@ -235,11 +492,61 @@
       "side": "long",
       "trade_entry_date": "2026-06-16 11:30",
       "type_match": true
+     },
+     {
+      "A_first": 0.0,
+      "A_last": 0.27,
+      "bsp_type": "3",
+      "r_distance": 0.198571,
+      "r_lt_A_last": true,
+      "side": "long",
+      "trade_entry_date": "2026-06-17 10:00",
+      "type_match": true
+     },
+     {
+      "A_first": 0.05,
+      "A_last": 2.28,
+      "bsp_type": "0",
+      "r_distance": 0.219286,
+      "r_lt_A_last": true,
+      "side": "long",
+      "trade_entry_date": "2026-07-06 13:30",
+      "type_match": true
+     },
+     {
+      "A_first": 0.04,
+      "A_last": 1.6,
+      "bsp_type": "0",
+      "r_distance": 0.18,
+      "r_lt_A_last": true,
+      "side": "long",
+      "trade_entry_date": "2026-07-07 14:00",
+      "type_match": true
+     },
+     {
+      "A_first": 0.24,
+      "A_last": 0.52,
+      "bsp_type": "0",
+      "r_distance": 0.254286,
+      "r_lt_A_last": true,
+      "side": "long",
+      "trade_entry_date": "2026-07-09 10:30",
+      "type_match": true
+     },
+     {
+      "A_first": 0.15,
+      "A_last": 0.43,
+      "bsp_type": "0",
+      "r_distance": 0.217857,
+      "r_lt_A_last": true,
+      "side": "long",
+      "trade_entry_date": "2026-07-30 14:30",
+      "type_match": true
      }
     ],
-    "r_lt_A_last_count": 3,
-    "signals_seen": 10,
-    "trades": 8
+    "r_lt_A_last_count": 7,
+    "signals_seen": 24,
+    "trades": 17
    }
   }
  ],

@@ -20,10 +20,12 @@
   ③ ★ 派生不变量：`signals_seen == 放行 + 过滤 + 拒收`（逐周期）
   ④ ★ 交叉验证：`signals_seen`（回测侧首见采集）== 引擎侧**最终** `bsp_iter()` 总数
      —— 两个独立口径数出来的买卖点数量必须相等。这是"数据真进了引擎、且采集没漏"
-     的硬证据（尤其对 ⑤ 的周线 0 笔）。
-  ⑤ ★ 周线 0 笔的**判别力自证**：断言周线上 `bi > 0` 且 `seg > 0` 且 `bsp == 0`
-     —— 证明"0 笔"是**引擎判断的结果**，不是"数据没注入/映射错导致引擎空转"。
-     没有这条，一个把周线映射成日线的 bug 也能产出"0 笔"并被当成合法。
+     的硬证据（尤其对 ⑤ 的周线 1 笔）。
+  ⑤ ★ 周线的**判别力自证**：断言周线上 `bi > 0` 且 `seg > 0` 且 `bsp == 1`
+     —— 证明"1 笔"是**引擎判断的结果**，不是"数据没注入/映射错导致引擎空转"。
+     没有这条，一个把周线映射成日线的 bug 也能产出任意笔数并被当成合法。
+     （2026-10-14 重冻改判：㈢ 分型检查停用（BSPointList.cal_bsp_precondition）后
+     周线从 bsp=0 变为 bsp=1；判别力自证的结构保留，只把期望值跟着内核走。）
   ⑥ `type_appended_after_freeze == 0`（逐周期；§2.6 代价①）
 
 重冻结
@@ -55,7 +57,7 @@ MARKET, CODE = "sz", "002190"
 
 # (freq, 切片文件, 用途说明) —— 顺序即 A 股开放周期顺序（Common.CEnum.STOCKS_FREQS）
 PERIODS = [
-    ("w", "sz002190_w.json", "周线（由日线合成）；本样本上 bsp=0 —— 见 ⑤ 的判别力自证"),
+    ("w", "sz002190_w.json", "周线（由日线合成）；本样本上 bsp=1 —— 见 ⑤ 的判别力自证"),
     ("d", "sz002190_d.json", "日线；基准样本（p0_sz002190_d.json 详版在 bt01）"),
     ("30m", "sz002190_30m.json", "30m（由 5m 合成）"),
     ("15m", "sz002190_15m.json", "15m（由 5m 合成）"),
@@ -336,14 +338,15 @@ def main(argv):
     check("④ 交叉验证：signals_seen == 引擎最终 bsp 总数（逐周期）",
           not bad_x, "\n".join(bad_x))
 
-    # ⑤ 周线 0 笔的判别力自证（0 只能是"引擎判断"，不能是"数据没进去"）
+    # ⑤ 周线的判别力自证（2026-10-14 重冻改判：㈢ 分型检查停用后 bsp 0→1；
+    #    0 或 1 都必须能被证明是"引擎判断"而非"数据没进去"）
     wk = [pr for pr in got["periods"] if pr["freq"] == "w"][0]
     eng_w = _eng("w", wk["file"])
-    ok_w = (eng_w["bi"] > 0 and eng_w["seg"] > 0 and eng_w["bsp"] == 0
+    ok_w = (eng_w["bi"] > 0 and eng_w["seg"] > 0 and eng_w["bsp"] == 1
             and eng_w["klu"] == wk["run"]["bars_total"])
-    check("⑤ 周线 0 笔是引擎判断（bi>0 且 seg>0 且 bsp==0，且 klu==bars_total）",
+    check("⑤ 周线 1 笔是引擎判断（bi>0 且 seg>0 且 bsp==1，且 klu==bars_total）",
           ok_w,
-          "klu=%d bi=%d seg=%d bsp=%d（期望 klu==bars_total、bi>0、seg>0、bsp==0）"
+          "klu=%d bi=%d seg=%d bsp=%d（期望 klu==bars_total、bi>0、seg>0、bsp==1）"
           % (eng_w["klu"], eng_w["bi"], eng_w["seg"], eng_w["bsp"]))
 
     # ⑥ 首见冻结成立（逐周期）
