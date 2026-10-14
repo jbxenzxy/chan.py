@@ -981,7 +981,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         dif_ratio = (a_dist - c_dist) / a_dist if a_dist != 0 else None
         ratio_ok = dif_ratio is not None and dif_ratio > config.retrace_zero_axis_ratio
         if not (c_dif_ok and a_dif_ok and ratio_ok):
-            self._dbg_bs0(' _cal_bs0point_3rd', f'{case_str}: 跳过。DIF 未整笔在趋势侧 或 回抽0轴不足',
+            self._dbg_bs0(' _cal_bs0point_3rd', f'{case_str}: 跳过。MACD白线不全在趋势侧 或 回抽0轴不足',
                           stroke_c_idx=stroke_c.idx, is_buy=is_buy,
                           c_dif_ok=c_dif_ok, a_dif_ok=a_dif_ok, ratio_ok=ratio_ok,
                           c_dif_min=round(min(k.macd.DIF for klc in stroke_c.klc_lst for k in klc.lst), 4),
@@ -1631,7 +1631,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         sign_ok = end_dif >= 0 if is_buy else end_dif <= 0
         ratio_ok = macd_b != 0 and (macd_b - macd_a) / macd_b > config.retrace_zero_axis_ratio
         if not (sign_ok and ratio_ok):
-            self._dbg_bs3('cal_bs3point', '跳过: MACD白线不全在趋势侧',
+            self._dbg_bs3('cal_bs3point', '跳过: MACD白线不全在趋势侧 或 回抽0轴不足',
                           stroke_n_idx=stroke_n.idx, is_buy=is_buy,
                           begin_dif=round(begin_dif, 4), end_dif=round(end_dif, 4),
                           a_dist=round(macd_a, 4), b_dist=round(macd_b, 4))
