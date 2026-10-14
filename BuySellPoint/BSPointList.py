@@ -1631,7 +1631,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         sign_ok = end_dif >= 0 if is_buy else end_dif <= 0
         ratio_ok = macd_b != 0 and (macd_b - macd_a) / macd_b > config.retrace_zero_axis_ratio
         if not (sign_ok and ratio_ok):
-            self._dbg_bs3('cal_bs3point', '跳过: MACD白线不在趋势侧',
+            self._dbg_bs3('cal_bs3point', '跳过: MACD白线不全在趋势侧',
                           stroke_n_idx=stroke_n.idx, is_buy=is_buy,
                           begin_dif=round(begin_dif, 4), end_dif=round(end_dif, 4),
                           a_dist=round(macd_a, 4), b_dist=round(macd_b, 4))
