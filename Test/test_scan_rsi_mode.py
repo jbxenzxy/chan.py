@@ -15,7 +15,7 @@
        ② 末根落回开区间（中性）→ 窗口内出现过超卖即归超卖组，否则超买组
           （此时必然出现过超买）—— 即中性时**超卖优先**；
   ④ 静默未命中（不抛异常、不进结果列表、由页面计入「跳过」）的两种情况：
-       · K 线数 < max(N, RSI_CYCLE+1) ⇒ 窗口会落进 RSI 播种区；
+       · K 线数 < N + RSI_CYCLE ⇒ 窗口会落进 RSI 播种区（窗口起点 L-N 必须 ≥ RSI_CYCLE）；
        · 全序列一个价都没变（停牌 / 一字板 / 无成交）⇒ RSI 走公式边界分支得
          退化值 0，那是退化而不是超卖（副图同样画出贴 0 平线，但不该报命中）。
 
@@ -118,15 +118,15 @@ def _seg(start, n, step):
 def part1():
     print("══ ① 后端判据：窗口内任一根越过阈值即命中（含边界）══")
 
-    # ── 纯超卖 / 纯超买（单调序列）──
-    r = _run(_mk([100 - 3 * i for i in range(13)]))
-    check("① 单调跌 13 根 / N=3：窗口 [0,0,0] ⇒ 命中，归超卖组（末根 <= 超卖）",
+    # ── 纯超卖 / 纯超买（单调序列；15 根 = N+RSI_CYCLE 恰在门槛边界上，含）──
+    r = _run(_mk([100 - 3 * i for i in range(15)]))
+    check("① 单调跌 15 根 / N=3：窗口 [0,0,0] ⇒ 命中，归超卖组（末根 <= 超卖）",
           r.get("is_rsi") is True and r.get("rsi_group") == "under"
           and r.get("rsi_hit_under") == 3 and r.get("rsi_hit_over") == 0
           and r.get("rsi_min") == 0.0 and r.get("rsi_last") == 0.0, r)
 
-    r = _run(_mk([100 + 3 * i for i in range(13)]))
-    check("① 单调涨 13 根 / N=3：窗口 [100,100,100] ⇒ 命中，归超买组",
+    r = _run(_mk([100 + 3 * i for i in range(15)]))
+    check("① 单调涨 15 根 / N=3：窗口 [100,100,100] ⇒ 命中，归超买组",
           r.get("is_rsi") is True and r.get("rsi_group") == "over"
           and r.get("rsi_hit_over") == 3 and r.get("rsi_max") == 100.0, r)
 
@@ -137,23 +137,25 @@ def part1():
           r.get("recent_days") == 3, r.get("recent_days"))
 
     # ── 含边界（判据写宽写窄都会改变命中根数）──
-    #   窗口 = [25.0, 20.0, 16.67]：中间那根**恰好 20.0**。
-    #   判据 `<= RSI_OVERSOLD` ⇒ 计 2 根；改成严格 `<` ⇒ 只剩 1 根 ⇒ 下面断言立刻红。
-    #   [100..107] + [100,93,86,79,72] ⇒ 末 3 根 RSI = [25.0, 20.0, 16.67]
-    cl20 = [100, 101, 102, 103, 104, 105, 106, 107, 100, 93, 86, 79, 72]
+    #   窗口 = [20.0, 16.42, 13.73]：首根**恰好 20.0**。
+    #   判据 `<= RSI_OVERSOLD` ⇒ 计 3 根；改成严格 `<` ⇒ 只剩 2 根 ⇒ 下面断言立刻红。
+    #   前两根平盘把样本补到 15 根（= N+RSI_CYCLE 边界）后重推：平盘 diff=0 不改变
+    #   其后各 diff 的正负累加，故窗口首根仍**精确**落在 20.0 上。
+    cl20 = [100, 100, 101, 102, 103, 104, 105, 106, 107, 100, 93, 86, 79, 72, 65]
     r = _run(_mk(cl20))
-    check("① 含边界（超卖侧）：窗口内**恰好 20.0** 的一根被计入 ⇒ hit_under == 2"
-          "（写成严格 `<` 会掉到 1，本断言即红）",
-          r.get("is_rsi") is True and r.get("rsi_hit_under") == 2
-          and r.get("rsi_group") == "under", r)
+    check("① 含边界（超卖侧）：窗口内**恰好 20.0** 的一根被计入 ⇒ hit_under == 3"
+          "（写成严格 `<` 会掉到 2，本断言即红）",
+          r.get("is_rsi") is True and r.get("rsi_hit_under") == 3
+          and r.get("rsi_group") == "under" and r.get("rsi_last") == 13.73, r)
 
-    #   窗口 = [75.0, 80.0, 83.33]：中间那根**恰好 80.0**。
-    cl80 = [100, 99, 98, 97, 96, 95, 94, 93, 100, 107, 114, 121, 128]
+    #   窗口 = [80.0, 83.58, 86.27]：首根**恰好 80.0**。
+    #   判据 `>= RSI_OVERBOUGHT` ⇒ 计 3 根；改成严格 `>` ⇒ 只剩 2 根 ⇒ 下面断言立刻红。
+    cl80 = [100, 100, 99, 98, 97, 96, 95, 94, 93, 100, 107, 114, 121, 128, 135]
     r = _run(_mk(cl80))
-    check("① 含边界（超买侧）：窗口内**恰好 80.0** 的一根被计入 ⇒ hit_over == 2"
-          "（写成严格 `>` 会掉到 1，本断言即红）",
-          r.get("is_rsi") is True and r.get("rsi_hit_over") == 2
-          and r.get("rsi_group") == "over", r)
+    check("① 含边界（超买侧）：窗口内**恰好 80.0** 的一根被计入 ⇒ hit_over == 3"
+          "（写成严格 `>` 会掉到 2，本断言即红）",
+          r.get("is_rsi") is True and r.get("rsi_hit_over") == 3
+          and r.get("rsi_group") == "over" and r.get("rsi_last") == 86.27, r)
 
     # ── 归类分支 ──
     # ① 末根决定：末根 80.07（>= 超买）⇒ 即使窗口里也有别的越界，直接归超买组
@@ -162,18 +164,20 @@ def part1():
           r.get("is_rsi") is True and r.get("rsi_group") == "over"
           and r.get("rsi_last") == 80.07 and r.get("rsi_hit_over") == 3, r)
 
-    # 隔离「末根超买优先」：末根 83.33 >= 超买，窗口内却有 2 根 <= 超卖 ——
+    # 隔离「末根超买优先」：末根 89.67 >= 超买，窗口内却有 2 根 <= 超卖 ——
     #   末根分支给 over；删掉该分支、走中性兜底会给 under（本断言即红）。
     #   这是能区分二者的唯一形状：末根 <= 超卖侧与兜底**恒等**（末根本身
     #   必然计入 hit_under）—— 三分支写法里第一支在行为上冗余，仅作「末根
     #   优先」的显式表达（界面上不得当作未覆盖分支来算）。
-    cl_over_hu = [100, 96, 92, 96, 100, 104, 108, 112, 116, 120, 124, 128, 132]
+    #   样本 = 11 根平盘 + 原 13 根（补到 L=24 = N+RSI_CYCLE 边界后重推：平盘
+    #   diff=0 不改其后各 diff 的正负累加顺序，末 12 根 K 线序列不变）。
+    cl_over_hu = [100] * 11 + [100, 96, 92, 96, 100, 104, 108, 112, 116, 120, 124, 128, 132]
     r = _run(_mk(cl_over_hu), recent="12")
-    check("① 归类①（末根超买优先）：末根 83.33 >= 超买、窗口内 2 根 <= 超卖"
+    check("① 归类①（末根超买优先）：末根 89.67 >= 超买、窗口内 2 根 <= 超卖"
           " ⇒ 仍归**超买组**（末根优先于兜底）",
           r.get("is_rsi") is True and r.get("rsi_group") == "over"
-          and r.get("rsi_hit_under") == 2 and r.get("rsi_hit_over") == 3
-          and r.get("rsi_last") == 83.33, r)
+          and r.get("rsi_hit_under") == 2 and r.get("rsi_hit_over") == 5
+          and r.get("rsi_last") == 89.67, r)
 
     # ② 末根中性兜底：末根 77.08 落回开区间、窗口内无超卖 ⇒ 归超买组
     r = _run(_mk(_seg(100, 14, 2) + _seg(126, 6, -1)))
@@ -197,58 +201,77 @@ def part1():
           and r.get("rsi_min") == 15.38, r)
 
     # ③ 两个方向都命中 + 末根中性 ⇒ **超卖优先**（与「小于20的排在大于80的前面」同向）
-    both = [100, 94, 88, 94, 100, 106, 112, 118, 124, 130, 136, 130, 124]
+    #   样本 = 11 根平盘 + 原 13 根（补到 L=24 = N+RSI_CYCLE 边界）：平盘 diff=0，末 12 根
+    #   K 线与原样本的末 12 根完全一致；但播种段（索引 1..11）全为 0 ⇒ 递推起点不同，
+    #   窗口 RSI 须按新序列重推（故期望值与旧样本不同）。
+    both = [100] * 11 + [100, 94, 88, 94, 100, 106, 112, 118, 124, 130, 136, 130, 124]
     r = _run(_mk(both), recent="12")
-    check("① 归类②（两者皆命中 + 末根 66.67 中性）⇒ **超卖优先**："
-          "hit_under=2 / hit_over=1 / group=under",
+    check("① 归类②（两者皆命中 + 末根 65.03 中性）⇒ **超卖优先**："
+          "hit_under=2 / hit_over=3 / group=under",
           r.get("is_rsi") is True and r.get("rsi_group") == "under"
-          and r.get("rsi_hit_under") == 2 and r.get("rsi_hit_over") == 1
-          and r.get("rsi_last") == 66.67, r)
-    check("① N=12 大窗口：rsi_max 恰好 80.0（同一根既进 hit_over 又不改归类）",
-          r.get("rsi_max") == 80.0, r.get("rsi_max"))
+          and r.get("rsi_hit_under") == 2 and r.get("rsi_hit_over") == 3
+          and r.get("rsi_last") == 65.03, r)
+    check("① N=12 大窗口：rsi_max=86.3（该根既进 hit_over、又不改归类 ⇒ 仍 under）",
+          r.get("rsi_max") == 86.3, r.get("rsi_max"))
 
     # ── 未命中与裸码约定 ──
-    r = _run(_mk([100.0, 101.0] * 7))
-    check("① 浅幅震荡（窗口 [54.55,50,54.17] 全中性）⇒ 未命中",
+    #   16 根（>= N+RSI_CYCLE=15）：浅幅交替涨跌，窗口 [54.17, 49.65, 53.85] 全中性
+    r = _run(_mk([100.0, 101.0] * 8))
+    check("① 浅幅震荡（窗口 [54.17,49.65,53.85] 全中性）⇒ 未命中",
           r.get("is_rsi") is False and "error" not in r, r)
     check("① 未命中行的 code 是**裸代码**（不补前缀，与其它模式同形）",
           r.get("code") == "002190", r.get("code"))
 
-    # ── 门槛两条 ──
-    r = _run(_mk([100 + i for i in range(12)]))
-    check("① K 线数 12 < RSI_CYCLE+1=13 ⇒ 静默未命中（窗口会落进播种区）",
+    # ── 门槛（2026-10-14 由 max(N, RSI_CYCLE+1) 收紧为 N + RSI_CYCLE）──
+    #   门槛 = N + RSI_CYCLE = 15：窗口 [L-N, L-1] 必须**整段**脱离 RSI 播种区
+    #   （索引 0 = 常量 50、1..11 = 简单平均播种，12 起才是递推）。
+    #   下面用 13 / 14 / 15 三个长度卡在**旧式门槛 13** 两侧做判别对：
+    #     13 根：旧式实现恰好参评（全涨 ⇒ 命中），新式必须静默跳过 —— 本组判别力核心；
+    #     14 根：比 15 少 1，窗口 [11..13] 首根仍落在播种区 ⇒ 跳过；
+    #     15 根：恰好 L - N == RSI_CYCLE，窗口 [12..14] 全为递推值 ⇒ 参评并命中。
+    r = _run(_mk([100 + i for i in range(13)]))
+    check("① 门槛：13 根 == 旧式门槛 max(N, RSI_CYCLE+1)，但 < N+RSI_CYCLE=15"
+          " ⇒ 静默未命中（改回旧式即红）",
           r.get("is_rsi") is False and "error" not in r, r)
 
-    r = _run(_mk([50.0] * 14))
+    r = _run(_mk([100 + i for i in range(14)]))
+    check("① 门槛：14 根（窗口 [11..13] 首根仍在播种区）⇒ 静默未命中",
+          r.get("is_rsi") is False and "error" not in r, r)
+
+    r = _run(_mk([100 + i for i in range(15)]))
+    check("① 门槛自证：恰好 15 根（== N + RSI_CYCLE，窗口 [12..14] 全递推）⇒ 参评并命中",
+          r.get("is_rsi") is True, r)
+
+    #   16 根（>= 门槛，能走到「无波动」这条判据）：全序列一个价都没变
+    r = _run(_mk([50.0] * 16))
     check("① 全序列一个价都没变（停牌/一字板）⇒ 静默未命中"
           "（RSI 走边界分支得退化值 0，是退化不是超卖）",
           r.get("is_rsi") is False and "error" not in r, r)
 
     r = _run(_mk(_seg(100, 15, 1)), recent="30")
-    check("① N 超出序列长度（N=30 > 15 根）⇒ 静默未命中",
+    check("① N 超出序列长度（N=30 ⇒ 门槛 42 > 15 根）⇒ 静默未命中",
           r.get("is_rsi") is False and "error" not in r, r)
 
-    # 门槛自证：恰好补到 13 根即恢复参评（证明上一条不是恒不命中）
-    r = _run(_mk([100 + i for i in range(13)]))
-    check("① 门槛自证：补到 13 根（== RSI_CYCLE+1）即恢复参评并命中",
-          r.get("is_rsi") is True, r)
-
-    # ── N=1：只看最后一根 ──
+    # ── N=1：只看最后一根（13 根 = N + RSI_CYCLE 边界；窗口 = 索引 12，即递推首根）──
     r = _run(_mk([100 + 3 * i for i in range(13)]), recent="1")
-    check("① N=1：窗口 = 末根一根，>= 超买 ⇒ 命中且 hit_over == 1",
+    check("① N=1：窗口 = 末根一根（索引 12），>= 超买 ⇒ 命中且 hit_over == 1",
           r.get("is_rsi") is True and r.get("rsi_hit_over") == 1
           and r.get("recent_days") == 1, r)
 
     # ── 返回字段完整性（前端标签 / 排序依赖）──
+    #   15 根 = N + RSI_CYCLE 边界（不足门槛会走未命中分支，字段自然不全 ⇒ 必须给够）
     need = ("is_rsi", "rsi_group", "rsi_last", "rsi_min", "rsi_max",
             "rsi_hit_under", "rsi_hit_over", "recent_days", "freq", "last_close")
-    r = _run(_mk([100 - 3 * i for i in range(13)]))
+    r = _run(_mk([100 - 3 * i for i in range(15)]))
     miss = [k for k in need if k not in r]
     check("① 命中行输出字段齐全（前端标签 / 排序 / 分组计数依赖）", not miss, miss)
 
     # ── 非 rsi 模式不受影响（同一票同一数据，mode="lianzhang" 走自己的判据）──
+    #   此处刻意仍用 13 根：同一序列在 rsi 模式下已被门槛拦下（见上组判别对），
+    #   lianzhang 模式照常产出自己的字段 ⇒ 「门槛只约束 rsi 分支」的直接证据。
     r = _run(_mk([100 - 3 * i for i in range(13)]), mode="lianzhang")
-    check("① 模式隔离：同一序列走 lianzhang 不产生 is_rsi 字段",
+    check("① 模式隔离：同一序列走 lianzhang 不产生 is_rsi 字段"
+          "（且不因 rsi 门槛而跳过）",
           "is_rsi" not in r and "is_lianzhang" in r, r)
 
 
@@ -334,9 +357,15 @@ def part2():
     check("② 门槛：K 线不足 **或** 全序列无波动 ⇒ 静默未命中（同一行判据）",
           "if len(closes) < need_bars or min(closes) == max(closes):" in rsi_slice,
           "\u95e8\u69db\u5224\u636e\u7f3a\u5931")
-    check("② 门槛根数 = max(N, RSI_CYCLE+1)（不是裸 N）",
-          "need_bars = max(recent_days, RSI_CYCLE + 1)" in rsi_slice,
+    check("② 门槛根数 = N + RSI_CYCLE（窗口整段脱离播种区；不是裸 N，"
+          "也不是旧式 max(N, RSI_CYCLE+1)）",
+          "need_bars = recent_days + RSI_CYCLE" in rsi_slice,
           "\u95e8\u69db\u6839\u6570\u4e0d\u7b26")
+    #   负向（2026-10-14 增补）：旧式 max(N, RSI_CYCLE+1) 只保**末根**脱离播种区，
+    #   N >= 13 时退化为裸 N ⇒ 窗口起点回到索引 0（整段含播种值）—— 不许残留。
+    check("② 门槛负向：不得残留 max(N, RSI_CYCLE+1) 形态的根数式（改回旧式即红）",
+          not re.search(r"need_bars\s*=\s*max\(", rsi_slice),
+          re.findall(r"need_bars\s*=\s*[^\n]*", rsi_slice))
     check("② RSI 在**全量**收盘序列上算完再切片（只喂窗口会得到与图上不同的数）",
           "rsi_series = calculate_rsi(closes)" in rsi_slice
           and "win = rsi_series[-recent_days:]" in rsi_slice, "\u53d6\u6570\u987a\u5e8f\u4e0d\u7b26")

@@ -974,9 +974,13 @@ class Scanner:
             #     ② 末根落在 (超卖, 超买) 开区间（已回到中性区）→ 按极值兜底：
             #        窗口内出现过超卖即归超卖组，否则归超买组（此时必然出现过超买）。
             #        即末根中性时**超卖优先** —— 与「小于20的排在大于80的前面」同向。
-            # 边界：K 线数 < max(N, RSI_CYCLE+1) ⇒ 未命中，静默跳过（与连涨/放量同约定）。
-            #   门槛取 max 而非 N 的原因：只有超过 RSI_CYCLE 根之后，窗口内的 RSI 才全部
-            #   脱离**播种区**（前 period-1 根用简单平均，数值与递推段不可比，不该参与判定）。
+            # 边界：K 线数 < N + RSI_CYCLE ⇒ 未命中，静默跳过（与连涨/放量同约定）。
+            #   门槛 = N + RSI_CYCLE（不是裸 N，也不是 max(N, RSI_CYCLE+1)）：窗口取末 N 根
+            #   [L-N, L-1]，要让其中**每根**都脱离**播种区**（前 period-1 根用简单平均，数值
+            #   与递推段不可比，不该参与判定），必须 L - N >= RSI_CYCLE（窗口起点 >= 首个
+            #   递推索引）。旧式 max(N, RSI_CYCLE+1) 只保证窗口**末根**脱离播种区：N >= 13 时
+            #   max 退化为 N（允许 L=N ⇒ 窗口起点回到 0，整段含播种值）；2 <= N <= 12 时门槛
+            #   13 同样不足（如 N=3、L=13 ⇒ 窗口 [10..12]，含 10/11 两根播种值）。
             if mode == "rsi":
                 # 阈值：随请求传入（设置抽屉配置，仅显式配置过才传）；缺省回退默认
                 #   （默认值的 SSOT 在本模块顶部 RSI_OVERSOLD / RSI_OVERBOUGHT）。
@@ -999,11 +1003,11 @@ class Scanner:
                                     f"回退默认 {RSI_OVERBOUGHT}/{RSI_OVERSOLD}"
                                     f"（本进程只报一次，后续同批票静默回退）")
                     _rsi_over, _rsi_under = RSI_OVERBOUGHT, RSI_OVERSOLD
-                need_bars = max(recent_days, RSI_CYCLE + 1)
+                need_bars = recent_days + RSI_CYCLE
                 closes = [k.get("close", 0) or 0 for k in klines]
                 # 两条前置门槛，任一不满足都按「未命中」静默跳过（输出形与连涨/放量同款：
                 # 只回 code + is_rsi=False，不进结果列表、由页面计入「跳过」）：
-                #   ① K 线数 < max(N, RSI_CYCLE+1)：窗口内的 RSI 会落进**播种区**（前
+                #   ① K 线数 < N + RSI_CYCLE：窗口 [L-N, L-1] 的起点会落进**播种区**（前
                 #      period-1 根走简单平均，见 calculate_rsi 的 docstring），数值与递推段
                 #      不可比，不该参与判定；
                 #   ② 整条收盘序列**一个价都没变**（停牌 / 一字板 / 无成交）：RSI 会走
