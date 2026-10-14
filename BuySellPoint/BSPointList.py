@@ -1607,7 +1607,6 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         # ── ⑴ 笔N 整笔 DIF 是否全在趋势侧（口径对齐 _cal_bs0point_3rd 的 ⑴）──
         # 三买（向下笔N）：整笔 DIF 全在 0 轴上（等于0也算）
         # 三卖（向上笔N）：整笔 DIF 全在 0 轴下（等于0也算）
-        # 原分型极值 K 线符号判断 sign_ok 被本判断隐含：整笔全在趋势侧 ⇒ 端点（分型极值 K 线）必同侧，故不再单列
         is_buy = stroke_n.is_down()
         dif_positive = is_buy
         n_dif_ok = self._dif_all_same_side(stroke_n, dif_positive)
@@ -1623,11 +1622,11 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         begin_dif = stroke_n.get_begin_klu().macd.DIF
         end_dif = stroke_n.get_end_klu().macd.DIF
         if is_buy:
-            macd_a = end_dif         # 底分型极值 DIF 到0轴的距离
-            macd_b = abs(begin_dif)  # 顶分型极值 DIF 到0轴的距离
+            macd_a = end_dif
+            macd_b = abs(begin_dif)
         else:
-            macd_a = abs(end_dif)    # 顶分型极值 DIF 到0轴的距离
-            macd_b = abs(begin_dif)  # 底分型极值 DIF 到0轴的距离
+            macd_a = abs(end_dif)
+            macd_b = abs(begin_dif)
         dif_ratio = (macd_b - macd_a) / macd_b if macd_b != 0 else None
         ratio_ok = dif_ratio is not None and dif_ratio > config.retrace_zero_axis_ratio
         if not (n_dif_ok and ratio_ok):
