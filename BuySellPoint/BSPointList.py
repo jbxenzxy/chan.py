@@ -972,7 +972,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         c_dif_ok = self._dif_all_same_side(stroke_c, dif_positive)
         a_dif_ok = self._dif_all_same_side(stroke_a, dif_positive)
 
-        # ⑵ 回抽0轴比例
+        # ⑵ MACD DIF 回抽0轴比例
         config = self.config.GetBSConfig(is_buy)
         A_dif = stroke_a.get_begin_klu().macd.DIF
         C_dif = stroke_c.get_end_klu().macd.DIF
@@ -1604,27 +1604,34 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           zs_high=pivot_a.high, zs_low=pivot_a.low)
             return
 
-        # ── MACD DIF 幅度过滤 ──
-        # 笔N 的分型极值 K 线（get_peak_klu）：向下笔 起点=顶分型极值、终点=底分型极值；向上笔反之。
-        # 三买（笔N 向下）：⑴ 底分型极值 DIF 在 0 轴上；⑵ A = 该 DIF（到 0 轴距离，正值即本身）；
-        #   ⑶ B = 顶分型极值 DIF 绝对值（到 0 轴距离）；⑷ (B-A)/B > config.retrace_zero_axis_ratio。
-        # 三卖（笔N 向上）：⑴ 顶分型极值 DIF 在 0 轴下；⑵ A = 该 DIF 绝对值（到 0 轴距离）；
-        #   ⑶ B = 底分型极值 DIF 绝对值；⑷ (B-A)/B > config.retrace_zero_axis_ratio。
-        # B 为分母：B==0（DIF 恰在 0 轴）时比值无定义，视为不满足过滤。阈值见 CPointConfig.retrace_zero_axis_ratio（SSOT，默认 0.618）。
+        # ── MACD DIF 回抽0轴比例 ──
+        # 笔N 的分型极值 K 线：向下笔 起点=顶分型极值、终点=底分型极值；向上笔反之
+        # 三买（笔N 向下）：
+        # ⑴ 底分型极值 DIF 在 0 轴上（等于0也OK）
+        # ⑵ A = 底分型极值 DIF（到0轴距离）
+        # ⑶ B = 顶分型极值 DIF 绝对值（到0轴距离）
+        # ⑷ (B-A)/B > config.retrace_zero_axis_ratio
+        # 三卖（笔N 向上）：
+        # ⑴ 顶分型极值 DIF 在 0 轴下（等于0也OK）
+        # ⑵ A = 顶分型极值 DIF 绝对值（到0轴距离）
+        # ⑶ B = 底分型极值 DIF 绝对值（到0轴距离）
+        # ⑷ (B-A)/B > config.retrace_zero_axis_ratio
+        # B 为分母：B==0（DIF 恰在 0 轴）时比值无定义，视为不满足过滤
+        # 阈值见 CPointConfig.retrace_zero_axis_ratio（SSOT，默认 0.618）
         is_buy = stroke_n.is_down()
         config = self.config.GetBSConfig(is_buy)
         begin_dif = stroke_n.get_begin_klu().macd.DIF
         end_dif = stroke_n.get_end_klu().macd.DIF
         if is_buy:
-            macd_a = end_dif         # ⑵ 底分型极值 DIF（⑴保证在 0 轴上，正值即距离）
-            macd_b = abs(begin_dif)  # ⑶ 顶分型极值 DIF 到 0 轴的距离
+            macd_a = end_dif         # 底分型极值 DIF 到0轴的距离
+            macd_b = abs(begin_dif)  # 顶分型极值 DIF 到0轴的距离
         else:
-            macd_a = abs(end_dif)    # ⑵ 顶分型极值 DIF 到 0 轴的距离
-            macd_b = abs(begin_dif)  # ⑶ 底分型极值 DIF 到 0 轴的距离
-        sign_ok = end_dif > 0 if is_buy else end_dif < 0  # ⑴
-        ratio_ok = macd_b != 0 and (macd_b - macd_a) / macd_b > config.retrace_zero_axis_ratio  # ⑷
+            macd_a = abs(end_dif)    # 顶分型极值 DIF 到0轴的距离
+            macd_b = abs(begin_dif)  # 底分型极值 DIF 到0轴的距离
+        sign_ok = end_dif >= 0 if is_buy else end_dif <= 0
+        ratio_ok = macd_b != 0 and (macd_b - macd_a) / macd_b > config.retrace_zero_axis_ratio
         if not (sign_ok and ratio_ok):
-            self._dbg_bs3('cal_bs3point', '跳过: MACD白线幅度过滤不满足',
+            self._dbg_bs3('cal_bs3point', '跳过: MACD白线不在趋势侧',
                           stroke_n_idx=stroke_n.idx, is_buy=is_buy,
                           begin_dif=round(begin_dif, 4), end_dif=round(end_dif, 4),
                           a_dist=round(macd_a, 4), b_dist=round(macd_b, 4))
