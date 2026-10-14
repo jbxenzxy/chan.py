@@ -304,7 +304,7 @@ class CChanConfig:
             "max_bsp22s_lv": None,              # 类22买卖点最大层级（距离22类买卖点的笔的距离/2），默认为None，不做限制
             "strict_bsp33": False,              # 33类买卖点对应的中枢，是否要求中枢进入笔"紧邻"11类点笔，默认为 False（允许11类点笔后走个ABC，ABC是后面中枢的进入段）
             "bsp33a_max_zs_cnt": 2,             # 33类买卖点最多可以跨越多少个中枢，默认为1的设计意图：只关注离11类点最近的那个中枢回拉产生的33a类点，越远的中枢越不可靠
-            "retrace_zero_axis_ratio": 0.618,   # MACD DIF回0轴幅度阈值：_cal_bs0point_3rd 使用
+            "retrace_zero_axis_ratio": 0.618,   # MACD DIF回0轴幅度阈值：_cal_bs0point_3rd / cal_bs3point 使用
         }
         args = {para: conf.get(para, default_value) for para, default_value in para_dict.items()}
         self.bs_point_conf = CBSPointConfig(**args)
