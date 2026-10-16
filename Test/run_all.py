@@ -131,6 +131,16 @@ CI / 迁移每阶段的验收门禁）。
                                                      化，非关闭）/ 扫描中 × 灰化
                                                      （_setScanRunning 唯一写入
                                                      点）/ 静态 + 无头 Chrome 真点
+ 40. 指标区十字线读数 test_crosshair_readout.py 鼠标落在指标绘图窗内时，横虚线
+                                                    右端坐标轴补齐白框读数（此前
+                                                    只有 K 线区有）：vol 柱状 /
+                                                    vol 类MACD / MACD / RSI 四类
+                                                    读数与绘制严格互逆 / 翻转视图
+                                                    镜像 / 越界夹回端点 / 长文本按
+                                                    实测宽加宽不出框 / K 线区宽度
+                                                    通道零回归（不传 rightW ⇒ 恒
+                                                    50）/ 标签行不显示 / 采集只认
+                                                    命中槽位
 每组件独立子进程执行，超时 300s 按失败终止（防死循环挂死）。
 
 登记在 `CLEAN_CREDENTIALS_COMPONENTS` 的组件（当前 p20 / p60）额外**清空凭据
@@ -356,6 +366,18 @@ COMPONENTS = [
     # 70·30 互换，以及「纵轴中间档恒 50（不是 MACD 的零线 0）」。
     ("bottom_slots",
      [sys.executable, os.path.join("Test", "test_bottom_slots.py")]),
+    # 指标区十字线读数白框（2026-10-16 需求，用户指定）：把 K 线区已有的「横虚线
+    #   右端坐标轴白框读数」补齐到下方指标槽位 —— 鼠标落在指标绘图窗内时白框贴在
+    #   mouseY 上，显示该 y 反算出的指标值（vol 柱状 / vol 类MACD / MACD / RSI
+    #   四类）；标签行（14px）不属于绘图窗故不显示，与 K 线区口径一致。
+    #   判据五层：① 各槽 cursorText 读数 = 与绘制严格互逆的反算（翻转视图镜像、
+    #   越出窗沿夹回端点）；② _overlayLabelW 按实测文本宽加宽（长文本不出框）；
+    #   ③ 白框绘制用 rightW（**不传 ⇒ 恒 50**，K 线区零回归）；④ drawCrosshair
+    #   采集块只认命中槽位、命中即 break、读数走与 K 线区同一通道（rightPrice /
+    #   rightY / rightW）；⑤ 源码契约（注册表三槽各定义 cursorText / 调用点实参
+    #   slotAreas+slotRanges 齐备）。node 抽真实源码执行 + canvas 记账桩。
+    ("crosshair_readout",
+     [sys.executable, os.path.join("Test", "test_crosshair_readout.py")]),
     # 统计面板字段：期货品种只显品种键 / 平均每笔盈利-亏损（后半截不重复）/
     # 期望值数值带「 元/笔」/
     # 最大单笔盈-亏合成一行且不显示时间 / 删「按出场原因」与「曲线口径」/

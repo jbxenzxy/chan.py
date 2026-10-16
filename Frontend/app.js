@@ -69,12 +69,15 @@
         const MACD_TEXT_HEIGHT = 14;
 
         // ══ 底部指标区槽位（单窗 2 槽 / 双窗 1 槽）══════════════════════════
-        // 候选指标注册表：每个指标四个钩子，渲染层按 id 分派、不再写 if/else 链。
+        // 候选指标注册表：每个指标五个钩子，渲染层按 id 分派、不再写 if/else 链。
         //   range(klines)         → 值域 {min, max}
         //   draw(area, range, c)  → 绘制（c = 渲染上下文，见 _renderChart 的 bottomCtx）
         //   axis(area, range)     → 纵轴刻度
         //   label(textArea, c)    → 标签行正文（chip 由渲染层统一画）
-        // 加一个指标 = 加一条记录 + 三个函数，几何与分派都不用再动。
+        //   cursorText(y, area, range) → 光标横线读数：横线 y 反算为该槽指标数值文本
+        //       （右侧白框用；与 K 线区价格读数共用 _overlayData.rightPrice 通道，
+        //        格式与各指标纵轴刻度同源）
+        // 加一个指标 = 加一条记录 + 各钩子函数，几何与分派都不用再动。
         // chip（标签行**最右**那个可点的指标名）用短名：成交额 / 成交量 ——
         // 数值区前缀仍走既有 getVolLabel()（含 "(手)"），不动它的既有口径。
         const BOTTOM_INDICATORS = {
@@ -94,6 +97,13 @@
                     else drawVolumeAxis(area, range);
                 },
                 label: (textArea, c) => drawVolSlotLabel(textArea, c),
+                // 光标读数：柱状模式与 drawVolume 的 y(v) 互逆（柱子恒从底部长起、
+                //   不随翻转视图翻方向）；类MACD 与 drawMacd 的 macdToY 互逆。
+                //   格式化分别与对应纵轴同源（formatVolume / formatVolMacdVal）。
+                cursorText: (y, area, range) => {
+                    if (_volDisplayMode === 'macd') return formatVolMacdVal(_bottomValueAtY(y, area, range));
+                    return formatVolume(range.min + (area.y + area.h - y) / area.h * (range.max - range.min));
+                },
             },
             macd: {
                 id: 'macd',
@@ -102,6 +112,8 @@
                 draw: (area, range, c) => drawMacd(c.klines, area, range, c.barStep, c.macdBarWidth, c.subPixelOffset),
                 axis: (area, range) => drawMacdAxis(area, range),
                 label: (textArea, c) => drawMacdSlotLabel(textArea, c),
+                // 光标读数：与 drawMacd 的 macdToY 互逆；格式与纵轴刻度（toFixed(2)）同源。
+                cursorText: (y, area, range) => _bottomValueAtY(y, area, range).toFixed(2),
             },
             rsi: {
                 id: 'rsi',
@@ -110,6 +122,8 @@
                 draw: (area, range, c) => drawRsi(c.klines, area, range, c.barStep, c.subPixelOffset),
                 axis: (area, range) => drawRsiAxis(area, range),
                 label: (textArea, c) => drawRsiSlotLabel(textArea, c),
+                // 光标读数：与 rsiToY 互逆；数值形式与纵轴刻度一致（两位小数）。
+                cursorText: (y, area, range) => _bottomValueAtY(y, area, range).toFixed(2),
             },
         };
 
@@ -1694,7 +1708,8 @@
             drawAnnotations(klinesToDraw, area, priceRange, barStep, subPixelOffset);
             drawViewportHighLow(klinesToDraw, area, priceRange, barStep, subPixelOffset);
             _overlayData = null;
-            drawCrosshair(klinesToDraw, area, priceRange, bottomBottomY, barStep, subPixelOffset);
+            drawCrosshair(klinesToDraw, area, priceRange, bottomBottomY, barStep, subPixelOffset,
+                slotAreas, slotRanges);
             drawPriceAxis(area, priceRange);
             for (let si = 0; si < slotCount; si++) {
                 BOTTOM_INDICATORS[_slotAt(si)].axis(slotAreas[si], slotRanges[si]);
@@ -2781,7 +2796,8 @@
             drawOne(minLow, minLowIdx, _isMirrorMode ? true : false);    // 低点：上边沿贴合
         }
 
-        function drawCrosshair(klines, area, priceRange, bottomBottomY, barStep, subPixelOffset) {
+        function drawCrosshair(klines, area, priceRange, bottomBottomY, barStep, subPixelOffset,
+            slotAreas, slotRanges) {
             let idx, k, cx;
             if (mouseX < area.x || mouseX > area.x + area.w) {
                 idx = klines.length - 1;
@@ -2809,6 +2825,25 @@
                     _overlayData = _overlayData || {};
                     _overlayData.rightPrice = _fmtPrice(price);
                     _overlayData.rightY = mouseY;
+                }
+                // 指标区（底部槽位）光标读数：横线落在某槽绘图窗内时，把 y 反算为该槽
+                // 当前指标的数值文本，写进 _overlayData —— 与 K 线区价格读数共用同一个
+                // 右侧白框通道（_drawOverlayIfNeeded）。值域与指标 id 都与绘制同源
+                // （slotRanges[si] / _slotAt(si)），不另算一遍。
+                // 前提与横线一致（本 else 分支）：mouseX 出区不显示，与 K 线区一致；
+                // 标签行（14px）不属于绘图窗，不显示（无值域可言）。
+                if (slotAreas && slotRanges) {
+                    for (let si = 0; si < slotAreas.length; si++) {
+                        const sa = slotAreas[si];
+                        if (mouseY >= sa.y && mouseY <= sa.y + sa.h) {
+                            const text = BOTTOM_INDICATORS[_slotAt(si)].cursorText(mouseY, sa, slotRanges[si]);
+                            _overlayData = _overlayData || {};
+                            _overlayData.rightPrice = text;
+                            _overlayData.rightY = mouseY;
+                            _overlayData.rightW = _overlayLabelW(text);
+                            break;
+                        }
+                    }
                 }
             }
 
@@ -3160,11 +3195,33 @@
             });
         }
 
+        // 底部槽位纵轴反算（y → 值）：与「翻转敏感」的纵轴正变换严格互逆 ——
+        //   drawMacd 的 macdToY 与 rsiToY 同一形状（正常 y = y0 + h − t·h、
+        //   翻转 y = y0 + t·h，t 为归一化值）。仅 vol 柱状图不适用：柱子恒从
+        //   底部长起、不随翻转翻方向（见 drawVolume），由该槽 cursorText 自行反算。
+        function _bottomValueAtY(y, area, range) {
+            const t = _isMirrorMode ? (y - area.y) / area.h : (area.y + area.h - y) / area.h;
+            const tc = Math.max(0, Math.min(1, t));   // 夹回 [0,1]，防浮点越界
+            return range.min + tc * (range.max - range.min);
+        }
+
+        // 右侧读数白框宽度：按 11px monospace 实测文本宽 + 左右各 4px 留白，
+        //   最小 50（= K 线区现行固定宽）。K 线区不传 rightW ⇒ 恒 50，行为不变。
+        function _overlayLabelW(text) {
+            ctx.save();
+            ctx.font = "11px monospace";
+            const w = Math.ceil(ctx.measureText(String(text)).width);
+            ctx.restore();
+            return Math.max(50, w + 8);
+        }
+
         // ===== 白框覆盖层重绘（供倒计时动画帧使用） =====
         function _drawOverlayIfNeeded(overlayData, area) {
             if (!overlayData) return;
             if (overlayData.rightPrice !== undefined) {
-                const labelW = 50;
+                // 宽度：K 线区价格读数不传 rightW ⇒ 恒 50（现状不变）；指标区读数由
+                //   采集方按文本实测宽度给 rightW（见 _overlayLabelW），数值不出框。
+                const labelW = overlayData.rightW || 50;
                 ctx.fillStyle = "#dcdcdc"; ctx.fillRect(area.x + area.w + 2, overlayData.rightY - 10, labelW, 20);
                 ctx.fillStyle = "#333"; ctx.font = "11px monospace"; ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
                 ctx.fillText(overlayData.rightPrice, area.x + area.w + 6, overlayData.rightY + 4);
