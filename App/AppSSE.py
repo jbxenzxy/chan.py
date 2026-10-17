@@ -17,9 +17,10 @@ CChan 构建免锁。但 SSE 线程与 REST 线程共享 app_data —— 期货�
 经 app_data.set_futures_sub_chan 写入，由 AppData._futures_cache_lock 保护。
 """
 import json
+import re
 import time
 import traceback
-from datetime import datetime
+from datetime import datetime, date, timedelta
 
 # 引擎侧依赖（仅引擎私有实现：天勤数据源 / 期货名称 / 回看根数折算；
 # resolve_lookback_bars 与 CTqSdkAPI 同路线经 AppEngine 显式名，不直连 DataAPI）
@@ -92,6 +93,14 @@ def _estimate_bars_between(t_from, t_to, freq_sec):
     return int(secs // freq_sec) + 1 + _BAR_ESTIMATE_MARGIN
 
 
+def _same_minute(dt, s):
+    """dt 与时间字符串 s 是否同一分钟（选点判定用；15s 周期的秒位差异不算）。"""
+    p = _parse_flex_time(s) if s else None
+    if p is None or dt is None:
+        return False
+    return p.replace(second=0, microsecond=0) == dt.replace(second=0, microsecond=0)
+
+
 def _futures_window_fetch_bars(freq_sec, start_time=None, end_time=None, base_bars=None):
     """计算一个期货窗口的取数根数（对齐股票 A/B/C 三种操作的左边界语义）。
 
@@ -134,6 +143,279 @@ def _futures_window_fetch_bars(freq_sec, start_time=None, end_time=None, base_ba
     return (n, n)
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# 期货复盘「目标不可达」的四类诊断（2026-10-17，方案 v1.17 §3.3）
+# ═══════════════════════════════════════════════════════════════════════
+# 复盘输入日期 D 早于窗口左界 L 时**不得静默改 L**（方案 §2 规则⑥「改 R 不改 L」
+# —— L 冻结是复盘前后结构可比的前提）。但 L 可能由四种原因之一钉住，提示与出路
+# 各不相同，必须分类而不是笼统「请扩大数据范围」：
+#   contract_range    具体合约：D 不在该合约存续期（上市日 ~ 最后交易日）→ 换合约
+#   tq_10000          天勤单序列上限：D 早于该周期「最近 10000 根」首根 → 换大周期
+#   before_selection  方式D：窗口以选点为界，D 早于选点 → 先取消选点
+#   way_c             方式C：窗口 = 最近 N 根（N<10000），D 在可取范围内
+#                     → **询问**是否以 D 为右端重新加载（用户确认才改 L）
+# 判定顺序 = 硬约束优先：合约存续期 → 10000 根 → 选点 → 方式C。若 D 早于选点
+# 但同时超出 10000 根，先报硬约束（取消选点也解决不了）。
+# 事实来源全部取数据真值，不维护交易日历表：
+#   · 合约存续期 = 该合约 30m 的 10000 根首/末根（30m 10000 根 ≈ 800 个交易日，
+#     远大于任一 CFFEX 合约存续期 ⇒ 首根即上市日、末根即最后交易日）；
+#   · 10000 根边界 = 当前周期 10000 根的首根（get_kline_serial 的硬上限）；
+#   · 选点 = CSV 选点（与 L 同一事实源）。
+_FUTURES_LIFE_FREQ = 1800   # 30m：探合约存续期（10000 根跨度 ≫ 合约存续期）
+_FREQ_CN_BY_SEC = {15: "15秒", 60: "1分钟", 300: "5分钟", 1800: "30分钟"}
+
+
+class FuturesReplayBlocked(Exception):
+    """期货复盘目标不可达（四类之一）；携带 code / 文案 / 建议合约，供 SSE 错误帧透传。"""
+
+    def __init__(self, code, message, suggest="", retryable=False):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.suggest = suggest
+        self.retryable = retryable
+
+
+def _third_friday(year, month):
+    """当月第三个周五：CFFEX 股指期货的最后交易日/交割日。"""
+    first = date(year, month, 1)
+    return first + timedelta(days=(4 - first.weekday()) % 7 + 14)
+
+
+def _split_product(symbol):
+    """`CFFEX.IF2409` / `KQ.m@CFFEX.IF` → (交易所, 品种根)；解析不出 → ("", "")。"""
+    if not symbol or "." not in symbol:
+        return "", ""
+    body = symbol.split("@")[-1]
+    if "." not in body:
+        return "", ""
+    ex, prod = body.split(".", 1)
+    m = re.match(r"^([A-Za-z]{1,3})(\d{3,4})?$", prod)
+    if not m:
+        return "", ""
+    return ex.upper(), m.group(1)      # 品种根保留原大小写（rb2405 / IF2405）
+
+
+_CFFEX_QUARTERS = (3, 6, 9, 12)   # 股指期货季月：3/6/9/12
+
+
+def _cffex_contract_months(year, month):
+    """CFFEX 挂牌的 4 个合约月份：**当月、下月、下季月、下下季月**（季月 = 3/6/9/12）。
+
+    不能按自然月连续枚举：7/8 月、10/11 月 CFFEX 根本不挂牌（`IF2407` 不存在），
+    既浪费两次取数，又会**漏掉季月**（4 月在市的是 2405/2406/2409/2412，自然月枚举
+    只到 2408 就停了，拿不到 2409/2412）。
+    """
+    seq = [(year, month)]
+    y2, m2 = (year + 1, 1) if month == 12 else (year, month + 1)
+    seq.append((y2, m2))                       # 下月
+    yy, mm, found = y2, m2, 0
+    while found < 2:                           # 再取两个季月（跳过已是下月的那个）
+        yy, mm = (yy + 1, 1) if mm == 12 else (yy, mm + 1)
+        if mm in _CFFEX_QUARTERS and (yy, mm) not in seq:
+            seq.append((yy, mm))
+            found += 1
+    return seq
+
+
+def _contract_candidates(symbol, target_dt, months=5):
+    """目标日期可能存在的同品种合约代码候选。
+
+    · CFFEX：按真实挂牌规则枚举**当月/下月/两个季月**（4 个 = 该日全部在市合约，
+      所以 IF/IH/IC/IM 的「该日主力合约」必定在这 4 个里，不会漏）；
+    · 其它交易所：交割规则各异（每月 10/15 日等），按月枚举后**一律由 `_contract_covers`
+      用数据真值验证**，不维护交割日历表。
+    CFFEX 先按「交割日 = 第三个周五」剔掉目标日**已交割**的月份（4/22 不给 IF2404）。
+    """
+    ex, root = _split_product(symbol)
+    if not ex:
+        return []
+    d = target_dt.date() if isinstance(target_dt, datetime) else target_dt
+
+    if ex == "CFFEX":
+        y, mo = d.year, d.month
+        if _third_friday(y, mo) < d:           # 当月已交割 → 从下月起算
+            y, mo = (y + 1, 1) if mo == 12 else (y, mo + 1)
+        return [f"{ex}.{root}{yy % 100:02d}{mm:02d}"
+                for yy, mm in _cffex_contract_months(y, mo)]
+
+    out = []
+    for k in range(0, months):
+        y = d.year + (d.month - 1 + k) // 12
+        mo = (d.month - 1 + k) % 12 + 1
+        if ex == "CZCE":      # 郑商所三位月份：MA405
+            out.append(f"{ex}.{root}{y % 10}{mo:02d}")
+        else:                 # 其它交易所四位：rb2405
+            out.append(f"{ex}.{root}{y % 100:02d}{mo:02d}")
+    return out
+
+
+def _futures_contract_life(src, symbol):
+    """具体合约存续期 (首根, 末根)；主连/指数或取不到 → None（按会话缓存）。"""
+    if not symbol or "." not in symbol or symbol.upper().startswith("KQ"):
+        return None
+    cache = getattr(src, "_futures_life_cache", None)
+    if cache is None:
+        cache = {}
+        src._futures_life_cache = cache
+    if symbol in cache:
+        return cache[symbol]
+    life = None
+    try:
+        recs = src.fetch_kline(symbol, freq_sec=_FUTURES_LIFE_FREQ, num_bars=_TQ_MAX_BARS)
+        if recs:
+            life = (recs[0]["dt"], recs[-1]["dt"])
+    except Exception as e:  # noqa: BLE001 —— 探针失败不阻断主流（退化为通用文案）
+        log.warning(f"[诊断] 合约存续期探针失败 {symbol}: {type(e).__name__}: {e}")
+    cache[symbol] = life
+    return life
+
+
+def _futures_series(src, symbol, freq_sec):
+    """该周期「最近 10000 根」的 records（按会话缓存）。
+
+    一份取数同时服务两件事：首根 = 天勤可取范围左边界；目标日的 vol = 主力判定。
+    同一会话内同一 (合约, 周期) 只取一次。
+    """
+    cache = getattr(src, "_futures_series_cache", None)
+    if cache is None:
+        cache = {}
+        src._futures_series_cache = cache
+    key = (symbol, freq_sec)
+    if key not in cache:
+        recs = []
+        try:
+            recs = src.fetch_kline(symbol, freq_sec=freq_sec, num_bars=_TQ_MAX_BARS) or []
+        except Exception as e:  # noqa: BLE001
+            log.warning(f"[诊断] 10000 根探针失败 {symbol}/{freq_sec}: {type(e).__name__}: {e}")
+        cache[key] = recs
+    return cache[key]
+
+
+def _futures_earliest_at(src, symbol, freq_sec):
+    """该周期「最近 10000 根」的首根时间 = 天勤可取范围的左边界。"""
+    recs = _futures_series(src, symbol, freq_sec)
+    return recs[0]["dt"] if recs else None
+
+
+def _contract_volume_on(src, cand, freq_sec, end_dt):
+    """候选合约在目标日的成交量（主力判定口径：当日成交量最大者为主力）。"""
+    day = end_dt.date()
+    total = 0
+    for r in _futures_series(src, cand, freq_sec):
+        if r["dt"].date() == day:
+            total += int(r.get("vol", 0) or 0)
+    return total
+
+
+def _contract_covers(src, cand, freq_sec, end_dt):
+    """该合约在**当前周期**能否取到 end_dt：存续期覆盖该日 且 10000 根窗口 ≤ end_dt。"""
+    life = _futures_contract_life(src, cand)
+    if life is None:
+        return False
+    if end_dt.date() < life[0].date() or end_dt.date() > life[1].date():
+        return False
+    first = _futures_earliest_at(src, cand, freq_sec)
+    return first is not None and end_dt >= first
+
+
+def _suggest_contract_for_date(src, symbol, freq_sec, target_dt):
+    """找一个「在当前周期能取到该日期」的同品种合约；找不到 → ""。
+
+    **多个候选都覆盖时取该日成交量最大的（主力合约）**，并列/取不到量则保留
+    交割日最近的那个（当月）。为什么几乎总能找到：目标日所在月份的最近交割合约，
+    交割日距目标日 ≤ 约 1 个月，而 1m / 5m / 30m 的 10000 根分别覆盖约 2 个月 /
+    20 个月 / 5 年 ⇒ 必落在窗口内。15s（10000 根 ≈ 7 个交易日）等极短周期可能
+    全部候选都不行 → 返回 ""，由调用方退化为「改用更大周期」。
+    """
+    best, best_vol = "", -1
+    for cand in _contract_candidates(symbol, target_dt):
+        if not _contract_covers(src, cand, freq_sec, target_dt):
+            continue
+        vol = _contract_volume_on(src, cand, freq_sec, target_dt)
+        if vol > best_vol:      # 并列时保留先出现的（交割日最近者）
+            best, best_vol = cand, vol
+    return best
+
+
+def _classify_futures_replay(src, symbol, freq_sec, end_dt,
+                             start_dt=None, start_is_selection=False,
+                             window_bars=None, raw_first=None):
+    """判定「复盘目标不可达」的类别；可达（D >= 窗口左界）返回 None。
+
+    判定顺序 = **硬约束优先**（方案 v1.17 §3.6）：
+      ① 合约存续期（仅具体合约）→ `contract_range`（A）：提示 + 切换按钮
+      ② 天勤 10000 根           → `tq_10000`（B 具体合约 / E 主连）：提示 + 切换按钮
+      ③ 选点钉住 L（方式D）     → `before_selection`（D / G）：**仅提示**
+      ④ 配置根数钉住 L（方式C） → `way_c`（C / F）：**仅提示**
+    「切换」= 前端换到建议合约（该日主力合约）并自动复盘到该日期，不改当前窗口的 L。
+    raw_first：调用方已持有「本周期 10000 根首根」时直接传入，省一次取数。
+    """
+    d_label = f"{end_dt:%Y/%m/%d %H:%M}"
+
+    # ① 合约存续期：只对具体合约成立（主连无存续期概念，直接落到 ②）
+    life = _futures_contract_life(src, symbol)
+    if life is not None:
+        first_bar, last_bar = life
+        day = end_dt.date()
+        out_early = day < first_bar.date()
+        out_late = day > last_bar.date()
+        if out_early or out_late:
+            sug = _suggest_contract_for_date(src, symbol, freq_sec, end_dt)
+            span = f"{first_bar:%Y/%m/%d} ~ {last_bar:%Y/%m/%d}"
+            if out_early:
+                why = f"不在 {symbol} 的存续期内（{span}，早于上市日）"
+            else:
+                why = f"晚于 {symbol} 的最后交易日（{span}）"
+            if sug:
+                _sl = _futures_contract_life(src, sug)
+                sug_exp = f"交割日 {_sl[1]:%Y/%m/%d}，" if _sl else ""
+                tail = f"请切换到该日主力合约 {sug}（{sug_exp}当前周期可取到该日期）。"
+            elif out_late:
+                # 未来日期：后续合约还没上市/无数据，换周期也解决不了，不能给
+                # 「改用更大周期」这种无效指路
+                tail = "该日期之后的合约尚未上市或无数据，请确认复盘日期。"
+            else:
+                tail = "同品种暂无可取到该日期的合约，请改用更大的周期。"
+            return FuturesReplayBlocked(
+                "contract_range", f"复盘日期 {d_label} {why}；{tail}", suggest=sug)
+
+    # ② 天勤 10000 根：数据源单序列硬上限（换合约才能绕过）
+    first = raw_first if raw_first is not None else _futures_earliest_at(src, symbol, freq_sec)
+    if first is not None and end_dt < first:
+        label = _FREQ_CN_BY_SEC.get(int(freq_sec), f"{int(freq_sec)}秒")
+        sug = _suggest_contract_for_date(src, symbol, freq_sec, end_dt)
+        head = (f"复盘日期 {d_label} 早于 {symbol} 在{label}周期的 10000 根下限"
+                f"（最早只到 {first:%Y/%m/%d %H:%M}）")
+        if sug:
+            _sl = _futures_contract_life(src, sug)
+            span = f"存续期 {_sl[0]:%Y/%m/%d} ~ {_sl[1]:%Y/%m/%d}" if _sl else ""
+            tail = f"；请切换到该日主力合约 {sug}（{span}）。"
+        else:
+            tail = ("；同品种暂无在该周期可取到该日期的合约，"
+                    "请改用 5分钟 / 30分钟（同样 10000 根，覆盖的时间跨度更长）。")
+        return FuturesReplayBlocked("tq_10000", head + tail, suggest=sug)
+
+    # ③④ 目标早于窗口左界：L 是选点 → 方式D；L 是配置根数 → 方式C。两类都**只提示**
+    #     （方式C 的「加载更多」是用户侧的显式操作，不由程序替他改 L —— 方案 §2 规则⑥）
+    if start_dt is not None and end_dt < start_dt:
+        if start_is_selection:
+            return FuturesReplayBlocked(
+                "before_selection",
+                f"复盘日期 {d_label} 在选点 {start_dt:%Y/%m/%d %H:%M} 左侧"
+                f"（方式D：复盘窗口 = [选点, 复盘点]，起点不能早于选点）；"
+                f"如需查看，请先「取消选点」。")
+        n = window_bars if window_bars else resolve_lookback_bars(freq_sec)
+        reach = f"；10000 根内最早可到 {first:%Y/%m/%d %H:%M}" if first else ""
+        # 方式C **只提示**：出路是把 FUTURES_LOOKBACK_CONFIG 调大并重启服务
+        # （用户明确要求走配置、不在界面给一次性入口）⇒ 不带 retryable、不给按钮。
+        return FuturesReplayBlocked(
+            "way_c",
+            f"请加载更多数据：复盘日期 {d_label} 早于已加载数据起点 "
+            f"{start_dt:%Y/%m/%d %H:%M}（当前窗口 = 最近 {n} 根{reach}）。")
+    return None
+
+
 def init_chan_symbol(src, symbol, _name, freq_sec, freq_label, start_time=None, end_time=None, num_bars=None):
     """拉取历史K线 + 运行 chan.py 分析，返回 (chan, klines, kl_type, records) 或 None。
     由 SSE handler 调用，每个 SSE 连接自包含。
@@ -161,6 +443,15 @@ def init_chan_symbol(src, symbol, _name, freq_sec, freq_label, start_time=None, 
         # 复盘终点截断：先滤出 <= end_time 的历史，再取末 N 根（C 操作左边界=从 end 往前推 N 根），
         # 再扣除"最新未完成K线"首根保护
         if end_time:
+            _end_dt = _parse_flex_time(end_time)
+            if (records and _end_dt is not None and fetch_bars >= _TQ_MAX_BARS
+                    and _end_dt < records[0]["dt"]):
+                # 目标早于本周期「最近 10000 根」首根 → 四类诊断（合约范围 / 10000 根）；
+                # 可达（判定为 None）则照常截断，不在这里拦
+                _blk = _classify_futures_replay(
+                    src, symbol, freq_sec, _end_dt, raw_first=records[0]["dt"])
+                if _blk is not None:
+                    raise _blk
             records = _truncate_records_by_end(records, end_time, freq_sec)
             if base_bars and len(records) > base_bars:
                 records = records[-base_bars:]
@@ -185,6 +476,9 @@ def init_chan_symbol(src, symbol, _name, freq_sec, freq_label, start_time=None, 
             log.info(f"[{display_key}] ⑵ 缠论分析: 消费 {len(records)}根K线, 耗时 {_time.time()-t_chan:.1f}s")
         return (chan, klines, kl_type, records)
 
+    except FuturesReplayBlocked:
+        # 四类诊断结果直接上抛给 SSE 生成器（由它转成带 code 的 init 错误帧）
+        raise
     except Exception as e:
         import traceback
         log.info(f"[{display_key}] ⑵ 失败: {e}")
@@ -349,7 +643,7 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
         #   · 起止倒挂（start ≥ end）→ 报错中止本次连接，**不静默回退**：
         #     与股票 `_analyze_stock_internal` 同判据（`>=`）、同文案，前端
         #     收到 init 错误帧后弹窗告知用户（需求⑼/⑽ 的兜底归一，见
-        #     Docs/选点&复盘方案v1.16.md §3.5）；
+        #     Docs/选点&复盘方案v1.17.md §3.5）；
         #   · 非复盘：start_time 缺失时从 CSV 恢复（B 操作/冷启动，原语义）。
         # meta.saved_selection_date 恒回显 CSV 真值（与股票同规则）：
         # A 复盘的 start=A左 不会冒充选点，复盘态选点/取消选点驱动前端菜单。
@@ -363,8 +657,22 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
                 _s_dt = _parse_flex_time(start_time)
                 _e_dt = _parse_flex_time(end_time)
                 if _s_dt is not None and _e_dt is not None and _s_dt >= _e_dt:
-                    # 倒挂不再静默回退：报错帧 + 中止本次连接，用户可见
-                    # （与股票同判据同文案，见本段顶部注释）
+                    # 起止倒挂 ≠ 一律「请扩大数据范围」：按 L 被谁钉住分四类
+                    # （合约范围 / 天勤10000根 / 选点 / 方式C，见方案 v1.17 §3.6）
+                    _saved_pt = _get_saved_point(symbol, freq) or ""
+                    _is_sel = _same_minute(_s_dt, _saved_pt)
+                    _blk = _classify_futures_replay(
+                        src, symbol, freq_sec, _e_dt, start_dt=_s_dt,
+                        start_is_selection=_is_sel,
+                        window_bars=resolve_lookback_bars(freq_sec))
+                    if _blk is not None:
+                        log.info(f"[{display_key}] {_blk.code}: {_blk.message}")
+                        yield _sse_frame("init", {
+                            "error": _blk.message, "code": _blk.code,
+                            "suggest": _blk.suggest, "retryable": _blk.retryable,
+                            "symbol": symbol})
+                        return
+                    # 兜底（探针全失败且不属四类）：保留原判据文案
                     _msg = f"复盘起始时间 {start_time} 不早于复盘截止时间 {end_time}"
                     log.info(f"[{display_key}] {_msg}")
                     yield _sse_frame("init", {"error": _msg, "symbol": symbol})
@@ -405,6 +713,14 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
         _replay_prev_s = set_replay_mode(bool(end_time))
         try:
             result = init_chan_symbol(src, symbol, name, freq_sec, freq_label, start_time, end_time)
+        except FuturesReplayBlocked as _blk:
+            # 目标早于本周期 10000 根 / 超出合约存续期：init 内部已判定出类别，
+            # 这里必须转成带 code 的诊断帧。不接就会变成「连接异常中断」——
+            # 前端既看不到原因，也拿不到「切换」按钮（冷启动无 start 时唯一出口）。
+            log.info(f"[{display_key}] {_blk.code}: {_blk.message}")
+            yield _sse_frame("init", {"error": _blk.message, "code": _blk.code,
+                                      "suggest": _blk.suggest, "symbol": symbol})
+            return
         finally:
             set_replay_mode(_replay_prev_s)
         if result is None:
@@ -780,6 +1096,9 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
         sub_saved_selection_date = ""
         main_start_time = start_time
         _inv_msg = None   # 起止倒挂错误文案（非 None ⇒ 报错中止本次连接，见下）
+        # 四类诊断上下文 (freq_sec, start_dt, start_is_selection, end_dt)：
+        # 倒挂不等于「请扩大数据范围」，按 L 被谁钉住分别提示（方案 v1.17 §3.6）
+        _inv_ctx = None
         try:
             qualified_code = symbol
             col_main = app_data.freq_to_col(main_freq) or ""
@@ -798,20 +1117,43 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
             # **任一窗倒挂即中止**（对齐越界判定口径「任一窗越界即拦/回」），不再
             # 静默丢弃该窗 start、回退默认窗口——与 `_sse_single_gen`、股票
             # `_analyze_stock_internal` 同判据（`>=`）、同文案前缀
-            # （需求⑼/⑽ 的兜底归一，见 Docs/选点&复盘方案v1.16.md §3.5）。
+            # （需求⑼/⑽ 的兜底归一，见 Docs/选点&复盘方案v1.17.md §3.5）。
             if end_time:
                 _e_dt2 = _parse_flex_time(end_time)
                 if _e_dt2 is not None:
                     _m_dt = _parse_flex_time(main_start_time) if main_start_time else None
                     if _m_dt is not None and _m_dt >= _e_dt2:
                         _inv_msg = f"上窗复盘起始时间 {main_start_time} 不早于复盘截止时间 {end_time}"
+                        _inv_ctx = (main_freq_sec, _m_dt,
+                                    _same_minute(_m_dt, saved_selection_date), _e_dt2, "上窗")
                     else:
                         _sb_dt = _parse_flex_time(sub_start_time) if sub_start_time else None
                         if _sb_dt is not None and _sb_dt >= _e_dt2:
                             _inv_msg = f"下窗复盘起始时间 {sub_start_time} 不早于复盘截止时间 {end_time}"
+                            _inv_ctx = (sub_freq_sec, _sb_dt,
+                                        _same_minute(_sb_dt, sub_saved_selection_date), _e_dt2, "下窗")
         except Exception as _e:
             log.warning(f"[警告] 异常: {type(_e).__name__}: {_e}")
         if _inv_msg:
+            _blk = None
+            _msg = _inv_msg
+            if _inv_ctx is not None:
+                _f_sec, _s_dt2, _is_sel2, _e_dt3, _loc = _inv_ctx
+                _blk = _classify_futures_replay(
+                    src, symbol, _f_sec, _e_dt3, start_dt=_s_dt2,
+                    start_is_selection=_is_sel2,
+                    window_bars=resolve_lookback_bars(_f_sec))
+                if _blk is not None:
+                    # 双窗两列各有独立选点：选点类提示必须带「上窗/下窗」定位，
+                    # 否则用户不知道清哪一个（合约/10000 根两窗同因，不加前缀）
+                    _msg = (f"{_loc}：{_blk.message}"
+                            if _blk.code == "before_selection" else _blk.message)
+            if _blk is not None:
+                log.info(f"[{display_key}] {_blk.code}: {_msg}")
+                yield _sse_frame("init", {"error": _msg, "code": _blk.code,
+                                          "suggest": _blk.suggest,
+                                          "retryable": _blk.retryable, "symbol": symbol})
+                return
             log.info(f"[{display_key}] {_inv_msg}")
             yield _sse_frame("init", {"error": _inv_msg, "symbol": symbol})
             return
@@ -831,6 +1173,13 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
         _replay_prev = set_replay_mode(bool(end_time))
         try:
             sub_result = init_chan_symbol(src, symbol, name, sub_freq_sec, sub_freq_label, sub_start_time, end_time)
+        except FuturesReplayBlocked as _blk:
+            # 同单窗：诊断必须落成错误帧，否则双窗连接直接断流、前端无从提示
+            _msg = f"下窗：{_blk.message}" if _blk.code == "before_selection" else _blk.message
+            log.info(f"[{display_key}] {_blk.code}: {_msg}")
+            yield _sse_frame("init", {"error": _msg, "code": _blk.code,
+                                      "suggest": _blk.suggest, "symbol": symbol})
+            return
         finally:
             set_replay_mode(_replay_prev)
         if sub_result is None:
@@ -858,6 +1207,13 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
         _replay_prev2 = set_replay_mode(bool(end_time))
         try:
             main_result = init_chan_symbol(src, symbol, name, main_freq_sec, main_freq_label, main_start_time, end_time)
+        except FuturesReplayBlocked as _blk:
+            # 同上/下窗：诊断落成错误帧（上窗被钉住同样要能提示 + 给「切换」）
+            _msg = f"上窗：{_blk.message}" if _blk.code == "before_selection" else _blk.message
+            log.info(f"[{display_key}] {_blk.code}: {_msg}")
+            yield _sse_frame("init", {"error": _msg, "code": _blk.code,
+                                      "suggest": _blk.suggest, "symbol": symbol})
+            return
         finally:
             set_replay_mode(_replay_prev2)
         if main_result is None:

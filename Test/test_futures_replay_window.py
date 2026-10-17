@@ -13,7 +13,7 @@ Test/test_futures_replay_window.py —— 期货单窗复盘窗口 [L, R]（二�
      - 无 end_time + CSV 有 → start_time=CSV（B 操作/冷启动恢复，现状回归保护）；
      - start ≥ end（倒挂）→ **报错中止**本次连接（init 错误帧 → 前端 showAlert），
        不再静默回退；与股票 `_analyze_stock_internal` 同判据 `>=`、同文案，见
-       Docs/选点&复盘方案v1.16.md §3.5；
+       Docs/选点&复盘方案v1.17.md §3.5；
   3. meta.saved_selection_date 恒回显 CSV 真值：A 复盘（start=A左 显式传入、
      CSV 空）→ 快照收到空串，start 不冒充选点；
   4. 期货选点 end_date 透传链（P0 回归）：漏斗层 → RAW 薄壳 → AppSSE 三段
@@ -276,23 +276,32 @@ def test_live_csv_restore_regression():
 def test_replay_inverted_start_errors():
     """start ≥ end（倒挂）→ 报错中止，不静默回退（需求⑼ 兜底归一）。
 
-    断言三件：① 首帧 init 载荷带 error（前端据此 showAlert 告知用户）；
-    ② 文案与股票 `_analyze_stock_internal` 同形（「复盘起始时间 … 不早于
-    复盘截止时间 …」）；③ `init_chan_symbol` **一次都没被调用** —— 证明
-    没有偷偷按默认窗口加载（旧「回退默认窗口」行为已删除）。
+    v1.17 起**分两类**（方案 §3.6）：
+      · start > end  → 四类诊断帧（带 code；本桩下 = way_c，前端据此提示「请加载更多数据」）；
+      · start == end → 空窗口，保留原倒挂文案（「复盘起始时间 … 不早于 …」）。
+    两者都必须：init 错误帧 + `init_chan_symbol` 一次都不调用（不偷偷按默认窗口加载）。
     """
-    for _label, _start in (("start>end", END_TIME), ("start==end", EXPLICIT_START)):
-        captured = {"init": [], "extract": []}
-        _run_gen(_start, EXPLICIT_START, None, captured)
-        frames = captured.get("frames") or []
-        assert frames, f"[{_label}] 生成器未产出任何帧"
-        assert b'"error"' in frames[0], f"[{_label}] 倒挂应报 init 错误帧，实为 {frames[0]!r}"
-        text = frames[0].decode("utf-8")
-        assert "不早于" in text and "复盘起始时间" in text, \
-            f"[{_label}] 文案与股票不归一: {text!r}"
-        assert not captured["init"], \
-            f"[{_label}] 倒挂已报错却仍按默认窗口加载: {captured['init']!r}"
-    print("[PASS] 倒挂报错中止: init 错误帧 + 未加载默认窗口（start>end 与 start==end）")
+    # start > end：分类帧（带 code，不再是笼统文案）
+    captured = {"init": [], "extract": []}
+    _run_gen(END_TIME, EXPLICIT_START, None, captured)
+    frames = captured.get("frames") or []
+    assert frames and b'"error"' in frames[0], f"[start>end] 应报 init 错误帧，实为 {frames[:1]!r}"
+    text = frames[0].decode("utf-8")
+    assert '"code"' in text, f"[start>end] 分类帧缺 code: {text!r}"
+    # 方式C = 仅提示「请加载更多数据」（前端不给动作按钮，也不自动改 L）
+    assert "way_c" in text and "请加载更多数据" in text, \
+        f"[start>end] 应判为方式C 并提示加载更多数据: {text!r}"
+    assert "重新加载" not in text, f"[start>end] 方式C 不该再有重载问句: {text!r}"
+    assert not captured["init"], f"[start>end] 倒挂已报错却仍按默认窗口加载: {captured['init']!r}"
+
+    # start == end：空窗口（非四类）→ 保留原文案
+    captured = {"init": [], "extract": []}
+    _run_gen(EXPLICIT_START, EXPLICIT_START, None, captured)
+    frames = captured.get("frames") or []
+    text = frames[0].decode("utf-8") if frames else ""
+    assert "不早于" in text and "复盘起始时间" in text, f"[start==end] 文案异常: {text!r}"
+    assert not captured["init"], "[start==end] 倒挂已报错却仍按默认窗口加载"
+    print("[PASS] 倒挂中止: start>end 走四类诊断（带 code）/ start==end 保留原文案，均未加载默认窗口")
 
 
 def test_replay_meta_shows_csv_point():
@@ -490,15 +499,17 @@ def test_dual_gen_inverted_start_errors():
     # 场景 1：上窗倒挂（选点晚于复盘点）→ 整体中止，两窗都不加载
     by_freq, frames = _run("2025/07/01 09:30:00", "2025/08/01 09:30:00", "2025/06/01 09:30:00")
     assert frames and b'"error"' in frames[0], f"上窗倒挂应报 init 错误帧，实为 {frames[:1]!r}"
-    assert "上窗复盘起始时间" in frames[0].decode("utf-8"), \
-        f"文案未定位到上窗: {frames[0]!r}"
+    _t1 = frames[0].decode("utf-8")
+    assert "上窗" in _t1 and "选点" in _t1 and '"code"' in _t1, \
+        f"文案未定位到上窗/选点（v1.17 四类诊断）: {_t1!r}"
     assert not by_freq, f"倒挂已报错却仍加载了窗: {by_freq!r}"
     print("[PASS] dual 复盘倒挂: 上窗倒挂 → 整体中止（两窗均未加载）")
 
     # 场景 2：只下窗倒挂 → 同样整体中止，文案定位「下窗」
     by_freq, frames = _run("2025/07/01 09:30:00", "2025/06/01 09:30:00", "2025/08/01 09:30:00")
-    assert frames and "下窗复盘起始时间" in frames[0].decode("utf-8"), \
-        f"文案未定位到下窗: {frames[:1]!r}"
+    _t2 = frames[0].decode("utf-8")
+    assert frames and "下窗" in _t2 and "选点" in _t2, \
+        f"文案未定位到下窗/选点（v1.17 四类诊断）: {frames[:1]!r}"
     assert not by_freq, f"下窗倒挂已报错却仍加载了窗: {by_freq!r}"
     print("[PASS] dual 复盘倒挂: 下窗倒挂 → 整体中止（两窗均未加载）")
 

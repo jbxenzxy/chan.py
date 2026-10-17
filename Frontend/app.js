@@ -354,6 +354,10 @@
         let _scanFangliangWindowBars = null;
 
         let _dateKeyArrow = false, _dateKeyEnter = false, _dateManualTyping = false;
+        // 「切换到建议合约」后要直接落在哪一天 {symbol, endTime}：loadStock 据此
+        // **以该日为右端加载**（方式C：L = 该日往前 N 根），而不是先方式A 冷启动。
+        // 放闭包变量而非 window 全局 —— window API 面是冻结契约（phase6 ③ 守护）。
+        let _pendingFuturesReplay = null;
 
         let _dateInputTriggered = false;   // input 已触发 gotoDate，change 跳过
 
@@ -4656,6 +4660,9 @@
             _dateManualTyping = false;
             _datePickerInteracted = false;
             _datePickerInputCount = 0;
+            // 本次输入值已被 gotoDate 消费：清掉 onfocus 快照，否则后续 input.disabled=true
+            // 触发的 blur（handleDateBlur）会把刚提交的日期回滚成原值。
+            _dateFocusOriginal = "";
             if (!chartData) return;
             const code = chartData.meta.symbol;
             const freq = currentFreq;
@@ -4720,13 +4727,10 @@
                     showAlert('交易引擎运行中，请先关闭，再复盘');
                     return;
                 }
-                // 复盘越界：日历输入早于窗口左边界 L → 弹窗（右键复盘至此天然在区间内）
-                // 双窗（四期）：两窗 L 各自冻结，任一窗越界即拦——判定基准 = max(L_main, L_sub)
-                const _futReplayFloor = (isDualWindow && apiFirstSub && apiFirstSub > apiFirst) ? apiFirstSub : apiFirst;
-                if (apiFirst && min15(apiDate) < min15(_futReplayFloor)) {
-                    showAlert("复盘日期 " + apiDate + " 早于已加载数据起点 " + _futReplayFloor + "，请扩大数据范围。");
-                    return;
-                }
+                // 目标早于窗口左界 L **不在前端拦**：按方案 §2 规则⑥「改 R 不改 L」，
+                // 仍以 L 为 start 发起复盘；由后端按「L 被谁钉住」分四类诊断
+                // （合约范围 / 天勤10000根 / 选点 / 方式C），前端只按 code 渲染提示与出路
+                // （Docs/选点&复盘方案v1.17.md §3.6）。
                 document.getElementById("goto-date-input").disabled = true;
                 document.getElementById("loading").classList.remove("hidden");
                 document.querySelector(".loading-text").textContent = "正在复盘计算，请稍候...";
@@ -4816,8 +4820,12 @@
 
         window.handleDateKeydown = function(e) {
             if (e.key === 'Enter') { _dateKeyEnter = true; gotoDate(); return; }
-            if (e.key.startsWith('Arrow')) { _dateKeyArrow = true; return; }
-            if (e.key !== 'Tab' && e.key !== 'Escape') { _dateManualTyping = true; }
+            // 键盘改动同样算「用户已交互」：方向键/手输时 handleDateInput 会提前 return，
+            // _datePickerInteracted 若一直为 false，handleDateBlur 会误判成「picker 开了没动」
+            // 把刚调好的日期回滚成原值（实测：方向键调到 2022-10-20 回车后输入框退回
+            // 2024-09-20，看起来像「回车没反应」）。
+            if (e.key.startsWith('Arrow')) { _dateKeyArrow = true; _datePickerInteracted = true; return; }
+            if (e.key !== 'Tab' && e.key !== 'Escape') { _dateManualTyping = true; _datePickerInteracted = true; }
         };
 
         window.handleDateChange = function() {
@@ -5268,14 +5276,22 @@
             updateDateInputType();
             if (isFuturesCode) {
                 updateFreqButtonStates(true); // 期货：禁用 d/w，启用 1m/15s
+                // 「切换到建议合约」：目标是**那一天**的历史，所以直接以该日为右端加载
+                // （方式C：L = 该日往前 N 根）。若先方式A 冷启动，已交割合约的窗口落在
+                // 交割日附近，D 仍在左侧 ⇒ 会再弹一次「加载更多」，白跑一趟。
+                const _pend = (_pendingFuturesReplay
+                    && _pendingFuturesReplay.symbol.toUpperCase() === code.toUpperCase())
+                    ? _pendingFuturesReplay : null;
+                _pendingFuturesReplay = null;
+                const _endForLoad = _pend ? _pend.endTime : "";
                 if (isDualWindow) {
                     // 双窗口换期货合约：走双窗 SSE，两窗同步重连
                     // （wasFutures→isFuturesCode 路径保持周期不变，dualSubFreq 仍然有效；
                     //   空/失效时按映射回退，期货周期全为日内，getDualSubFreq 必有解或回退 1m）
                     const subFreq = dualSubFreq || getDualSubFreq(fetchFreq) || '1m';
-                    connectRealtimeDual(code, fetchFreq, subFreq);
+                    connectRealtimeDual(code, fetchFreq, subFreq, _endForLoad);
                 } else {
-                    connectRealtimeInit(code, fetchFreq);
+                    connectRealtimeInit(code, fetchFreq, "", _endForLoad);
                 }
                 return;
             }
@@ -8409,11 +8425,36 @@
                     try {
                         const data = JSON.parse(event.data);
                         if (data.error) {
-                            // 后端 init 错误必须让用户看见：如「复盘起始时间…不早于
-                            // 复盘截止时间」与股票同款弹窗（原 console.warn 只让
-                            // loading 消失，用户看不出发生了什么）
+                            // 后端 init 错误必须让用户看见。左边界诊断（v1.17 §3.6）
+                            //   contract_range（A）/ tq_10000（B/E）→ 提示 + 「切换」按钮
+                            //     （换到该日主力合约，切过去后直接以目标日为右端加载）
+                            //   way_c（C/F）/ before_selection（D/G）→ **只提示**
+                            //     （方式C 的出路是调大 FUTURES_LOOKBACK_CONFIG 后重启；
+                            //       方式D 要先取消选点——都不由程序代劳）
+                            // 失败必须恢复日历输入框：gotoDate 发起前置了 disabled，
+                            // 只有成功分支恢复 —— 少这一行会让复盘失败一次后日历永久禁用。
+                            const _code = data.code || "";
+                            const _target = realtimeEndTime || "";
+                            const _freqNow = realtimeFreq || currentFreq;
                             disconnectRealtime();
                             document.getElementById("loading").classList.add("hidden");
+                            document.getElementById("goto-date-input").disabled = false;
+                            // 绕过天勤 10000 根 / 合约存续期：同品种存在「在当前周期能取到该日期」
+                            // 的合约 → 一键切换，并在新合约 init 落地后自动复盘到该日期
+                            if (data.suggest && (_code === "contract_range" || _code === "tq_10000")) {
+                                showConfirm(data.error + "\n\n点击「切换」将打开 " + data.suggest
+                                            + " 并自动复盘到该日期。", {okText: "切换"})
+                                    .then(function (ok) {
+                                        if (!ok) return;
+                                        _pendingFuturesReplay = {
+                                            symbol: data.suggest,
+                                            endTime: _target
+                                        };
+                                        document.getElementById("stock-code-input").value = data.suggest;
+                                        window.loadStock();
+                                    });
+                                return;
+                            }
                             showAlert(data.error);
                             return;
                         }
@@ -8538,9 +8579,30 @@
                     try {
                         const data = JSON.parse(event.data);
                         if (data.error) {
-                            // 双窗同单窗：init 错误（含任一窗复盘起止倒挂）必须弹窗
+                            // 双窗同单窗：contract_range / tq_10000 → 提示 + 「切换」；
+                            // way_c / before_selection → **只提示**（都不由程序代劳改 L）。
+                            // 失败同样必须恢复日历输入框（原因见单窗同名注释）。
+                            const _code = data.code || "";
+                            const _target = realtimeEndTime || "";
+                            const _freqNow = realtimeFreq || currentFreq;
                             disconnectRealtime();
                             document.getElementById("loading").classList.add("hidden");
+                            document.getElementById("goto-date-input").disabled = false;
+                            // 同单窗：同品种存在能取到该日期的合约 → 一键切换 + 自动复盘
+                            if (data.suggest && (_code === "contract_range" || _code === "tq_10000")) {
+                                showConfirm(data.error + "\n\n点击「切换」将打开 " + data.suggest
+                                            + " 并自动复盘到该日期。", {okText: "切换"})
+                                    .then(function (ok) {
+                                        if (!ok) return;
+                                        _pendingFuturesReplay = {
+                                            symbol: data.suggest,
+                                            endTime: _target
+                                        };
+                                        document.getElementById("stock-code-input").value = data.suggest;
+                                        window.loadStock();
+                                    });
+                                return;
+                            }
                             showAlert(data.error);
                             return;
                         }
@@ -10943,7 +11005,9 @@
         function showAlert(msg) { return _pushDialog(msg, "alert"); }
 
         // 破坏性操作前的二次确认 —— 返回值 Promise<boolean>，替代原生 confirm。
-        function showConfirm(msg) { return _pushDialog(msg, "confirm"); }
+        // opts.okText：确认按钮文案（默认「确定」）。诊断类弹窗把动作写在按钮上
+        // （如「切换」），用户不必在「确定」上猜点下去会发生什么。
+        function showConfirm(msg, opts) { return _pushDialog(msg, "confirm", opts); }
 
         // 单选式确认（自动下单的登录链路选择）：返回值是选中项的 value，取消为 null。
         function showChoice(msg, opts) { return _pushDialog(msg, "choice", opts); }
@@ -11010,7 +11074,8 @@
                 + '<div class="alert-dialog-msg"></div>'
                 + (kind === "choice" ? _buildChoiceOpts(opts) : "")
                 + '<div class="annotation-dialog-btns">'
-                + '<button class="annotation-dialog-btn primary" type="button" data-act="ok">确定</button>'
+                + '<button class="annotation-dialog-btn primary" type="button" data-act="ok">'
+                + _escHtml((opts && opts.okText) || "确定") + '</button>'
                 + (kind === "confirm" || kind === "choice"
                     ? '<button class="annotation-dialog-btn" type="button" data-act="cancel">取消</button>'
                     : '')

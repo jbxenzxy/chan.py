@@ -141,6 +141,16 @@ CI / 迁移每阶段的验收门禁）。
                                                     通道零回归（不传 rightW ⇒ 恒
                                                     50）/ 标签行不显示 / 采集只认
                                                     命中槽位
+ 41. 期货复盘分类诊断 test_futures_goto_earlier.py 目标早于窗口左界时
+                                                    按「L 被谁钉住」分类：
+                                                    合约存续期 / 天勤10000根
+                                                    （两类给「切换」按钮，
+                                                    按目标日 vol 取主力）/
+                                                    选点 / 方式C（两类仅
+                                                    提示，不动 L）/ 硬约束
+                                                    优先 / 真浏览器：切换后
+                                                    直接以目标日为右端加载
+                                                    / 方式C 仅提示
 每组件独立子进程执行，超时 300s 按失败终止（防死循环挂死）。
 
 登记在 `CLEAN_CREDENTIALS_COMPONENTS` 的组件（当前 p20 / p60）额外**清空凭据
@@ -378,6 +388,14 @@ COMPONENTS = [
     #   slotAreas+slotRanges 齐备）。node 抽真实源码执行 + canvas 记账桩。
     ("crosshair_readout",
      [sys.executable, os.path.join("Test", "test_crosshair_readout.py")]),
+    # 期货复盘「目标早于窗口左界」四类诊断（v1.17）：合约存续期 / 天勤10000根 /
+    # 选点 / 方式C。判定顺序硬约束优先；合约建议按「第一个交割日 ≥ 目标日」的月份算
+    # （04-22 → IF2405 而不是 IF2404），多候选取目标日成交量最大者（主力）。
+    # A/B/E 给「切换」按钮（以目标日为右端加载）；C/D/F/G 仅提示
+    # （方式C 的出路=调大 FUTURES_LOOKBACK_CONFIG 后重启，方式D=先取消选点）。
+    # 真浏览器断言：点「切换」→ 换合约且末根=D；方式C → 单按钮提示、无额外连接。
+    ("futures_goto_earlier",
+     [sys.executable, os.path.join("Test", "test_futures_goto_earlier.py")]),
     # 统计面板字段：期货品种只显品种键 / 平均每笔盈利-亏损（后半截不重复）/
     # 期望值数值带「 元/笔」/
     # 最大单笔盈-亏合成一行且不显示时间 / 删「按出场原因」与「曲线口径」/
