@@ -458,9 +458,11 @@ def _classify_futures_replay(src, symbol, freq_sec, end_dt,
                     # CFFEX：交割日在候选生成处随附（推算值，节假日顺延 ±1 交易日近似）
                     exp_hint = f"最后交易日约 {sug_exp:%Y/%m/%d}，"
                 else:
-                    # 非 CFFEX：全扫路径已实测存续期（缓存命中，零额外取数）
+                    # 非 CFFEX：全扫路径已实测存续期（缓存命中，零额外取数）。
+                    # _sl 必非 None：建议合约必经 `_contract_covers` 通过，其第一道门槛就是
+                    # life 非 None 并按 symbol 缓存，此处必命中同一缓存——不可达路径不加防御。
                     _sl = _futures_contract_life(src, sug)
-                    exp_hint = f"交割日 {_sl[1]:%Y/%m/%d}，" if _sl else ""
+                    exp_hint = f"交割日 {_sl[1]:%Y/%m/%d}，"
                 tail = f"请切换到该日主力合约 {sug}（{exp_hint}当前周期可取到该日期）。"
             elif out_late:
                 # 未来日期：后续合约还没上市/无数据，换周期也解决不了，不能给
@@ -483,9 +485,11 @@ def _classify_futures_replay(src, symbol, freq_sec, end_dt,
                 # CFFEX：删「存续期 a~b」（上市日不可推算），只给最后交易日约（推算值）
                 exp_hint = f"最后交易日约 {sug_exp:%Y/%m/%d}"
             else:
-                # 非 CFFEX：保留实测存续期（全扫路径已缓存命中，零额外取数）
+                # 非 CFFEX：保留实测存续期（全扫路径已缓存命中，零额外取数）。
+                # _sl 必非 None：建议合约必经 `_contract_covers` 通过，其第一道门槛就是
+                # life 非 None 并按 symbol 缓存，此处必命中同一缓存——不可达路径不加防御。
                 _sl = _futures_contract_life(src, sug)
-                exp_hint = f"存续期 {_sl[0]:%Y/%m/%d} ~ {_sl[1]:%Y/%m/%d}" if _sl else ""
+                exp_hint = f"存续期 {_sl[0]:%Y/%m/%d} ~ {_sl[1]:%Y/%m/%d}"
             tail = f"；请切换到该日主力合约 {sug}（{exp_hint}）。"
         else:
             tail = ("；同品种暂无在该周期可取到该日期的合约，"
