@@ -99,6 +99,23 @@ class _LazySrc(_FakeSrc):
             self.api = object()
 
 
+class _CountSrc(_FakeSrc):
+    """带 fetch_kline 计数的桩：钉死「最近优先」的取数分档（方案 v1.18 §5 / 评审稿 §11）。
+
+    没有它，2~4 次这个唯一可量化收益没有断言保护——以后谁加一个探针，
+    门禁不会红，收益悄悄退回 9~10，文档却还写着 2~4。
+    """
+
+    def __init__(self, bars):
+        super().__init__(bars)
+        self.fetch_calls = []
+
+    def fetch_kline(self, symbol, freq_sec=15, num_bars=None, display_key=None, start_time=None):
+        self.fetch_calls.append((symbol, freq_sec))
+        return super().fetch_kline(symbol, freq_sec=freq_sec, num_bars=num_bars,
+                                   display_key=display_key, start_time=start_time)
+
+
 def _fake_2409():
     """IF2409：存续 2024/03/18 ~ 09/20；1m 最近 10000 根自 07/19；5m 自 2023/11/24。"""
     return _FakeSrc({
@@ -233,8 +250,41 @@ def test_contract_suggest():
         f"未连接时 A/B 探针失败会误报方式C，实为 {b and b.code}"
     assert b.suggest == "CFFEX.IF2405" and isinstance(b.suggest, str), b.suggest
 
+    # (d) 取数分档（探针计数桩，方案 v1.18 §5）：改前 9~10 次 → 2~4 次；谁加探针门禁就红
+    from collections import Counter
+    # A 类：页面 IF2404，D=04-22 → life(IF2404:1800) + 最近候选窗口(IF2405:60) = 2
+    cnt = _CountSrc(_fake_2409().bars)
+    _classify_futures_replay(cnt, "CFFEX.IF2404", 60, TARGET, start_dt=datetime(2024, 4, 1))
+    assert Counter(cnt.fetch_calls) == Counter(
+        {("CFFEX.IF2404", 1800), ("CFFEX.IF2405", 60)}), cnt.fetch_calls
+    # B 类 · init（传 raw_first）→ life(IF2409:1800) + 最近候选窗口(IF2405:60) = 2
+    cnt = _CountSrc(_fake_2409().bars)
+    _classify_futures_replay(cnt, SYMBOL, 60, TARGET, raw_first=datetime(2024, 7, 19, 9, 30))
+    assert Counter(cnt.fetch_calls) == Counter(
+        {("CFFEX.IF2409", 1800), ("CFFEX.IF2405", 60)}), cnt.fetch_calls
+    # B 类 · 倒挂（gotoDate 主路径，不传 raw_first）→ + 自身窗口(IF2409:60) = 3
+    cnt = _CountSrc(_fake_2409().bars)
+    _classify_futures_replay(cnt, SYMBOL, 60, TARGET, start_dt=datetime(2024, 7, 19, 9, 30))
+    assert Counter(cnt.fetch_calls) == Counter(
+        {("CFFEX.IF2409", 1800), ("CFFEX.IF2409", 60), ("CFFEX.IF2405", 60)}), cnt.fetch_calls
+    # 换月窗口（D=05-14，距当月交割 3 天）→ 换 05-14 feed：+ 次月窗口(IF2406:60) = 4
+    win_feed = dict(_roll_feed(100, 900).bars)
+    win_feed[(SYMBOL, 1800)] = _span(datetime(2024, 3, 18, 9, 30), datetime(2024, 9, 20, 14, 30))
+    win_feed[(SYMBOL, 60)] = _span(datetime(2024, 7, 19, 9, 30), datetime(2024, 9, 20, 14, 59))
+    cnt = _CountSrc(win_feed)
+    b = _classify_futures_replay(cnt, SYMBOL, 60, roll_day, start_dt=datetime(2024, 5, 20, 9, 30))
+    assert b is not None and b.suggest == "CFFEX.IF2406", (b and b.code, b and b.suggest)
+    assert Counter(cnt.fetch_calls) == Counter(
+        {("CFFEX.IF2409", 1800), ("CFFEX.IF2409", 60),
+         ("CFFEX.IF2405", 60), ("CFFEX.IF2406", 60)}), cnt.fetch_calls
+    # 未来日期早退 → 零探针
+    cnt = _CountSrc(_fake_2409().bars)
+    sug, exp = _suggest_contract_with_expiry(cnt, SYMBOL, 60, datetime(2099, 1, 1))
+    assert (sug, exp) == ("", None) and cnt.fetch_calls == [], (sug, exp, cnt.fetch_calls)
+
     print("[PASS] [1] 合约候选/建议：CFFEX 四个真实月份（当月/下月/两季月）+ 生成处随附交割日"
-          "+ 非换月窗口直取当月 / 换月窗口 vol 仲裁 / 回退兜底 + 数据验证当前周期可取 + 未连接时自动补连")
+          "+ 非换月窗口直取当月 / 换月窗口 vol 仲裁 / 回退兜底 + 数据验证当前周期可取 + 未连接时自动补连"
+          "+ 取数分档计数桩（A=2 / B-init=2 / B-倒挂=3 / 换月=4 / 早退=0）")
 
 
 # ═══════════════════════ [2] 四类诊断 ═══════════════════════

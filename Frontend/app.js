@@ -4730,7 +4730,7 @@
                 // 目标早于窗口左界 L **不在前端拦**：按方案 §2 规则⑥「改 R 不改 L」，
                 // 仍以 L 为 start 发起复盘；由后端按「L 被谁钉住」分四类诊断
                 // （合约范围 / 天勤10000根 / 选点 / 方式C），前端只按 code 渲染提示与出路
-                // （Docs/选点&复盘方案v1.17.md §3.6）。
+                // （Docs/选点&复盘方案v1.18.md §3.6）。
                 document.getElementById("goto-date-input").disabled = true;
                 document.getElementById("loading").classList.remove("hidden");
                 document.querySelector(".loading-text").textContent = "正在复盘计算，请稍候...";
