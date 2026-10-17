@@ -150,10 +150,10 @@ def _futures_window_fetch_bars(freq_sec, start_time=None, end_time=None, base_ba
 # —— L 冻结是复盘前后结构可比的前提）。但 L 可能由四种原因之一钉住，提示与出路
 # 各不相同，必须分类而不是笼统「请扩大数据范围」：
 #   contract_range    具体合约：D 不在该合约存续期（上市日 ~ 最后交易日）→ 换合约
-#   tq_10000          天勤单序列上限：D 早于该周期「最近 10000 根」首根 → 换大周期
+#   tq_10000          天勤单序列上限：D 早于该周期「最近 10000 根」首根 → 换合约（该日主力）
 #   before_selection  方式D：窗口以选点为界，D 早于选点 → 先取消选点
 #   way_c             方式C：窗口 = 最近 N 根（N<10000），D 在可取范围内
-#                     → **询问**是否以 D 为右端重新加载（用户确认才改 L）
+#                     → **仅提示**（出路 = 调大 FUTURES_LOOKBACK_CONFIG 后重启；不由程序改 L）
 # 判定顺序 = 硬约束优先：合约存续期 → 10000 根 → 选点 → 方式C。若 D 早于选点
 # 但同时超出 10000 根，先报硬约束（取消选点也解决不了）。
 # 事实来源全部取数据真值，不维护交易日历表：
@@ -163,10 +163,15 @@ def _futures_window_fetch_bars(freq_sec, start_time=None, end_time=None, base_ba
 #   · 选点 = CSV 选点（与 L 同一事实源）。
 _FUTURES_LIFE_FREQ = 1800   # 30m：探合约存续期（10000 根跨度 ≫ 合约存续期）
 _FREQ_CN_BY_SEC = {15: "15秒", 60: "1分钟", 300: "5分钟", 1800: "30分钟"}
+_CFFEX_ROLL_WINDOW_DAYS = 15   # 交割前 15 个日历天内视为换月窗口（保守值；窗口内才与次月比 vol）
 
 
 class FuturesReplayBlocked(Exception):
-    """期货复盘目标不可达（四类之一）；携带 code / 文案 / 建议合约，供 SSE 错误帧透传。"""
+    """期货复盘目标不可达（四类之一）；携带 code / 文案 / 建议合约，供 SSE 错误帧透传。
+
+    ⚠️ 契约：suggest 恒为 str——前端直接拼串并赋给 stock-code-input.value，
+    改成任何非 str 类型都会让「切换」在前端抛 TypeError（评审第三轮 §1）。
+    """
 
     def __init__(self, code, message, suggest="", retryable=False):
         super().__init__(message)
@@ -218,13 +223,15 @@ def _cffex_contract_months(year, month):
     return seq
 
 
-def _contract_candidates(symbol, target_dt, months=5):
-    """目标日期可能存在的同品种合约代码候选。
+def _contract_candidates_with_expiry(symbol, target_dt, months=5):
+    """目标日期可能存在的同品种合约候选 + 交割日，形如 (code, expiry_or_None)。
 
     · CFFEX：按真实挂牌规则枚举**当月/下月/两个季月**（4 个 = 该日全部在市合约，
-      所以 IF/IH/IC/IM 的「该日主力合约」必定在这 4 个里，不会漏）；
-    · 其它交易所：交割规则各异（每月 10/15 日等），按月枚举后**一律由 `_contract_covers`
-      用数据真值验证**，不维护交割日历表。
+      所以 IF/IH/IC/IM 的「该日主力合约」必定在这 4 个里，不会漏）；交割日在
+      **生成处**随附（第三个周五，(y, mo) 本就在手——零解析、零失败路径），
+      节假日顺延偏差 ±1 个交易日，与文案口径一致；
+    · 其它交易所：交割规则各异（每月 10/15 日等），按月枚举、交割日 = None，
+      **一律由 `_contract_covers` 用数据真值验证**，不维护交割日历表。
     CFFEX 先按「交割日 = 第三个周五」剔掉目标日**已交割**的月份（4/22 不给 IF2404）。
     """
     ex, root = _split_product(symbol)
@@ -236,7 +243,7 @@ def _contract_candidates(symbol, target_dt, months=5):
         y, mo = d.year, d.month
         if _third_friday(y, mo) < d:           # 当月已交割 → 从下月起算
             y, mo = (y + 1, 1) if mo == 12 else (y, mo + 1)
-        return [f"{ex}.{root}{yy % 100:02d}{mm:02d}"
+        return [(f"{ex}.{root}{yy % 100:02d}{mm:02d}", _third_friday(yy, mm))
                 for yy, mm in _cffex_contract_months(y, mo)]
 
     out = []
@@ -244,10 +251,16 @@ def _contract_candidates(symbol, target_dt, months=5):
         y = d.year + (d.month - 1 + k) // 12
         mo = (d.month - 1 + k) % 12 + 1
         if ex == "CZCE":      # 郑商所三位月份：MA405
-            out.append(f"{ex}.{root}{y % 10}{mo:02d}")
+            out.append((f"{ex}.{root}{y % 10}{mo:02d}", None))
         else:                 # 其它交易所四位：rb2405
-            out.append(f"{ex}.{root}{y % 100:02d}{mo:02d}")
+            out.append((f"{ex}.{root}{y % 100:02d}{mo:02d}", None))
     return out
+
+
+def _contract_candidates(symbol, target_dt, months=5):
+    """对外兼容形状（纯 code 列表）：现有断言与调用方零改动。
+    内部需要交割日请用 `_contract_candidates_with_expiry`，勿再从 code 反解。"""
+    return [code for code, _ in _contract_candidates_with_expiry(symbol, target_dt, months)]
 
 
 def _ensure_futures_src_connected(src):
@@ -322,7 +335,10 @@ def _futures_earliest_at(src, symbol, freq_sec):
 
 
 def _contract_volume_on(src, cand, freq_sec, end_dt):
-    """候选合约在目标日的成交量（主力判定口径：当日成交量最大者为主力）。"""
+    """候选合约在目标日的成交量（主力判定口径：当日成交量最大者为主力）。
+
+    ⚠️ 时点口径：按**目标日全天**累计（该日所有 K 线的 vol 相加，含 D 时刻之后），
+    与「按日复盘」粒度一致——不要误用作「截至 D 时刻」的累计量。"""
     day = end_dt.date()
     total = 0
     for r in _futures_series(src, cand, freq_sec):
@@ -342,23 +358,69 @@ def _contract_covers(src, cand, freq_sec, end_dt):
     return first is not None and end_dt >= first
 
 
-def _suggest_contract_for_date(src, symbol, freq_sec, target_dt):
-    """找一个「在当前周期能取到该日期」的同品种合约；找不到 → ""。
+def _contract_window_covers(src, cand, freq_sec, end_dt):
+    """只验「当前周期 10000 根窗口覆盖」（1 次取数）。
 
-    **多个候选都覆盖时取该日成交量最大的（主力合约）**，并列/取不到量则保留
-    交割日最近的那个（当月）。为什么几乎总能找到：目标日所在月份的最近交割合约，
-    交割日距目标日 ≤ 约 1 个月，而 1m / 5m / 30m 的 10000 根分别覆盖约 2 个月 /
-    20 个月 / 5 年 ⇒ 必落在窗口内。15s（10000 根 ≈ 7 个交易日）等极短周期可能
-    全部候选都不行 → 返回 ""，由调用方退化为「改用更大周期」。
+    供 CFFEX 最近候选使用：其存续期覆盖由候选生成规则结构保证
+    （cands[0] = 交割日 ≥ D 的最近月份，D 当天必在市），不需要实测；
+    数据异常（未挂牌/取数失败）时 first=None → 判不覆盖 → 走回退全扫。
     """
-    best, best_vol = "", -1
-    for cand in _contract_candidates(symbol, target_dt):
+    first = _futures_earliest_at(src, cand, freq_sec)
+    return first is not None and end_dt >= first
+
+
+def _suggest_contract_with_expiry(src, symbol, freq_sec, target_dt):
+    """找一个「在当前周期能取到该日期」的同品种合约，返回 (code, expiry_or_None)。
+
+    **最近交割合约优先**（v1.18 §3.6）：
+      ⓪ 未来日期早退——SSE 是公开接口，直接调 end_time=2099 可绕过前端；未来无可
+        建议合约，省掉全部候选探针；
+      ① 最近候选（cands[0]，交割日最近且未交割）的**存续期覆盖由生成规则结构保证**，
+        只验窗口覆盖（1 次取数）；
+      ② 换月窗口内（D 距其交割日 ≤ _CFFEX_ROLL_WINDOW_DAYS 日历天）与次月比
+        目标日 vol，胜者即真主力（股指主力只在当月↔次月间切换，季月从不做主力）；
+        窗口外直接当月（当月为量头是经验规律，窗口 15 天已覆盖绝大多数移仓）；
+      ③ 最近候选窗口不覆盖（数据异常 / 15s 等极短周期）→ **回退原全扫 + vol 仲裁**
+        （逐字保留现状，异常兜底不制造死路）。
+    为什么最近候选几乎总覆盖：其交割日距目标日 ≤ 约 1 个月，而 1m / 5m / 30m 的
+    10000 根分别覆盖约 2 个月 / 20 个月 / 5 年 ⇒ 必落在窗口内。15s（10000 根 ≈
+    7 个交易日）等极短周期可能全部候选都不行 → 返回 ("", None)，由调用方退化为
+    「改用更大周期」。
+    """
+    if target_dt > datetime.now():
+        return ("", None)
+    cands = _contract_candidates_with_expiry(symbol, target_dt)
+    if not cands:
+        return ("", None)
+    ex, _ = _split_product(symbol)
+
+    if ex == "CFFEX":
+        (c0, exp0), rest = cands[0], cands[1:]
+        if _contract_window_covers(src, c0, freq_sec, target_dt):
+            if (rest and (exp0 - target_dt.date()).days <= _CFFEX_ROLL_WINDOW_DAYS):
+                c1, exp1 = rest[0]
+                if _contract_window_covers(src, c1, freq_sec, target_dt):
+                    # vol 读 _futures_series 缓存（窗口探针已取），零额外取数
+                    if (_contract_volume_on(src, c1, freq_sec, target_dt)
+                            > _contract_volume_on(src, c0, freq_sec, target_dt)):
+                        return (c1, exp1)
+            return (c0, exp0)
+
+    best, best_vol, best_exp = "", -1, None
+    for cand, exp in cands:
         if not _contract_covers(src, cand, freq_sec, target_dt):
             continue
         vol = _contract_volume_on(src, cand, freq_sec, target_dt)
         if vol > best_vol:      # 并列时保留先出现的（交割日最近者）
-            best, best_vol = cand, vol
-    return best
+            best, best_vol, best_exp = cand, vol, exp
+    return (best, best_exp)
+
+
+def _suggest_contract_for_date(src, symbol, freq_sec, target_dt):
+    """对外形态保持 str：错误帧 / 前端 / FuturesReplayBlocked.suggest / 现有测试零改动。
+    （suggest 恒为 str——前端直接拼串并赋给 stock-code-input.value。）
+    内部需要建议合约的交割日请用 `_suggest_contract_with_expiry`。"""
+    return _suggest_contract_with_expiry(src, symbol, freq_sec, target_dt)[0]
 
 
 def _classify_futures_replay(src, symbol, freq_sec, end_dt,
@@ -366,12 +428,13 @@ def _classify_futures_replay(src, symbol, freq_sec, end_dt,
                              window_bars=None, raw_first=None):
     """判定「复盘目标不可达」的类别；可达（D >= 窗口左界）返回 None。
 
-    判定顺序 = **硬约束优先**（方案 v1.17 §3.6）：
+    判定顺序 = **硬约束优先**（方案 v1.18 §3.6）：
       ① 合约存续期（仅具体合约）→ `contract_range`（A）：提示 + 切换按钮
       ② 天勤 10000 根           → `tq_10000`（B 具体合约 / E 主连）：提示 + 切换按钮
       ③ 选点钉住 L（方式D）     → `before_selection`（D / G）：**仅提示**
       ④ 配置根数钉住 L（方式C） → `way_c`（C / F）：**仅提示**
-    「切换」= 前端换到建议合约（该日主力合约）并自动复盘到该日期，不改当前窗口的 L。
+    「切换」= 前端换到建议合约（最近交割优先，换月窗口内按目标日 vol 仲裁）并自动
+    复盘到该日期，不改当前窗口的 L。
     raw_first：调用方已持有「本周期 10000 根首根」时直接传入，省一次取数。
     """
     d_label = f"{end_dt:%Y/%m/%d %H:%M}"
@@ -384,16 +447,21 @@ def _classify_futures_replay(src, symbol, freq_sec, end_dt,
         out_early = day < first_bar.date()
         out_late = day > last_bar.date()
         if out_early or out_late:
-            sug = _suggest_contract_for_date(src, symbol, freq_sec, end_dt)
+            sug, sug_exp = _suggest_contract_with_expiry(src, symbol, freq_sec, end_dt)
             span = f"{first_bar:%Y/%m/%d} ~ {last_bar:%Y/%m/%d}"
             if out_early:
                 why = f"不在 {symbol} 的存续期内（{span}，早于上市日）"
             else:
                 why = f"晚于 {symbol} 的最后交易日（{span}）"
             if sug:
-                _sl = _futures_contract_life(src, sug)
-                sug_exp = f"交割日 {_sl[1]:%Y/%m/%d}，" if _sl else ""
-                tail = f"请切换到该日主力合约 {sug}（{sug_exp}当前周期可取到该日期）。"
+                if sug_exp is not None:
+                    # CFFEX：交割日在候选生成处随附（推算值，节假日顺延 ±1 交易日近似）
+                    exp_hint = f"最后交易日约 {sug_exp:%Y/%m/%d}，"
+                else:
+                    # 非 CFFEX：全扫路径已实测存续期（缓存命中，零额外取数）
+                    _sl = _futures_contract_life(src, sug)
+                    exp_hint = f"交割日 {_sl[1]:%Y/%m/%d}，" if _sl else ""
+                tail = f"请切换到该日主力合约 {sug}（{exp_hint}当前周期可取到该日期）。"
             elif out_late:
                 # 未来日期：后续合约还没上市/无数据，换周期也解决不了，不能给
                 # 「改用更大周期」这种无效指路
@@ -407,13 +475,18 @@ def _classify_futures_replay(src, symbol, freq_sec, end_dt,
     first = raw_first if raw_first is not None else _futures_earliest_at(src, symbol, freq_sec)
     if first is not None and end_dt < first:
         label = _FREQ_CN_BY_SEC.get(int(freq_sec), f"{int(freq_sec)}秒")
-        sug = _suggest_contract_for_date(src, symbol, freq_sec, end_dt)
+        sug, sug_exp = _suggest_contract_with_expiry(src, symbol, freq_sec, end_dt)
         head = (f"复盘日期 {d_label} 早于 {symbol} 在{label}周期的 10000 根下限"
                 f"（最早只到 {first:%Y/%m/%d %H:%M}）")
         if sug:
-            _sl = _futures_contract_life(src, sug)
-            span = f"存续期 {_sl[0]:%Y/%m/%d} ~ {_sl[1]:%Y/%m/%d}" if _sl else ""
-            tail = f"；请切换到该日主力合约 {sug}（{span}）。"
+            if sug_exp is not None:
+                # CFFEX：删「存续期 a~b」（上市日不可推算），只给最后交易日约（推算值）
+                exp_hint = f"最后交易日约 {sug_exp:%Y/%m/%d}"
+            else:
+                # 非 CFFEX：保留实测存续期（全扫路径已缓存命中，零额外取数）
+                _sl = _futures_contract_life(src, sug)
+                exp_hint = f"存续期 {_sl[0]:%Y/%m/%d} ~ {_sl[1]:%Y/%m/%d}" if _sl else ""
+            tail = f"；请切换到该日主力合约 {sug}（{exp_hint}）。"
         else:
             tail = ("；同品种暂无在该周期可取到该日期的合约，"
                     "请改用 5分钟 / 30分钟（同样 10000 根，覆盖的时间跨度更长）。")
@@ -688,7 +761,7 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
         #   · 起止倒挂（start ≥ end）→ 报错中止本次连接，**不静默回退**：
         #     与股票 `_analyze_stock_internal` 同判据（`>=`）、同文案，前端
         #     收到 init 错误帧后弹窗告知用户（需求⑼/⑽ 的兜底归一，见
-        #     Docs/选点&复盘方案v1.17.md §3.5）；
+        #     Docs/选点&复盘方案v1.18.md §3.5）；
         #   · 非复盘：start_time 缺失时从 CSV 恢复（B 操作/冷启动，原语义）。
         # meta.saved_selection_date 恒回显 CSV 真值（与股票同规则）：
         # A 复盘的 start=A左 不会冒充选点，复盘态选点/取消选点驱动前端菜单。
@@ -1162,7 +1235,7 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
             # **任一窗倒挂即中止**（对齐越界判定口径「任一窗越界即拦/回」），不再
             # 静默丢弃该窗 start、回退默认窗口——与 `_sse_single_gen`、股票
             # `_analyze_stock_internal` 同判据（`>=`）、同文案前缀
-            # （需求⑼/⑽ 的兜底归一，见 Docs/选点&复盘方案v1.17.md §3.5）。
+            # （需求⑼/⑽ 的兜底归一，见 Docs/选点&复盘方案v1.18.md §3.5）。
             if end_time:
                 _e_dt2 = _parse_flex_time(end_time)
                 if _e_dt2 is not None:

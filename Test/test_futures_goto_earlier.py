@@ -2,20 +2,23 @@
 """Test/test_futures_goto_earlier.py —— 期货复盘「目标早于窗口左界」四类诊断
 =====================================================================
 2026-10-17 v1.17：复盘输入日期 D 早于窗口左界 L 时**不改 L**（方案 §2 规则⑥），
-而是按「L 被谁钉住」分四类，提示与出路各不相同（详见 Docs/选点&复盘方案v1.17.md §3.6）：
+而是按「L 被谁钉住」分四类，提示与出路各不相同（详见 Docs/选点&复盘方案v1.18.md §3.6）：
 
 | code              | 触发条件                                   | 出路                     |
 |-------------------|--------------------------------------------|--------------------------|
-| contract_range    | 具体合约：D 不在该合约存续期（上市~交割）   | 切换到建议合约（按交割日算）|
-| tq_10000          | D 早于该周期「最近 10000 根」首根           | 改用 5m / 30m            |
+| contract_range    | 具体合约：D 不在该合约存续期（上市~交割）   | 切换到建议合约（最近交割优先）|
+| tq_10000          | D 早于该周期「最近 10000 根」首根           | 切换建议合约 / 改用 5m/30m |
 | before_selection  | 方式D：窗口以选点为界，D 早于选点           | 先取消选点                |
 | way_c             | 方式C：窗口 = 最近 N 根（N<10000），D 可达   | **仅提示**「请加载更多数据」 |
 
 判定顺序 = 硬约束优先（合约 → 10000 → 选点 → 方式C）；事实全部取数据真值
 （合约存续期 = 该合约 30m 10000 根首/末根；10000 边界 = 当前周期首根；选点 = CSV）。
+2026-10-17 v1.18：建议合约**最近交割优先**——最近候选存续期覆盖由生成规则结构保证
+（免探），只验当前周期窗口；换月窗口内（≤15 日历天）与次月比目标日 vol，窗口外直接
+当月；最近候选不覆盖才回退全扫 + vol 仲裁（异常兜底）。suggest 恒为 str（前端契约）。
 
 分层：[1] 合约推荐纯函数 / [2] 四类诊断（FakeSrc）/ [3] 源码契约
-     / [4] 真浏览器（way_c 确认后重载、contract_range 提示）。
+     / [5] init 晚向接线 / [4] 真浏览器（tq_10000 切换合约、way_c 仅提示）。
 运行：python Test/test_futures_goto_earlier.py
 """
 import functools
@@ -121,10 +124,13 @@ def _fake_2409():
 
 def test_contract_suggest():
     from App.AppSSE import (_third_friday, _contract_candidates,
-                            _suggest_contract_for_date, _classify_futures_replay)
+                            _contract_candidates_with_expiry, _CFFEX_ROLL_WINDOW_DAYS,
+                            _suggest_contract_for_date, _suggest_contract_with_expiry,
+                            _classify_futures_replay)
 
     assert _third_friday(2024, 4).strftime("%Y-%m-%d") == "2024-04-19"
     assert _third_friday(2024, 5).strftime("%Y-%m-%d") == "2024-05-17"
+    assert _CFFEX_ROLL_WINDOW_DAYS == 15, "换月窗口 15 日历天（评审定稿值）"
 
     # 候选月份：04-22 已过 4 月交割日（04-19）→ 首个候选必须是 2405（不能是 2404）
     cand = _contract_candidates("CFFEX.IF2409", TARGET)
@@ -151,15 +157,31 @@ def test_contract_suggest():
     assert _contract_candidates("CZCE.MA405", TARGET)[0] == "CZCE.MA404"
     assert _contract_candidates("", TARGET) == []
 
+    # 候选 + 交割日（v1.18）：CFFEX 在生成处随附第三个周五（零解析、零失败路径）；
+    # 公开形状（纯 code）与内部形状一一对应；非 CFFEX 交割日不可推算 → None
+    cand_ex = _contract_candidates_with_expiry("CFFEX.IF2409", TARGET)
+    assert [c for c, _ in cand_ex] == cand, "公开形状与内部形状候选一致"
+    assert dict(cand_ex)["CFFEX.IF2405"] == datetime(2024, 5, 17).date(), "交割日在生成处随附"
+    assert all(exp >= TARGET.date() for _, exp in cand_ex), "交割日 ≥ 目标日（已剔已交割月份）"
+    assert dict(_contract_candidates_with_expiry("CFFEX.IF2409", datetime(2024, 4, 19)))[
+        "CFFEX.IF2404"] == datetime(2024, 4, 19).date(), "交割日当天 days=0"
+    ex_dec = _contract_candidates_with_expiry("CFFEX.IF2409", datetime(2024, 12, 23))
+    assert dict(ex_dec)["CFFEX.IF2503"] == datetime(2025, 3, 21).date(), "跨年候选交割日随附"
+    assert all(exp is None for _, exp in _contract_candidates_with_expiry("SHFE.rb2405", TARGET)), \
+        "非 CFFEX 交割日不可推算 → None"
+
     # 数据验证：只有「存续期覆盖 + 当前周期 10000 根覆盖」的候选才会被建议
     src = _fake_2409()
     assert _suggest_contract_for_date(src, SYMBOL, 60, TARGET) == "CFFEX.IF2405"
+    sug, exp = _suggest_contract_with_expiry(src, SYMBOL, 60, TARGET)
+    assert sug == "CFFEX.IF2405" and isinstance(sug, str), "suggest 恒为 str（前端契约）"
+    assert exp == datetime(2024, 5, 17).date(), "随附交割日供文案「最后交易日约」"
     assert _suggest_contract_for_date(src, "KQ.m@CFFEX.IF", 60, TARGET) == "CFFEX.IF2405"
     # 15s：候选的 10000 根只覆盖约 7 个交易日 → 04-22 取不到 → 不给建议（退化为换周期）
     assert _suggest_contract_for_date(src, SYMBOL, 15, TARGET) == ""
 
-    # 四品种（IF/IH/IC/IM）同一套规则；主力按「目标日成交量最大」判，不看交割日远近：
-    # IM 的季月 2409 量最大 → 必须建议 IM2409（不是交割日最近的 IM2405）
+    # (a) 非换月窗口（04-22 距 IF2405 交割 25 天 > 15）+ 全覆盖 → **直接取最近候选（当月）**，
+    #     不扫其余三个：即便次月/季月 vol 更大也不仲裁（窗口外当月为量头是经验规律）
     for root, hot in (("IF", "2406"), ("IH", "2406"), ("IC", "2406"), ("IM", "2409")):
         feed = {}
         for mm in ("2405", "2406", "2409", "2412"):
@@ -170,7 +192,38 @@ def test_contract_suggest():
                 datetime(2024, 2, 1, 9, 30), datetime(2024, 9, 20, 14, 59),
                 vol=vol, mid=datetime(2024, 4, 22, 9, 30))
         got = _suggest_contract_for_date(_FakeSrc(feed), f"CFFEX.{root}2409", 60, TARGET)
-        assert got == f"CFFEX.{root}{hot}", f"{root} 应按当日量取主力，实为 {got!r}"
+        assert got == f"CFFEX.{root}2405", \
+            f"{root} 非换月窗口应直接取最近候选（当月），实为 {got!r}"
+
+    # (b) 换月窗口（05-14 距 IF2405 交割 05-17 仅 3 天 ≤ 15）→ 与次月比目标日 vol：
+    #     次月量更大 → 建议次月（真主力）；次月量更小 → 仍当月
+    def _roll_feed(v05, v06):
+        return _FakeSrc({
+            ("CFFEX.IF2405", 1800): _span(datetime(2024, 3, 18, 9, 30), datetime(2024, 5, 17, 14, 30)),
+            ("CFFEX.IF2405", 60): _span(datetime(2024, 3, 20, 9, 30), datetime(2024, 5, 17, 14, 59),
+                                        vol=v05, mid=datetime(2024, 5, 14, 9, 30)),
+            ("CFFEX.IF2406", 1800): _span(datetime(2024, 4, 22, 9, 30), datetime(2024, 6, 21, 14, 30)),
+            ("CFFEX.IF2406", 60): _span(datetime(2024, 4, 1, 9, 30), datetime(2024, 6, 21, 14, 59),
+                                        vol=v06, mid=datetime(2024, 5, 14, 9, 30)),
+        })
+    roll_day = datetime(2024, 5, 14, 9, 30)
+    sug, exp = _suggest_contract_with_expiry(_roll_feed(100, 900), SYMBOL, 60, roll_day)
+    assert (sug, exp) == ("CFFEX.IF2406", datetime(2024, 6, 21).date()), \
+        f"换月窗口内次月量更大应建议次月，实为 {(sug, exp)!r}"
+    assert _suggest_contract_for_date(_roll_feed(900, 100), SYMBOL, 60, roll_day) == "CFFEX.IF2405", \
+        "换月窗口内次月量更小仍建议当月"
+
+    # (c) 回退形态（**异常兜底**：1m/5m/30m 下当月不覆盖数学上不可达（§4.1 结构保证），
+    #     本用例靠构造「当月 60m 序列缺失」触发）→ 全扫 + vol 仲裁仍生效，不制造死路
+    fallback = _FakeSrc({
+        ("CFFEX.IF2405", 1800): _span(datetime(2024, 3, 18, 9, 30), datetime(2024, 5, 17, 14, 30)),
+        ("CFFEX.IF2406", 1800): _span(datetime(2024, 4, 22, 9, 30), datetime(2024, 6, 21, 14, 30)),
+        ("CFFEX.IF2406", 60): _span(datetime(2024, 4, 22, 9, 30), datetime(2024, 6, 21, 14, 59),
+                                    vol=900, mid=datetime(2024, 4, 22, 9, 30)),
+    })
+    got = _suggest_contract_for_date(fallback, SYMBOL, 60, TARGET)
+    assert got == "CFFEX.IF2406", f"回退全扫应按 vol 取覆盖最大者，实为 {got!r}"
+
     # 未连接的数据源（真实 SSE 时序）：探针必须先补一次连接，A/B 不得退化成方式C
     lazy = _LazySrc(_fake_2409().bars)
     b = _classify_futures_replay(lazy, SYMBOL, 60, TARGET,
@@ -178,10 +231,10 @@ def test_contract_suggest():
     assert lazy.connect_calls == 1, f"探针应补一次连接（connect 幂等），实为 {lazy.connect_calls}"
     assert b is not None and b.code == "tq_10000", \
         f"未连接时 A/B 探针失败会误报方式C，实为 {b and b.code}"
-    assert b.suggest == "CFFEX.IF2405", b.suggest
+    assert b.suggest == "CFFEX.IF2405" and isinstance(b.suggest, str), b.suggest
 
-    print("[PASS] [1] 合约候选/建议：CFFEX 四个真实月份（当月/下月/两季月）"
-          "+ IF/IH/IC/IM 按目标日量取主力 + 数据验证当前周期可取 + 未连接时自动补连")
+    print("[PASS] [1] 合约候选/建议：CFFEX 四个真实月份（当月/下月/两季月）+ 生成处随附交割日"
+          "+ 非换月窗口直取当月 / 换月窗口 vol 仲裁 / 回退兜底 + 数据验证当前周期可取 + 未连接时自动补连")
 
 
 # ═══════════════════════ [2] 四类诊断 ═══════════════════════
@@ -202,6 +255,7 @@ def test_classify():
                                  start_dt=datetime(2024, 8, 22, 9, 30))
     assert b is not None and b.code == "contract_range", b and b.code
     assert "上市日" in b.message and b.suggest == "CFFEX.IF2402", (b.message, b.suggest)
+    assert isinstance(b.suggest, str), "suggest 恒为 str（前端契约）"
 
     # ③ tq_10000：IF2409 存续期内，但 1m 的 10000 根只到 07/19
     #    → 必须**绕过**该限制：给出同品种能取到 04-22 的合约（IF2405），而不是只说「换周期」
@@ -211,20 +265,20 @@ def test_classify():
     assert b.suggest == "CFFEX.IF2405", f"B 类必须给出可切换合约，实为 {b.suggest!r}"
     assert "主力合约 CFFEX.IF2405" in b.message, b.message
     assert "10000 根下限" in b.message, "B 类文案要点明天勤硬上限"
+    assert isinstance(b.suggest, str), "suggest 恒为 str（前端契约）"
 
-    # ③b 多个候选都能覆盖 → 必须选**目标日成交量最大**的（主力），不是交割日最近的非主力
+    # ③b 回退形态（**异常兜底**：当月 60m 序列缺失 → 最近候选窗口不覆盖 → 回退全扫 + vol 仲裁；
+    #     1m/5m/30m 下当月不覆盖数学上不可达，本用例靠构造数据缺失触发）
     multi = _FakeSrc({
         (SYMBOL, 60): _span(datetime(2024, 7, 19, 9, 30), datetime(2024, 9, 20, 14, 59)),
         ("CFFEX.IF2405", 1800): _span(datetime(2024, 3, 18, 9, 30), datetime(2024, 5, 17, 14, 30)),
-        ("CFFEX.IF2405", 60): _span(datetime(2024, 3, 20, 9, 30), datetime(2024, 5, 17, 14, 59),
-                                    vol=50, mid=datetime(2024, 4, 22, 9, 30)),
         ("CFFEX.IF2406", 1800): _span(datetime(2024, 4, 22, 9, 30), datetime(2024, 6, 21, 14, 30)),
         ("CFFEX.IF2406", 60): _span(datetime(2024, 4, 22, 9, 30), datetime(2024, 6, 21, 14, 59),
                                     vol=900, mid=datetime(2024, 4, 22, 9, 30)),
     })
     b = _classify_futures_replay(multi, SYMBOL, 60, TARGET, start_dt=datetime(2024, 7, 19, 9, 30))
     assert b is not None and b.suggest == "CFFEX.IF2406", \
-        f"多候选覆盖时应取当日成交量最大的主力合约，实为 {b.suggest!r}"
+        f"回退全扫应取当日成交量最大的覆盖候选，实为 {b.suggest!r}"
 
     # ④ before_selection：5m 下 D 可达，但早于选点
     b = _classify_futures_replay(src, SYMBOL, 300, TARGET,
@@ -259,7 +313,7 @@ def test_classify():
                                  start_dt=datetime(2024, 9, 2, 9, 30))
     assert b is not None and b.code == "contract_range", b and b.code
     assert "最后交易日" in b.message, b.message
-    assert b.suggest == "", f"未来日期不应建议合约，实为 {b.suggest!r}"
+    assert b.suggest == "" and isinstance(b.suggest, str), f"未来日期不应建议合约，实为 {b.suggest!r}"
     assert "更大的周期" not in b.message, "未来日期换周期无效，不能这么指路"
 
     # ⑦ 可达：D 晚于窗口左界 → 不拦
@@ -305,7 +359,7 @@ def test_init_out_late():
     except FuturesReplayBlocked as b:
         assert b.code == "contract_range", b.code
         assert "最后交易日" in b.message, b.message
-        assert b.suggest == "CFFEX.IF2410", b.suggest
+        assert b.suggest == "CFFEX.IF2410" and isinstance(b.suggest, str), b.suggest
 
     # 未来日期：分类器如实判「不在存续期」（未来当然不在），但 init 的晚向分支必须
     # 用 `_end_dt < datetime.now()` 把它排除——否则每天正常复盘/查未来都会弹 A′。
@@ -332,6 +386,13 @@ def test_frontend_contracts():
         "候选合约必须验证「当前周期 10000 根也能取到该日期」，不能只看存续期"
     assert "_split_product" in sse and '"CZCE"' in sse, "候选代码需按交易所格式生成（郑商所三位）"
     assert "_FUTURES_LIFE_FREQ = 1800" in sse, "合约存续期探针应走 30m（10000 根跨度≫存续期）"
+    # v1.18 最近优先 + 换月窗口 + 契约护栏（评审第三/四轮）
+    assert "_contract_window_covers" in sse and "_CFFEX_ROLL_WINDOW_DAYS = 15" in sse,         "缺最近优先/换月窗口实现"
+    assert "_suggest_contract_with_expiry" in sse and "_contract_candidates_with_expiry" in sse,         "缺带交割日的内部形态（生成处随附，消除字符串解析）"
+    assert "target_dt > datetime.now()" in sse, "缺未来日期早退（公开接口直调可达）"
+    assert "最后交易日约" in sse, "方案二文案（最后交易日约）未落地"
+    assert "suggest 恒为 str" in sse, "FuturesReplayBlocked 契约注记缺失"
+    assert "目标日全天" in sse, "vol 时点口径（目标日全天累计）未注明"
     # 探针取数前必须确保已连接（否则 api=None → AttributeError → A/B 全退化）
     src_py = _read(SRC_PY)
     assert "_ensure_futures_src_connected(src)" in sse and sse.count("_ensure_futures_src_connected(src)") >= 2, \
@@ -628,7 +689,7 @@ def main():
         test_browser()
     finally:
         restore_iso()
-    print("\n全部通过：期货复盘四类诊断（v1.17）")
+    print("\n全部通过：期货复盘四类诊断（v1.18 最近优先 + 换月窗口仲裁）")
 
 
 if __name__ == "__main__":
