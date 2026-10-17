@@ -462,7 +462,9 @@ def _classify_futures_replay(src, symbol, freq_sec, end_dt,
                     # _sl 必非 None：建议合约必经 `_contract_covers` 通过，其第一道门槛就是
                     # life 非 None 并按 symbol 缓存，此处必命中同一缓存——不可达路径不加防御。
                     _sl = _futures_contract_life(src, sug)
-                    exp_hint = f"交割日 {_sl[1]:%Y/%m/%d}，"
+                    # 值是实测末根 = 最后交易日（非 CFFEX 的交割日在最后交易日之后，
+                    # 本应用不推算；标「交割日」会输出错误信息）
+                    exp_hint = f"最后交易日 {_sl[1]:%Y/%m/%d}，"
                 tail = f"请切换到该日主力合约 {sug}（{exp_hint}当前周期可取到该日期）。"
             elif out_late:
                 # 未来日期：后续合约还没上市/无数据，换周期也解决不了，不能给
