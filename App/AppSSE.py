@@ -469,20 +469,34 @@ def init_chan_symbol(src, symbol, _name, freq_sec, freq_label, start_time=None, 
         # 窗口取数根数：A=配置回看 / B=[T,最新]全量 / C=N+流逝根数（见 _futures_window_fetch_bars）
         fetch_bars, base_bars = _futures_window_fetch_bars(
             freq_sec, start_time=start_time, end_time=end_time, base_bars=num_bars)
+        # 取数前确保已连接（幂等）：SSE 主体已连时是空操作；直接调用 init 的场景
+        # （定位 / 测试 / 未来新增入口）不会因 api=None 被下面的通用 except 吞成「初始化失败」。
+        _ensure_futures_src_connected(src)
         records = src.fetch_kline(symbol, freq_sec=freq_sec, display_key=display_key,
                                   start_time=start_time, num_bars=fetch_bars)
         # 复盘终点截断：先滤出 <= end_time 的历史，再取末 N 根（C 操作左边界=从 end 往前推 N 根），
         # 再扣除"最新未完成K线"首根保护
         if end_time:
             _end_dt = _parse_flex_time(end_time)
-            if (records and _end_dt is not None and fetch_bars >= _TQ_MAX_BARS
-                    and _end_dt < records[0]["dt"]):
-                # 目标早于本周期「最近 10000 根」首根 → 四类诊断（合约范围 / 10000 根）；
-                # 可达（判定为 None）则照常截断，不在这里拦
-                _blk = _classify_futures_replay(
-                    src, symbol, freq_sec, _end_dt, raw_first=records[0]["dt"])
-                if _blk is not None:
-                    raise _blk
+            if records and _end_dt is not None:
+                if fetch_bars >= _TQ_MAX_BARS and _end_dt < records[0]["dt"]:
+                    # 目标早于本周期「最近 10000 根」首根 → 四类诊断（合约范围 / 10000 根）；
+                    # 可达（判定为 None）则照常截断，不在这里拦
+                    _blk = _classify_futures_replay(
+                        src, symbol, freq_sec, _end_dt, raw_first=records[0]["dt"])
+                    if _blk is not None:
+                        raise _blk
+                elif (_end_dt < datetime.now()
+                        and _end_dt.date() > records[-1]["dt"].date()):
+                    # **晚向**：D 晚于该序列末根、且不是未来。
+                    # 前端对「非复盘态输入 ≥ 末根」会静默回实时（app.js wantLive），
+                    # 复盘态只拦今天/未来 ⇒ 这里的「已交割合约 + 之后日期」原先会被
+                    # 静默截断到存续期末根，既无提示也无切换建议（A′ 不可达）。
+                    # 只认 contract_range：晚向不可能命中 10000 根/选点/方式C。
+                    _blk = _classify_futures_replay(
+                        src, symbol, freq_sec, _end_dt, raw_first=records[0]["dt"])
+                    if _blk is not None and _blk.code == "contract_range":
+                        raise _blk
             records = _truncate_records_by_end(records, end_time, freq_sec)
             if base_bars and len(records) > base_bars:
                 records = records[-base_bars:]

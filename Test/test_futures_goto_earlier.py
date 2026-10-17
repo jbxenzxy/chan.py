@@ -279,6 +279,41 @@ def test_classify():
     print("[PASS] [2] 四类诊断：合约范围/10000根/选点/方式C + 硬约束优先 + 可达不拦")
 
 
+# ═══════════════════ [5] init 晚向接线（A′ 可达性） ═══════════════════
+
+def test_init_out_late():
+    """端到端接线：D 晚于合约末根且非未来 → init 路径必须抛 A′。
+
+    F1 指出的接线缺失：分类器单测覆盖了 A′，但 `init_chan_symbol` 原先只判
+    「D < 10000 根首根」；晚向被 `_truncate_records_by_end` 静默吞掉，页面停在
+    存续期末根、既无提示也无切换建议（前端 wantLive 只拦「今天/未来」）。
+    """
+    from App.AppSSE import init_chan_symbol, FuturesReplayBlocked
+
+    src = _LazySrc({
+        (SYMBOL, 1800): _span(datetime(2024, 3, 18, 9, 30), datetime(2024, 9, 20, 14, 30)),
+        (SYMBOL, 60): _span(datetime(2024, 7, 19, 9, 30), datetime(2024, 9, 20, 14, 59)),
+        # IF2410：09/20 挂牌 ~ 10/18 交割；10/01 在其存续期内且 1m 可取到
+        ("CFFEX.IF2410", 1800): _span(datetime(2024, 9, 20, 9, 30), datetime(2024, 10, 18, 14, 30)),
+        ("CFFEX.IF2410", 60): _span(datetime(2024, 9, 2, 9, 30), datetime(2024, 10, 18, 14, 59),
+                                   vol=900, mid=datetime(2024, 10, 1, 9, 30)),
+    })
+    try:
+        init_chan_symbol(src, SYMBOL, "IF2409", 60, "1m",
+                         "2024/09/02 09:30", "2024/10/01 10:00")
+        raise AssertionError("晚于最后交易日应抛 A′（原实现静默截断到 09/20）")
+    except FuturesReplayBlocked as b:
+        assert b.code == "contract_range", b.code
+        assert "最后交易日" in b.message, b.message
+        assert b.suggest == "CFFEX.IF2410", b.suggest
+
+    # 未来日期：分类器如实判「不在存续期」（未来当然不在），但 init 的晚向分支必须
+    # 用 `_end_dt < datetime.now()` 把它排除——否则每天正常复盘/查未来都会弹 A′。
+    assert "_end_dt < datetime.now()" in _read(SSE_PY), \
+        "晚向分支必须排除未来日期（否则「查未来」会弹成 A′）"
+    print("[PASS] [5] init 晚向接线：D 晚于末根 → A′ + 建议 IF2410；未来日期不报")
+
+
 # ═══════════════════════ [3] 源码契约 ═══════════════════════
 
 def test_frontend_contracts():
@@ -589,6 +624,7 @@ def main():
         test_contract_suggest()
         test_classify()
         test_frontend_contracts()
+        test_init_out_late()
         test_browser()
     finally:
         restore_iso()

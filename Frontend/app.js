@@ -8435,7 +8435,6 @@
                             // 只有成功分支恢复 —— 少这一行会让复盘失败一次后日历永久禁用。
                             const _code = data.code || "";
                             const _target = realtimeEndTime || "";
-                            const _freqNow = realtimeFreq || currentFreq;
                             disconnectRealtime();
                             document.getElementById("loading").classList.add("hidden");
                             document.getElementById("goto-date-input").disabled = false;
@@ -8584,7 +8583,6 @@
                             // 失败同样必须恢复日历输入框（原因见单窗同名注释）。
                             const _code = data.code || "";
                             const _target = realtimeEndTime || "";
-                            const _freqNow = realtimeFreq || currentFreq;
                             disconnectRealtime();
                             document.getElementById("loading").classList.add("hidden");
                             document.getElementById("goto-date-input").disabled = false;
