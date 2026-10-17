@@ -237,6 +237,11 @@ class CTqSdkSession(CSSESource):
             _ACTIVE_SOURCES.add(self)
 
     def connect(self):
+        # 幂等：诊断探针（合约存续期 / 10000 根边界）可能在 SSE 主体 connect 之前
+        # 就先取数，此处必须复用同一条连接——重复 TqApi 会多建一条 websocket 并泄漏。
+        # 已 close()（_closed 置位）的会话不复用旧 api：让它继续走建连，至少不会拿到死连接。
+        if self.api is not None and not self._closed:
+            return
         from tqsdk import TqApi, TqAuth
         from DataAPI.TqSdkAPI import TQ_ACCOUNT, TQ_PASSWORD
         # 一次性改写 TqApi._print：去掉其自带的「日期 时间」时间戳前缀，

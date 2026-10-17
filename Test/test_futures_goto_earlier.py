@@ -42,6 +42,7 @@ from Test.snapshot_runner import isolate_side_effects
 
 APP_JS = os.path.join(REPO_ROOT, "Frontend", "app.js")
 SSE_PY = os.path.join(REPO_ROOT, "App", "AppSSE.py")
+SRC_PY = os.path.join(REPO_ROOT, "DataAPI", "TqSdkCSSESource.py")
 FRONTEND_DIR = os.path.join(REPO_ROOT, "Frontend")
 SYMBOL = "CFFEX.IF2409"
 TARGET = datetime(2024, 4, 22, 15, 0)
@@ -66,12 +67,33 @@ class _FakeSrc:
 
     def __init__(self, bars):
         self.bars = bars
+        self.api = object()            # 默认「已连接」：诊断可直接取数
         self._futures_life_cache = {}
-        self._futures_earliest_cache = {}
+        self._futures_series_cache = {}
 
     def fetch_kline(self, symbol, freq_sec=15, num_bars=None, display_key=None, start_time=None):
+        if self.api is None:           # 与真实数据源一致：未连接就取不了数
+            raise AttributeError("'NoneType' object has no attribute 'get_kline_serial'")
         recs = self.bars.get((symbol, freq_sec), [])
         return recs[-num_bars:] if num_bars else recs
+
+
+class _LazySrc(_FakeSrc):
+    """真实时序：倒挂分类发生在 `src.connect()` 之前（`api` 还是 None）。
+
+    这是 2026-10-17 现场日志暴露的缺陷——不补连接，A/B 两个探针全失败，
+    分类会退化成方式C「请加载更多数据」（配置已用满 10000 根时自相矛盾）。
+    """
+
+    def __init__(self, bars):
+        super().__init__(bars)
+        self.api = None
+        self.connect_calls = 0
+
+    def connect(self):
+        self.connect_calls += 1
+        if self.api is None:
+            self.api = object()
 
 
 def _fake_2409():
@@ -98,7 +120,8 @@ def _fake_2409():
 # ═══════════════════════ [1] 合约推荐纯函数 ═══════════════════════
 
 def test_contract_suggest():
-    from App.AppSSE import _third_friday, _contract_candidates, _suggest_contract_for_date
+    from App.AppSSE import (_third_friday, _contract_candidates,
+                            _suggest_contract_for_date, _classify_futures_replay)
 
     assert _third_friday(2024, 4).strftime("%Y-%m-%d") == "2024-04-19"
     assert _third_friday(2024, 5).strftime("%Y-%m-%d") == "2024-05-17"
@@ -148,8 +171,17 @@ def test_contract_suggest():
                 vol=vol, mid=datetime(2024, 4, 22, 9, 30))
         got = _suggest_contract_for_date(_FakeSrc(feed), f"CFFEX.{root}2409", 60, TARGET)
         assert got == f"CFFEX.{root}{hot}", f"{root} 应按当日量取主力，实为 {got!r}"
+    # 未连接的数据源（真实 SSE 时序）：探针必须先补一次连接，A/B 不得退化成方式C
+    lazy = _LazySrc(_fake_2409().bars)
+    b = _classify_futures_replay(lazy, SYMBOL, 60, TARGET,
+                                 start_dt=datetime(2024, 7, 19, 9, 30))
+    assert lazy.connect_calls == 1, f"探针应补一次连接（connect 幂等），实为 {lazy.connect_calls}"
+    assert b is not None and b.code == "tq_10000", \
+        f"未连接时 A/B 探针失败会误报方式C，实为 {b and b.code}"
+    assert b.suggest == "CFFEX.IF2405", b.suggest
+
     print("[PASS] [1] 合约候选/建议：CFFEX 四个真实月份（当月/下月/两季月）"
-          "+ IF/IH/IC/IM 按目标日量取主力 + 数据验证当前周期可取")
+          "+ IF/IH/IC/IM 按目标日量取主力 + 数据验证当前周期可取 + 未连接时自动补连")
 
 
 # ═══════════════════════ [2] 四类诊断 ═══════════════════════
@@ -211,6 +243,12 @@ def test_classify():
     assert "请加载更多数据" in b.message and "最近 960 根" in b.message, b.message
     assert "2023/11/24 09:30" in b.message, "way_c 文案应给出该周期 10000 根可达的最早时间"
 
+    # ⑤b 配置已用满 10000 根：不能再提示「请加载更多数据」（无更多可加载）
+    b = _classify_futures_replay(src, SYMBOL, 300, TARGET,
+                                 start_dt=datetime(2024, 8, 22, 9, 30), window_bars=10000)
+    assert b is not None and b.code == "way_c", b and b.code
+    assert "请加载更多数据" not in b.message and "取数上限" in b.message, b.message
+
     # ⑥ 优先级：D 既早于选点、又超出 10000 根 → 必须报 tq_10000（取消选点也解决不了）
     b = _classify_futures_replay(src, SYMBOL, 60, datetime(2024, 6, 3, 10, 0),
                                  start_dt=datetime(2024, 8, 1, 9, 30), start_is_selection=True)
@@ -259,6 +297,13 @@ def test_frontend_contracts():
         "候选合约必须验证「当前周期 10000 根也能取到该日期」，不能只看存续期"
     assert "_split_product" in sse and '"CZCE"' in sse, "候选代码需按交易所格式生成（郑商所三位）"
     assert "_FUTURES_LIFE_FREQ = 1800" in sse, "合约存续期探针应走 30m（10000 根跨度≫存续期）"
+    # 探针取数前必须确保已连接（否则 api=None → AttributeError → A/B 全退化）
+    src_py = _read(SRC_PY)
+    assert "_ensure_futures_src_connected(src)" in sse and sse.count("_ensure_futures_src_connected(src)") >= 2, \
+        "两个探针（存续期 / 10000 根首根）都必须先确保数据源已连接"
+    assert "def _ensure_futures_src_connected(src):" in sse, "缺补连实现"
+    assert "if self.api is not None:" in src_py and src_py.count("def connect(self):") >= 1, \
+        "CTqSdkSession.connect 必须幂等（重复调用会多建 websocket）"
 
     # 前端：期货分支不再有「请扩大数据范围」；改为按 code 渲染
     assert '请扩大数据范围' in js, "股票分支的越界提示不应被误删"

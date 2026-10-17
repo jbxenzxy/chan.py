@@ -250,6 +250,27 @@ def _contract_candidates(symbol, target_dt, months=5):
     return out
 
 
+def _ensure_futures_src_connected(src):
+    """诊断探针需要数据源已连接；未连接则补一次（connect 已幂等）。
+
+    为什么必须补：A/B 两类的判据全来自真实取数（合约存续期、10000 根首根），而
+    `_sse_single_gen` / `_sse_dual_gen` 的**倒挂分类发生在 `src.connect()` 之前**。
+    不补就会出现：`api is None` → `AttributeError: 'NoneType' has no attribute
+    'get_kline_serial'` → 两个探针都失败 → A/B 全部跳过 → 误报成方式C
+    「请加载更多数据」（配置已用满 10000 根时尤其自相矛盾）。
+    """
+    if getattr(src, "api", None) is not None:
+        return True
+    if not hasattr(src, "connect"):
+        return True          # 测试桩 / 无连接概念的数据源：直接放行
+    try:
+        src.connect()
+    except Exception as e:   # noqa: BLE001 —— 连不上就退化为无探针，由调用方降级
+        log.warning(f"[诊断] 数据源连接失败，探针不可用: {type(e).__name__}: {e}")
+        return False
+    return getattr(src, "api", None) is not None
+
+
 def _futures_contract_life(src, symbol):
     """具体合约存续期 (首根, 末根)；主连/指数或取不到 → None（按会话缓存）。"""
     if not symbol or "." not in symbol or symbol.upper().startswith("KQ"):
@@ -262,6 +283,7 @@ def _futures_contract_life(src, symbol):
         return cache[symbol]
     life = None
     try:
+        _ensure_futures_src_connected(src)
         recs = src.fetch_kline(symbol, freq_sec=_FUTURES_LIFE_FREQ, num_bars=_TQ_MAX_BARS)
         if recs:
             life = (recs[0]["dt"], recs[-1]["dt"])
@@ -285,6 +307,7 @@ def _futures_series(src, symbol, freq_sec):
     if key not in cache:
         recs = []
         try:
+            _ensure_futures_src_connected(src)
             recs = src.fetch_kline(symbol, freq_sec=freq_sec, num_bars=_TQ_MAX_BARS) or []
         except Exception as e:  # noqa: BLE001
             log.warning(f"[诊断] 10000 根探针失败 {symbol}/{freq_sec}: {type(e).__name__}: {e}")
@@ -406,6 +429,14 @@ def _classify_futures_replay(src, symbol, freq_sec, end_dt,
                 f"（方式D：复盘窗口 = [选点, 复盘点]，起点不能早于选点）；"
                 f"如需查看，请先「取消选点」。")
         n = window_bars if window_bars else resolve_lookback_bars(freq_sec)
+        if n >= _TQ_MAX_BARS:
+            # 配置已经用满 10000 根：再说「请加载更多数据」自相矛盾（无更多可加载）。
+            # 真正的边界在 A/B 两类（合约存续期 / 单序列上限），探针可用时不会走到这里。
+            return FuturesReplayBlocked(
+                "way_c",
+                f"复盘日期 {d_label} 早于已加载数据起点 {start_dt:%Y/%m/%d %H:%M}；"
+                f"当前窗口已是{_FREQ_CN_BY_SEC.get(int(freq_sec), str(int(freq_sec)) + '秒')}"
+                f"周期的取数上限（10000 根），无法再往前加载。")
         reach = f"；10000 根内最早可到 {first:%Y/%m/%d %H:%M}" if first else ""
         # 方式C **只提示**：出路是把 FUTURES_LOOKBACK_CONFIG 调大并重启服务
         # （用户明确要求走配置、不在界面给一次性入口）⇒ 不带 retryable、不给按钮。
