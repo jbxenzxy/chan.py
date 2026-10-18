@@ -463,6 +463,56 @@ def test_classify():
     print("[PASS] [2] 四类诊断：合约范围/10000根/选点/方式C + 硬约束优先 + 可达不拦")
 
 
+class _Flaky30mSrc(_FakeSrc):
+    """建议合约的 30m 取数失败桩（2026-10-18 评审 P2-1 回归钉）。
+
+    v1.18 之后 `_contract_covers` 只取**当前周期**，不再预热 30m 缓存；
+    建议合约的 30m 存续期探针是一次**新的取数**、可能失败 → `_sl` 为 None。
+    没有本用例，`exp_hint` 的 None 下标（TypeError → 诊断帧 0 帧）无人守。
+    """
+
+    def __init__(self, bars, fail_keys):
+        super().__init__(bars)
+        self.fail_keys = set(fail_keys)   # (symbol, freq_sec) 集合：取数直接抛
+
+    def fetch_kline(self, symbol, freq_sec=15, num_bars=None, display_key=None, start_time=None):
+        if (symbol, freq_sec) in self.fail_keys:
+            raise TimeoutError("simulated 30m probe failure")
+        return super().fetch_kline(symbol, freq_sec=freq_sec, num_bars=num_bars,
+                                   display_key=display_key, start_time=start_time)
+
+
+def test_non_cffex_suggest_30m_missing():
+    """非 CFFEX + 建议合约 30m 取数失败：分类器必须产出带 code 的诊断帧，不得 TypeError。"""
+    from App.AppSSE import _classify_futures_replay
+    # 场景一：tq_10000 路径（D 早于 rb2405 当前周期 10000 根下限）。
+    # rb2406 在 1m 覆盖 D → 成为建议合约；其 30m 探针失败 → _sl None。
+    src = _Flaky30mSrc({
+        ("SHFE.rb2405", 60): _span(datetime(2024, 4, 1, 9, 0), datetime(2024, 4, 22, 15, 0)),
+        ("SHFE.rb2406", 60): _span(datetime(2024, 3, 1, 9, 0), datetime(2024, 4, 22, 15, 0),
+                                   vol=500, mid=datetime(2024, 3, 15, 9, 30)),
+    }, fail_keys={("SHFE.rb2405", 1800), ("SHFE.rb2406", 1800)})
+    b = _classify_futures_replay(src, "SHFE.rb2405", 60, datetime(2024, 3, 15, 10, 0),
+                                 start_dt=datetime(2024, 3, 10, 10, 0))
+    assert b is not None and b.code == "tq_10000", b and (b.code if b else None)
+    assert b.suggest == "SHFE.rb2406", f"应建议覆盖目标日的后续合约，实为 {b.suggest!r}"
+    assert "存续期未取到" in b.message, f"30m 探针失败必须走 None 兜底文案，实为：{b.message}"
+
+    # 场景二：contract_range 路径（D 晚于 rb2405 最后交易日；本合约 30m 在、建议合约 30m 失败）。
+    src2 = _Flaky30mSrc({
+        ("SHFE.rb2405", 60): _span(datetime(2024, 4, 1, 9, 0), datetime(2024, 5, 6, 15, 0)),
+        ("SHFE.rb2405", 1800): _span(datetime(2024, 4, 1, 9, 0), datetime(2024, 5, 6, 15, 0)),
+        ("SHFE.rb2406", 60): _span(datetime(2024, 4, 20, 9, 0), datetime(2024, 6, 28, 15, 0),
+                                   vol=500, mid=datetime(2024, 5, 20, 9, 30)),
+    }, fail_keys={("SHFE.rb2406", 1800)})
+    b = _classify_futures_replay(src2, "SHFE.rb2405", 60, datetime(2024, 5, 20, 10, 0),
+                                 start_dt=datetime(2024, 5, 15, 10, 0))
+    assert b is not None and b.code == "contract_range", b and (b.code if b else None)
+    assert b.suggest == "SHFE.rb2406", f"应建议存续期覆盖 D 的后续合约，实为 {b.suggest!r}"
+    assert "存续期未取到" in b.message, f"建议合约 30m 失败必须走 None 兜底，实为：{b.message}"
+    print("[PASS] [2b] 非 CFFEX + 建议合约 30m 缺失：诊断帧不丢（P2-1 回归钉）")
+
+
 # ═══════════════════ [5] init 晚向接线（A′ 可达性） ═══════════════════
 
 def test_init_out_late():
@@ -528,8 +578,10 @@ def test_frontend_contracts():
     assert "_ensure_futures_src_connected(src)" in sse and sse.count("_ensure_futures_src_connected(src)") >= 2, \
         "两个探针（存续期 / 10000 根首根）都必须先确保数据源已连接"
     assert "def _ensure_futures_src_connected(src):" in sse, "缺补连实现"
-    assert "if self.api is not None:" in src_py and src_py.count("def connect(self):") >= 1, \
-        "CTqSdkSession.connect 必须幂等（重复调用会多建 websocket）"
+    # 幂等断言必须锚定 connect 内的**完整形态**：短子串 "if self.api is not None:"
+    # 在旧树的 get_kline_serial 里就有（恒真，2026-10-18 评审 P3-b），钉不住 connect
+    assert "if self.api is not None and not self._closed:" in src_py, \
+        "CTqSdkSession.connect 必须幂等且不复用已关闭会话（重复 TqApi 多建 websocket 泄漏）"
 
     # 前端：期货分支不再有「请扩大数据范围」；改为按 code 渲染
     assert '请扩大数据范围' in js, "股票分支的越界提示不应被误删"
@@ -573,8 +625,16 @@ def test_frontend_contracts():
     assert sse.count("except FuturesReplayBlocked as _blk:") >= 3, \
         "单窗/双窗上下窗三处 init 调用都必须捕获诊断，转成带 code 的错误帧"
 
-    assert js.count('document.getElementById("goto-date-input").disabled = false;') >= 5, \
-        "init 失败分支必须恢复日历输入框（单+双窗）"
+    # 阈值 7 = 旧树 5 处 + 本轮新增 2 处（init 失败分支恢复日历框）。
+    # 阈值 5 时旧树也绿（2026-10-18 评审 P3-b：判别力为零），新增修复无人守。
+    assert js.count('document.getElementById("goto-date-input").disabled = false;') >= 7, \
+        "init 失败分支必须恢复日历输入框（单+双窗，含本轮新增 2 处）"
+    # pending 清空必须在 loadStock **入口**（2026-10-18 评审 P3-e）：期货分支内清的话，
+    # autoOrderRunning 早退路径会残留 pending，之后同合约加载被静默套上旧 endTime。
+    # 判别点：期货分支读的是入口捕获的 _pendCapture，不再直接读闭包变量。
+    assert "const _pendCapture = _pendingFuturesReplay;" in js \
+        and "_pendingFuturesReplay.symbol" not in js, \
+        "pending 必须在 loadStock 入口一次性捕获清空（早退不残留）"
 
     # 两个 UI bug 的修复锚点
     assert "if (e.key.startsWith('Arrow')) { _dateKeyArrow = true; _datePickerInteracted = true; return; }" in js, \
@@ -909,6 +969,7 @@ def main():
     try:
         test_contract_suggest()
         test_classify()
+        test_non_cffex_suggest_30m_missing()
         test_frontend_contracts()
         test_init_out_late()
         test_switch_connection_drops_selection()

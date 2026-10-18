@@ -5177,6 +5177,12 @@
         window.loadStock = function() {
             const code = document.getElementById("stock-code-input").value.trim();
             if (!code) return;
+            // 挂起的「切换到建议合约」在**入口**一次性捕获并清空（2026-10-18 评审 P3-e）：
+            // 原先只在期货分支内清，若本函数先在 autoOrderRunning 守卫处早退，
+            // pending 残留 → 之后同合约的任何一次加载被静默套上旧 endTime。
+            // set 与 loadStock 是同步相邻（两处 set 后立即调本函数），入口捕获不改变主路径语义。
+            const _pendCapture = _pendingFuturesReplay;
+            _pendingFuturesReplay = null;
             _tpslReset();  // S3：切代码/切周期/复盘/市场切换清空止盈止损推演
             // 交易引擎运行中禁止切换合约（仅期货页）：运行中的引擎绑定旧合约的持仓/SSE 流，
             // 直接切换会与引擎状态错配（切合约对账），须先关闭自动下单。
@@ -5279,10 +5285,10 @@
                 // 「切换到建议合约」：目标是**那一天**的历史，所以直接以该日为右端加载
                 // （方式C：L = 该日往前 N 根）。若先方式A 冷启动，已交割合约的窗口落在
                 // 交割日附近，D 仍在左侧 ⇒ 会再弹一次「加载更多」，白跑一趟。
-                const _pend = (_pendingFuturesReplay
-                    && _pendingFuturesReplay.symbol.toUpperCase() === code.toUpperCase())
-                    ? _pendingFuturesReplay : null;
-                _pendingFuturesReplay = null;
+                // pending 已在函数入口捕获并清空（_pendCapture），此处只做符号匹配。
+                const _pend = (_pendCapture
+                    && _pendCapture.symbol.toUpperCase() === code.toUpperCase())
+                    ? _pendCapture : null;
                 const _endForLoad = _pend ? _pend.endTime : "";
                 // 「切换」来的：不继承选点（后端对空 start_time 会从 CSV 恢复，
                 // 而这次的目标是「看那一天」，继承会把 L 钉在旧选点上）

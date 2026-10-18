@@ -495,13 +495,14 @@ def _classify_futures_replay(src, symbol, freq_sec, end_dt,
                     # CFFEX：交割日在候选生成处随附（推算值，节假日顺延 ±1 交易日近似）
                     exp_hint = f"最后交易日约 {sug_exp:%Y/%m/%d}，"
                 else:
-                    # 非 CFFEX：全扫路径已实测存续期（缓存命中，零额外取数）。
-                    # _sl 必非 None：建议合约必经 `_contract_covers` 通过，其第一道门槛就是
-                    # life 非 None 并按 symbol 缓存，此处必命中同一缓存——不可达路径不加防御。
+                    # 非 CFFEX：存续期走 30m 探针（_FUTURES_LIFE_FREQ）。当前周期就是 30m 时
+                    # 命中窗口探针缓存（零额外取数）；**非同频时是一次新的 30m 取数**，
+                    # 可能失败 → _sl 可为 None，下一行按 None 兜底（v1.18 后 _contract_covers
+                    # 只取当前周期，不再预热 30m 缓存，「必非 None」的旧前提不成立）。
                     _sl = _futures_contract_life(src, sug)
                     # 值是实测末根 = 最后交易日（非 CFFEX 的交割日在最后交易日之后，
                     # 本应用不推算；标「交割日」会输出错误信息）
-                    exp_hint = f"最后交易日 {_sl[1]:%Y/%m/%d}，"
+                    exp_hint = (f"最后交易日 {_sl[1]:%Y/%m/%d}，" if _sl else "该合约存续期未取到，")
                 tail = f"请切换到该日主力合约 {sug}（{exp_hint}当前周期可取到该日期）。"
             elif out_late:
                 # 未来日期：后续合约还没上市/无数据，换周期也解决不了，不能给
@@ -524,11 +525,11 @@ def _classify_futures_replay(src, symbol, freq_sec, end_dt,
                 # CFFEX：删「存续期 a~b」（上市日不可推算），只给最后交易日约（推算值）
                 exp_hint = f"最后交易日约 {sug_exp:%Y/%m/%d}"
             else:
-                # 非 CFFEX：保留实测存续期（全扫路径已缓存命中，零额外取数）。
-                # _sl 必非 None：建议合约必经 `_contract_covers` 通过，其第一道门槛就是
-                # life 非 None 并按 symbol 缓存，此处必命中同一缓存——不可达路径不加防御。
+                # 非 CFFEX：保留实测存续期。30m 探针在当前周期非 30m 时是**新的 30m 取数**
+                # （可能失败 → _sl 可为 None，下一行按 None 兜底；30m 仍保留，因其给的是
+                # 真实存续期，当前周期窗口更短会给错区间）。
                 _sl = _futures_contract_life(src, sug)
-                exp_hint = f"存续期 {_sl[0]:%Y/%m/%d} ~ {_sl[1]:%Y/%m/%d}"
+                exp_hint = (f"存续期 {_sl[0]:%Y/%m/%d} ~ {_sl[1]:%Y/%m/%d}" if _sl else "存续期未取到")
             tail = f"；请切换到该日主力合约 {sug}（{exp_hint}）。"
         else:
             tail = ("；同品种暂无在该周期可取到该日期的合约，"
