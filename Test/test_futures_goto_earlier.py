@@ -638,8 +638,16 @@ def test_frontend_contracts():
     # 引擎运行中早退必须**复原**切换意图（2026-10-18 复审 N2）：用户点「切换」时
     # 引擎还在跑 → 提示关引擎，但意图不丢——关掉后的下一次加载仍自动复盘到目标日。
     # 复原后的意图最多存活到下一次 loadStock（入口捕获消费或清空），不会无界残留。
-    assert "_pendingFuturesReplay = _pendCapture;" in js, \
-        "autoOrderRunning 守卫早退前必须复原 _pendCapture（切换意图不丢）"
+    # 锚「存在 + 位置」（第三轮复审 P3）：只验存在的话，把复原行挪到 return 之后
+    # （成死代码）照样绿。守卫文案「showAlert('交易引擎运行中…'）」全仓 7 处，
+    # 不能直接 find——用守卫前**唯一**的注释「交易引擎运行中禁止切换合约」圈定
+    # loadStock 的守卫，取其后第一处 showAlert 作排序基准；复原行必须落在它之前
+    # （挪到 return 后 = 死代码必红；整行删除 rst=-1 必红）。
+    _cmt = js.find("交易引擎运行中禁止切换合约")
+    _rst = js.find("_pendingFuturesReplay = _pendCapture;")
+    assert _cmt >= 0, "loadStock 守卫注释锚丢失"
+    assert 0 <= _rst < js.find("showAlert('交易引擎运行中", _cmt), \
+        "autoOrderRunning 守卫早退前必须复原 _pendCapture，且须落在守卫 return 之前"
 
     # 两个 UI bug 的修复锚点
     assert "if (e.key.startsWith('Arrow')) { _dateKeyArrow = true; _datePickerInteracted = true; return; }" in js, \
