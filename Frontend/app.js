@@ -5178,9 +5178,10 @@
             const code = document.getElementById("stock-code-input").value.trim();
             if (!code) return;
             // 挂起的「切换到建议合约」在**入口**一次性捕获并清空（2026-10-18 评审 P3-e）：
-            // 原先只在期货分支内清，若本函数先在 autoOrderRunning 守卫处早退，
-            // pending 残留 → 之后同合约的任何一次加载被静默套上旧 endTime。
+            // 原先只在期货分支内清，若本函数先在别的路径早退，pending 残留 →
+            // 之后同合约的任何一次加载被静默套上旧 endTime。
             // set 与 loadStock 是同步相邻（两处 set 后立即调本函数），入口捕获不改变主路径语义。
+            // 唯一例外是 autoOrderRunning 守卫：那里**复原**意图（见守卫分支注释）。
             const _pendCapture = _pendingFuturesReplay;
             _pendingFuturesReplay = null;
             _tpslReset();  // S3：切代码/切周期/复盘/市场切换清空止盈止损推演
@@ -5188,6 +5189,10 @@
             // 直接切换会与引擎状态错配（切合约对账），须先关闭自动下单。
             // 交易引擎是期货域功能，股票页切合约与引擎无关，不受此限制。
             if (autoOrderRunning && isFuturesMode()) {
+                // 复原切换意图（2026-10-18 复审 N2）：早退不清掉「切换到建议合约」的挂起，
+                // 关掉引擎后的下一次加载仍会自动复盘到目标日。意图最多存活到下一次
+                // loadStock —— 入口捕获要么符号匹配消费、要么兜底清空，不会无界残留。
+                _pendingFuturesReplay = _pendCapture;
                 showAlert('交易引擎运行中，请先关闭，再切合约');
                 return;
             }
