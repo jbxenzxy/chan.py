@@ -632,9 +632,16 @@ def api_futures_read_stream(
     dual: bool = Query(False),
     sub_freq: str = Query(None),
     end_time: str = Query(None),
+    reset_selection: bool = Query(False),
 ):
     """SSE 实时推送（期货单/双窗口）· 同步生成器
     sub_start_time：双窗下窗独立选点起点（dual=1 时消费，四期一致原则）
+
+    reset_selection：切到建议合约的这次连接不继承 CSV 选点（复盘态）。
+    空 start_time 既表示「前端没带 L」也表示「前端不要 L」，后端默认是前者
+    （从 CSV 恢复）；切到建议合约（月份合约）时该合约若存过晚于 D 的选点，
+    窗口 L 会被它钉住 → 又报 before_selection（仅提示、无「切换」出路），
+    等于白切一次。切过去的目标是「看那一天」，故显式声明不继承。
 
     每个 SSE 连接 = 1 条常驻线程（同步生成器 + StreamingResponse）。
     本端点返回同步生成器 sse_futures_stream_single/dual，Starlette 检测到
@@ -652,9 +659,11 @@ def api_futures_read_stream(
         raise HTTPException(status_code=503, detail="天勤数据源不可用")
 
     if dual:
-        gen = sse_futures_stream_dual(symbol, freq, sub_freq, start_time, sub_start_time, end_time)
+        gen = sse_futures_stream_dual(symbol, freq, sub_freq, start_time, sub_start_time,
+                                      end_time, reset_selection=reset_selection)
     else:
-        gen = sse_futures_stream_single(symbol, freq, start_time, end_time)
+        gen = sse_futures_stream_single(symbol, freq, start_time, end_time,
+                                        reset_selection=reset_selection)
 
     return StreamingResponse(
         gen,

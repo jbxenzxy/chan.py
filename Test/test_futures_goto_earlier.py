@@ -71,8 +71,7 @@ class _FakeSrc:
     def __init__(self, bars):
         self.bars = bars
         self.api = object()            # 默认「已连接」：诊断可直接取数
-        self._futures_life_cache = {}
-        self._futures_series_cache = {}
+        self._futures_series_cache = {}   # 存续期与窗口探针共用这一份（2026-10-18）
 
     def fetch_kline(self, symbol, freq_sec=15, num_bars=None, display_key=None, start_time=None):
         if self.api is None:           # 与真实数据源一致：未连接就取不了数
@@ -187,6 +186,25 @@ def test_contract_suggest():
     assert all(exp is None for _, exp in _contract_candidates_with_expiry("SHFE.rb2405", TARGET)), \
         "非 CFFEX 交割日不可推算 → None"
 
+    # 国债（T/TF/TS/TL）走**另一套**规则：最后交易日 = 第二周五，挂牌 = 最近三个季月。
+    # 2026-10-18 修：混用股指规则会让候选出现 T2404（不挂牌）、交割日算成第三周五，
+    # 且建议的合约切过去仍被判「不在存续期」（自指 ⇒ 切换死循环）。
+    for root in ("T", "TF", "TS", "TL"):
+        got = _contract_candidates(f"CFFEX.{root}2409", datetime(2024, 3, 10))
+        assert got == [f"CFFEX.{root}2406", f"CFFEX.{root}2409", f"CFFEX.{root}2412"], \
+            (root, got)
+    # 03-05 在第二周五（03-08）之前 ⇒ 当季 2403 仍在市，候选从 2403 起
+    assert _contract_candidates("CFFEX.T2409", datetime(2024, 3, 5)) == \
+        ["CFFEX.T2403", "CFFEX.T2406", "CFFEX.T2409"], "国债交割日前仍归当季"
+    ex_bond = dict(_contract_candidates_with_expiry("CFFEX.T2409", datetime(2024, 3, 10)))
+    assert ex_bond["CFFEX.T2406"] == datetime(2024, 6, 14).date(), \
+        f"国债 2406 最后交易日是第二周五 06/14（非第三周五），实为 {ex_bond}"
+    assert dict(_contract_candidates_with_expiry("CFFEX.T2409", datetime(2024, 3, 5)))[
+        "CFFEX.T2403"] == datetime(2024, 3, 8).date(), "国债 2403 最后交易日 03/08"
+    # 股指规则不受影响（第三周五仍由 _third_friday 出口）
+    assert _contract_candidates("CFFEX.IF2409", datetime(2024, 3, 10)) == \
+        ["CFFEX.IF2403", "CFFEX.IF2404", "CFFEX.IF2406", "CFFEX.IF2409"], "股指仍是当月+下月+两季月"
+
     # 数据验证：只有「存续期覆盖 + 当前周期 10000 根覆盖」的候选才会被建议
     src = _fake_2409()
     assert _suggest_contract_for_date(src, SYMBOL, 60, TARGET) == "CFFEX.IF2405"
@@ -241,6 +259,26 @@ def test_contract_suggest():
     got = _suggest_contract_for_date(fallback, SYMBOL, 60, TARGET)
     assert got == "CFFEX.IF2406", f"回退全扫应按 vol 取覆盖最大者，实为 {got!r}"
 
+    # (e) 国债切换不自指（2026-10-18 修 P1 的临床验真）：
+    #     修前建议 T2403（D 当天已交割的当季合约），切过去又判 contract_range 又建议
+    #     T2403 ⇒ 点几次「切换」都是同一个建议、出不去。修后建议 T2406 且切过去可达。
+    _d_bond = datetime(2024, 3, 10, 10, 0)
+    bond_feed = _FakeSrc({
+        ("CFFEX.T2409", 1800): _span(datetime(2023, 9, 11, 9, 30), datetime(2024, 3, 8, 14, 30)),
+        ("CFFEX.T2409", 60): _span(datetime(2024, 1, 2, 9, 30), datetime(2024, 3, 8, 14, 59)),
+        ("CFFEX.T2406", 1800): _span(datetime(2023, 12, 11, 9, 30), datetime(2024, 6, 14, 14, 30)),
+        ("CFFEX.T2406", 60): _span(datetime(2024, 1, 2, 9, 30), datetime(2024, 6, 14, 14, 59),
+                                   vol=500, mid=datetime(2024, 3, 10, 9, 30)),
+    })
+    b = _classify_futures_replay(bond_feed, "CFFEX.T2409", 60, _d_bond,
+                                 start_dt=datetime(2024, 2, 1, 9, 30))
+    assert b is not None and b.code == "contract_range", (b and b.code)
+    assert b.suggest == "CFFEX.T2406", f"国债应建议当季合约 T2406，实为 {b.suggest!r}"
+    assert "06/14" in b.message, b.message
+    assert _classify_futures_replay(bond_feed, "CFFEX.T2406", 60, _d_bond,
+                                    start_dt=datetime(2024, 2, 1, 9, 30)) is None, \
+        "切到建议合约后必须可达（修前会建议 T2403 并自指）"
+
     # 未连接的数据源（真实 SSE 时序）：探针必须先补一次连接，A/B 不得退化成方式C
     lazy = _LazySrc(_fake_2409().bars)
     b = _classify_futures_replay(lazy, SYMBOL, 60, TARGET,
@@ -282,9 +320,39 @@ def test_contract_suggest():
     sug, exp = _suggest_contract_with_expiry(cnt, SYMBOL, 60, datetime(2099, 1, 1))
     assert (sug, exp) == ("", None) and cnt.fetch_calls == [], (sug, exp, cnt.fetch_calls)
 
-    print("[PASS] [1] 合约候选/建议：CFFEX 四个真实月份（当月/下月/两季月）+ 生成处随附交割日"
-          "+ 非换月窗口直取当月 / 换月窗口 vol 仲裁 / 回退兜底 + 数据验证当前周期可取 + 未连接时自动补连"
-          "+ 取数分档计数桩（A=2 / B-init=2 / B-倒挂=3 / 换月=4 / 早退=0）")
+    # (f) 2026-10-18 修 P2-1：非 CFFEX 全扫的取数分档（改前 10 次 → 5 次）
+    #     每个候选只取 1 份当前周期序列：区间判定（首/末根）与 vol 仲裁共用同一份，
+    #     不再先探 30m 存续期（原：5×30m + 5×1m = 10）。
+    _shfe = {}
+    for _mm in ("2404", "2405", "2406", "2407", "2408"):
+        _shfe[(f"SHFE.rb{_mm}", 60)] = _span(
+            datetime(2024, 4, 1, 9, 30), datetime(2024, 9, 30, 14, 59),
+            vol=(900 if _mm == "2405" else 100), mid=datetime(2024, 4, 22, 9, 30))
+    cnt = _CountSrc(_shfe)
+    sug, exp = _suggest_contract_with_expiry(cnt, "SHFE.rb2409", 60, TARGET)
+    assert (sug, exp) == ("SHFE.rb2405", None), (sug, exp)
+    assert len(cnt.fetch_calls) == 5, f"非 CFFEX 全扫应为 5 次，实为 {cnt.fetch_calls}"
+    assert Counter(cnt.fetch_calls) == Counter(
+        [(f"SHFE.rb{_mm}", 60) for _mm in ("2404", "2405", "2406", "2407", "2408")]), \
+        cnt.fetch_calls
+    # 30m 周期：存续期探针与窗口探针同 freq ⇒ 共用一份缓存，仍是 5 次
+    # （改前两套缓存互不共享：5×30m + 5×30m = 10，其中 5 次是纯重复）
+    _shfe30 = {(f"SHFE.rb{_mm}", 1800): _span(
+        datetime(2024, 4, 1, 9, 30), datetime(2024, 9, 30, 14, 30),
+        vol=(900 if _mm == "2405" else 100), mid=datetime(2024, 4, 22, 9, 30))
+        for _mm in ("2404", "2405", "2406", "2407", "2408")}
+    cnt = _CountSrc(_shfe30)
+    assert _suggest_contract_for_date(cnt, "SHFE.rb2409", 1800, TARGET) == "SHFE.rb2405"
+    assert len(cnt.fetch_calls) == 5, f"30m 场景应共用缓存只取 5 次，实为 {cnt.fetch_calls}"
+    # 国债修好后也走 CFFEX 快路径（改前因候选月份全错、必然落全扫 = 7 次）→ 1 次
+    cnt = _CountSrc(bond_feed.bars)
+    _suggest_contract_with_expiry(cnt, "CFFEX.T2409", 60, _d_bond)
+    assert Counter(cnt.fetch_calls) == Counter({("CFFEX.T2406", 60)}), cnt.fetch_calls
+
+    print("[PASS] [1] 合约候选/建议：CFFEX 股指四个真实月份（当月/下月/两季月）+ 国债三个季月"
+          "+ 生成处随附交割日（股指第三周五 / 国债第二周五）+ 非换月窗口直取当月 / 换月窗口 vol 仲裁"
+          " / 回退兜底 + 国债切换不自指 + 数据验证当前周期可取 + 未连接时自动补连"
+          "+ 取数分档计数桩（A=2 / B-init=2 / B-倒挂=3 / 换月=4 / 非CFFEX全扫=5 / 早退=0）")
 
 
 # ═══════════════════════ [2] 四类诊断 ═══════════════════════
@@ -335,7 +403,7 @@ def test_classify():
                                  start_dt=datetime(2024, 5, 6, 9, 30), start_is_selection=True)
     assert b is not None and b.code == "before_selection", b and b.code
     assert "在选点" in b.message and "左侧" in b.message, b.message
-    assert not b.suggest and not b.retryable, "方式D 仅提示，不给切换/重载动作"
+    assert not b.suggest, "方式D 仅提示，不给切换/重载动作"
     assert "取消选点" in b.message, "方式D 的出路是取消选点，提示里必须写"
 
     # ⑤ way_c：5m 下 D 可达、窗口只加载了最近 960 根
@@ -343,7 +411,7 @@ def test_classify():
                                  start_dt=datetime(2024, 8, 22, 9, 30), window_bars=960)
     assert b is not None and b.code == "way_c", b and b.code
     # 方式C **只提示**（出路是把 FUTURES_LOOKBACK_CONFIG 调大并重启，用户自行操作）
-    assert not b.retryable and not b.suggest, (b.code, b.retryable, b.suggest)
+    assert not b.suggest, (b.code, b.suggest)
     assert "请加载更多数据" in b.message and "最近 960 根" in b.message, b.message
     assert "2023/11/24 09:30" in b.message, "way_c 文案应给出该周期 10000 根可达的最早时间"
 
@@ -460,15 +528,30 @@ def test_frontend_contracts():
     assert '{okText: "加载更多"}' not in js, "不应提供「加载更多」按钮"
     assert 'connectRealtimeInit(symbol, _freqNow, "", _target)' not in js, \
         "不得替用户改 L 重载（方式C 的出路是调大配置后重启）"
+    # retryable 是死字段（2026-10-18 删）：三处构造从未传过它，前端也从不读——
+    # 留着只会让人误以为「能不能重试」有后端判据。谁加回来这里就红。
     assert 'data.retryable' not in js, "前端不应依赖 retryable"
+    assert "retryable" not in sse, "FuturesReplayBlocked 不应再有 retryable 字段（无人消费）"
+    assert 'def __init__(self, code, message, suggest=""):' in sse, \
+        "FuturesReplayBlocked 构造签名不应再带 retryable"
     assert 'if (data.suggest && (_code === "contract_range" || _code === "tq_10000"))' in js, \
         "缺「切换到建议合约」分支（10000 根 / 合约范围两类都要能一键绕过）"
     assert '{okText: "切换"}' in js, "切换按钮文案必须是「切换」（不是含糊的「确定」）"
     assert "let _pendingFuturesReplay = null;" in js, \
         "缺闭包变量（window API 面冻结，不能用 window.*）"
-    assert 'connectRealtimeInit(code, fetchFreq, "", _endForLoad)' in js, \
+    assert 'connectRealtimeInit(code, fetchFreq, "", _endForLoad, _resetSel)' in js, \
         "切合约后必须以目标日为右端加载（方式C：L = D 往前 N 根），不能先方式A 冷启动"
-    assert 'connectRealtimeDual(code, fetchFreq, subFreq, _endForLoad)' in js, "双窗同样要带目标日"
+    assert 'connectRealtimeDual(code, fetchFreq, subFreq, _endForLoad, "", "", _resetSel)' in js, \
+        "双窗切合约同样要以目标日为右端加载且不继承选点"
+    # 切合约连接必须显式声明不继承选点（后端对空 start_time 会从 CSV 恢复）
+    assert js.count("'&reset_selection=1'") == 2, "单/双窗都必须能拼 reset_selection=1"
+    assert "reset_selection: bool = Query(False)" in _read(REPO_ROOT + "/FrontAPI.py"), \
+        "路由未接收 reset_selection"
+    assert ("sse_futures_stream_single(symbol, freq, start_time, end_time," in
+            _read(REPO_ROOT + "/FrontAPI.py")
+            and "reset_selection=reset_selection" in _read(REPO_ROOT + "/FrontAPI.py")), \
+        "路由未把 reset_selection 透传给生成器"
+    assert sse.count("reset_selection") >= 4, "单/双窗 gen 都要消费 reset_selection"
     assert "setTimeout(function () { gotoDate(); }, 0)" not in js, \
         "不应再用「冷启动后再 gotoDate」两步走（对已交割合约会先落在交割日附近、再弹一次加载更多）"
     assert "window.__pendingFuturesReplay" not in js, "不应新增 window 全局（phase6 window API 面冻结）"
@@ -487,6 +570,86 @@ def test_frontend_contracts():
     assert "本次输入值已被 gotoDate 消费" in js, "gotoDate 未清 _dateFocusOriginal（disabled 触发 blur 会回滚）"
     print("[PASS] [3] 源码契约：三处 init 都捕获诊断 / 前端按 code 渲染"
           "（A/B/E 切换；C/D/F/G 仅提示）/ UI 回滚与禁用两处修复")
+
+
+# ═══════════════════ [6] 切合约连接不继承选点 ═══════════════════
+
+class _SseSrc(_FakeSrc):
+    """SSE 生成器桩：只补生成器生命周期方法（数据仍由 _FakeSrc 按 (symbol, freq) 供）。"""
+
+    def connect(self):
+        pass
+
+    def close(self):
+        pass
+
+    def close_api(self):
+        pass
+
+    def cleanup_records(self, code_key):
+        pass
+
+
+def test_switch_connection_drops_selection():
+    """切到建议合约的这次连接**不继承** CSV 选点（2026-10-18 修 P2-2）。
+
+    协议里空 start_time 同时表示两种意思：「前端没带 L」和「前端不要 L」，而后端
+    对空值的语义是前者（从 CSV 恢复）。切到建议合约（月份合约）时，若该合约在
+    CSV 里存过晚于 D 的选点，复盘窗口 L 会被这个选点钉住 → 重连后立刻又报
+    before_selection（仅提示、无「切换」按钮），用户点「切换」等于白切一次。
+    切过去的目标是「看那一天」，所以必须显式声明不继承。
+    """
+    from App import AppSSE as _sse_mod
+    import FrontAPI
+
+    _POINT = "2024/05/06 09:30"     # 晚于 D=04-22 的选点
+    _END = "2024/04/22 15:00"
+    _sse_mod.app_data.save_point_time("CFFEX.IF2405", "IF2405", "1m", _POINT)
+
+    captured = {}
+
+    class _Stop(Exception):
+        """止步哨兵：跑到取数就够，后面的快照/推送逻辑本测试不关心。"""
+
+    def _stub_init(api, symbol, name, freq_sec, freq_label, start_time=None,
+                   end_time=None, num_bars=None):
+        captured["args"] = (symbol, start_time, end_time)
+        raise _Stop("stop at init_chan_symbol")
+
+    _orig = _sse_mod.init_chan_symbol
+    _sse_mod.init_chan_symbol = _stub_init
+
+    def _drive(reset):
+        captured.pop("args", None)
+        frames = []
+        gen = FrontAPI.sse_futures_stream_single(
+            "CFFEX.IF2405", "1m", None, _END,
+            reset_selection=reset, source=_SseSrc({}))
+        for _f in gen:
+            frames.append(_f)
+        return frames
+
+    try:
+        # 默认（不声明 reset）：继承选点 → L 被钉在 05-06，D=04-22 在它左侧 → 报方式D
+        frames = _drive(False)
+        assert frames, "默认路径应先复现 before_selection（未产出任何帧）"
+        raw = frames[0]
+        raw = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+        payload = json.loads(raw.split("data: ", 1)[1].split("\n")[0])
+        assert payload["code"] == "before_selection", payload
+        assert "取消选点" in payload["error"], payload["error"]
+
+        # 声明 reset_selection：不继承 → 不报 before_selection，且取数不传 start_time
+        frames = _drive(True)
+        assert frames == [], f"切合约连接不应再报 before_selection，实为 {frames}"
+        assert captured["args"][1] is None, \
+            f"切合约连接不应继承选点，实为 {captured['args']!r}"
+        assert captured["args"][2] == _END, captured["args"]
+    finally:
+        _sse_mod.init_chan_symbol = _orig
+
+    print("[PASS] [6] 切合约连接不继承选点：默认路径报 before_selection（复现），"
+          "reset_selection=1 时 L 不再被旧选点钉住")
 
 
 # ═══════════════════════ [4] 真浏览器 ═══════════════════════
@@ -736,6 +899,7 @@ def main():
         test_classify()
         test_frontend_contracts()
         test_init_out_late()
+        test_switch_connection_drops_selection()
         test_browser()
     finally:
         restore_iso()

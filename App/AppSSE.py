@@ -144,7 +144,7 @@ def _futures_window_fetch_bars(freq_sec, start_time=None, end_time=None, base_ba
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 期货复盘「目标不可达」的四类诊断（2026-10-17，方案 v1.17 §3.3）
+# 期货复盘「目标不可达」的四类诊断（2026-10-17，方案 v1.18 §3.3）
 # ═══════════════════════════════════════════════════════════════════════
 # 复盘输入日期 D 早于窗口左界 L 时**不得静默改 L**（方案 §2 规则⑥「改 R 不改 L」
 # —— L 冻结是复盘前后结构可比的前提）。但 L 可能由四种原因之一钉住，提示与出路
@@ -173,16 +173,18 @@ class FuturesReplayBlocked(Exception):
     改成任何非 str 类型都会让「切换」在前端抛 TypeError（评审第三轮 §1）。
     """
 
-    def __init__(self, code, message, suggest="", retryable=False):
+    def __init__(self, code, message, suggest=""):
         super().__init__(message)
         self.code = code
         self.message = message
         self.suggest = suggest
-        self.retryable = retryable
 
 
 def _third_friday(year, month):
-    """当月第三个周五：CFFEX 股指期货的最后交易日/交割日。"""
+    """当月第三个周五：CFFEX **股指**期货（IF/IH/IC/IM）的最后交易日/交割日。
+
+    国债是**第二个**周五，别拿本函数算国债（见 `_cffex_expiry`）。
+    """
     first = date(year, month, 1)
     return first + timedelta(days=(4 - first.weekday()) % 7 + 14)
 
@@ -202,15 +204,49 @@ def _split_product(symbol):
 
 
 _CFFEX_QUARTERS = (3, 6, 9, 12)   # 股指期货季月：3/6/9/12
+# CFFEX 内部交割规则分两套，**混用必错**（2026-10-18 修）：
+#   · 股指 IF/IH/IC/IM：最后交易日 = 到期月**第三个**周五，挂牌 = 当月、下月、
+#     随后两个季月（共 4 个）；
+#   · 国债 T/TF/TS/TL：最后交易日 = 到期月**第二个**周五，挂牌 = **最近的三个季月**
+#     （共 3 个；2403 摘牌的同时 2412 挂牌，滚动保持三个）。
+# 混用的后果（实测 CFFEX.T2409、D=2024-03-10）：候选落成 T2403/T2404/T2406/T2409
+# （2404 根本不挂牌），交割日 03-15（真值 03-08）→ 建议 T2403 → 切过去又被判
+# 「不在存续期」，再建议 T2403 ⇒ **同一个建议反复出现，切不出去**。
+_CFFEX_BOND_ROOTS = ("T", "TF", "TS", "TL")   # 国债期货品种根
 
 
-def _cffex_contract_months(year, month):
-    """CFFEX 挂牌的 4 个合约月份：**当月、下月、下季月、下下季月**（季月 = 3/6/9/12）。
+def _cffex_expiry(year, month, is_bond):
+    """CFFEX 某合约月份的最后交易日：国债（is_bond）= 第二周五，股指 = 第三周五。
 
-    不能按自然月连续枚举：7/8 月、10/11 月 CFFEX 根本不挂牌（`IF2407` 不存在），
-    既浪费两次取数，又会**漏掉季月**（4 月在市的是 2405/2406/2409/2412，自然月枚举
-    只到 2408 就停了，拿不到 2409/2412）。
+    节假日顺延 ±1 交易日，与文案「最后交易日约」口径一致（不维护交易日历表）。
     """
+    if not is_bond:
+        return _third_friday(year, month)
+    first = date(year, month, 1)
+    return first + timedelta(days=(4 - first.weekday()) % 7 + 7)
+
+
+def _cffex_contract_months(year, month, is_bond=False):
+    """CFFEX 在市的合约月份（**股指 / 国债两套**，见 `_CFFEX_BOND_ROOTS` 注释）。
+
+    · 股指：当月、下月、下季月、下下季月（4 个）。不能按自然月连续枚举：
+      7/8 月、10/11 月 CFFEX 根本不挂牌（`IF2407` 不存在），既浪费两次取数，
+      又会**漏掉季月**（4 月在市的是 2405/2406/2409/2412，自然月枚举只到 2408
+      就停了，拿不到 2409/2412）。
+    · 国债：从给定月起的最近三个季月（3 个）。同理不能枚举 4/7/10 月。
+    """
+    if is_bond:
+        y, m = year, month
+        while m not in _CFFEX_QUARTERS:          # 先走到当前（或下一个）季月
+            y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+        seq = []
+        for _ in range(3):
+            seq.append((y, m))
+            y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+            while m not in _CFFEX_QUARTERS:
+                y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+        return seq
+
     seq = [(year, month)]
     y2, m2 = (year + 1, 1) if month == 12 else (year, month + 1)
     seq.append((y2, m2))                       # 下月
@@ -226,13 +262,14 @@ def _cffex_contract_months(year, month):
 def _contract_candidates_with_expiry(symbol, target_dt, months=5):
     """目标日期可能存在的同品种合约候选 + 交割日，形如 (code, expiry_or_None)。
 
-    · CFFEX：按真实挂牌规则枚举**当月/下月/两个季月**（4 个 = 该日全部在市合约，
-      所以 IF/IH/IC/IM 的「该日主力合约」必定在这 4 个里，不会漏）；交割日在
-      **生成处**随附（第三个周五，(y, mo) 本就在手——零解析、零失败路径），
+    · CFFEX：按品种的真实挂牌规则枚举（股指 = 当月/下月/两个季月共 4 个；
+      国债 = 最近三个季月共 3 个）= 该日全部在市合约，所以 IF/IH/IC/IM 的
+      「该日主力合约」必定在候选里，不会漏；交割日在**生成处**随附
+      （股指第三周五 / 国债第二周五，(y, mo) 本就在手——零解析、零失败路径），
       节假日顺延偏差 ±1 个交易日，与文案口径一致；
     · 其它交易所：交割规则各异（每月 10/15 日等），按月枚举、交割日 = None，
       **一律由 `_contract_covers` 用数据真值验证**，不维护交割日历表。
-    CFFEX 先按「交割日 = 第三个周五」剔掉目标日**已交割**的月份（4/22 不给 IF2404）。
+    CFFEX 先按最后交易日剔掉目标日**已交割**的月份（4/22 不给 IF2404）。
     """
     ex, root = _split_product(symbol)
     if not ex:
@@ -240,11 +277,12 @@ def _contract_candidates_with_expiry(symbol, target_dt, months=5):
     d = target_dt.date() if isinstance(target_dt, datetime) else target_dt
 
     if ex == "CFFEX":
+        is_bond = root.upper() in _CFFEX_BOND_ROOTS
         y, mo = d.year, d.month
-        if _third_friday(y, mo) < d:           # 当月已交割 → 从下月起算
+        if _cffex_expiry(y, mo, is_bond) < d:    # 当月已交割 → 从下月起算
             y, mo = (y + 1, 1) if mo == 12 else (y, mo + 1)
-        return [(f"{ex}.{root}{yy % 100:02d}{mm:02d}", _third_friday(yy, mm))
-                for yy, mm in _cffex_contract_months(y, mo)]
+        return [(f"{ex}.{root}{yy % 100:02d}{mm:02d}", _cffex_expiry(yy, mm, is_bond))
+                for yy, mm in _cffex_contract_months(y, mo, is_bond)]
 
     out = []
     for k in range(0, months):
@@ -285,25 +323,17 @@ def _ensure_futures_src_connected(src):
 
 
 def _futures_contract_life(src, symbol):
-    """具体合约存续期 (首根, 末根)；主连/指数或取不到 → None（按会话缓存）。"""
+    """具体合约存续期 (首根, 末根)；主连/指数或取不到 → None。
+
+    ⚠️ 缓存：本函数**不再自持缓存**，直接复用 `_futures_series` 的 (symbol, freq)
+    缓存 ⇒ 当前周期就是 30m 时，窗口探针取过的那一份被原样复用，同 freq 的
+    「存续期探针」退化为零取数（此前两套缓存互不共享：30m 场景每个候选都要
+    取两遍相同的 10000 根，5 个候选中 5 次是纯重复）。
+    """
     if not symbol or "." not in symbol or symbol.upper().startswith("KQ"):
         return None
-    cache = getattr(src, "_futures_life_cache", None)
-    if cache is None:
-        cache = {}
-        src._futures_life_cache = cache
-    if symbol in cache:
-        return cache[symbol]
-    life = None
-    try:
-        _ensure_futures_src_connected(src)
-        recs = src.fetch_kline(symbol, freq_sec=_FUTURES_LIFE_FREQ, num_bars=_TQ_MAX_BARS)
-        if recs:
-            life = (recs[0]["dt"], recs[-1]["dt"])
-    except Exception as e:  # noqa: BLE001 —— 探针失败不阻断主流（退化为通用文案）
-        log.warning(f"[诊断] 合约存续期探针失败 {symbol}: {type(e).__name__}: {e}")
-    cache[symbol] = life
-    return life
+    recs = _futures_series(src, symbol, _FUTURES_LIFE_FREQ)
+    return (recs[0]["dt"], recs[-1]["dt"]) if recs else None
 
 
 def _futures_series(src, symbol, freq_sec):
@@ -348,14 +378,21 @@ def _contract_volume_on(src, cand, freq_sec, end_dt):
 
 
 def _contract_covers(src, cand, freq_sec, end_dt):
-    """该合约在**当前周期**能否取到 end_dt：存续期覆盖该日 且 10000 根窗口 ≤ end_dt。"""
-    life = _futures_contract_life(src, cand)
-    if life is None:
+    """该合约在**当前周期**能否取到 end_dt：10000 根窗口 ≤ end_dt 且 末根 ≥ end_dt。
+
+    判据只取**当前周期**的 10000 根（1 次取数），不再先探 30m 存续期：
+      · D 早于窗口首根 → 不覆盖（与旧判据同结果：30m 窗口更宽，卡住的总是本周期）；
+      · D 晚于序列末根（合约已交割，末根即最后交易日）→ 不覆盖（旧判据用 30m
+        末根判定，日期级等价；对未交割合约末根即最新 K 线，也落在区间内）。
+    省下的那 5 次 30m 取数**占原开销一半**，且这份记录本来就是 vol 仲裁要用的。
+    """
+    recs = _futures_series(src, cand, freq_sec)
+    if not recs:
         return False
-    if end_dt.date() < life[0].date() or end_dt.date() > life[1].date():
+    first, last = recs[0]["dt"], recs[-1]["dt"]
+    if end_dt.date() < first.date() or end_dt.date() > last.date():
         return False
-    first = _futures_earliest_at(src, cand, freq_sec)
-    return first is not None and end_dt >= first
+    return end_dt >= first
 
 
 def _contract_window_covers(src, cand, freq_sec, end_dt):
@@ -518,7 +555,7 @@ def _classify_futures_replay(src, symbol, freq_sec, end_dt,
                 f"周期的取数上限（10000 根），无法再往前加载。")
         reach = f"；10000 根内最早可到 {first:%Y/%m/%d %H:%M}" if first else ""
         # 方式C **只提示**：出路是把 FUTURES_LOOKBACK_CONFIG 调大并重启服务
-        # （用户明确要求走配置、不在界面给一次性入口）⇒ 不带 retryable、不给按钮。
+        # （用户明确要求走配置、不在界面给一次性入口）⇒ 错误帧只带 code，不给按钮。
         return FuturesReplayBlocked(
             "way_c",
             f"请加载更多数据：复盘日期 {d_label} 早于已加载数据起点 "
@@ -712,8 +749,12 @@ def _per_frame_session(gen, src):
         yield item
 
 
-def sse_futures_stream_single(symbol, freq="15s", start_time=None, end_time=None, source=None):
+def sse_futures_stream_single(symbol, freq="15s", start_time=None, end_time=None,
+                              reset_selection=False, source=None):
     """期货 SSE 单窗口 · 建会话并返回「逐帧重绑定会话」的生成器。
+
+    reset_selection：**切到建议合约**的这次连接不继承选点（详见 `_sse_single_gen`
+    同名参数）。默认 False = 原语义（缺失时从 CSV 恢复）。
 
     注意：本函数是**普通函数**（不是生成器）——会话必须在开始迭代之前就
     建好，`_per_frame_session` 才能在每一帧上重新绑定它。`CTqSdkSession()`
@@ -722,10 +763,12 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, end_time=None
     """
     src = source if source is not None else CTqSdkSession()
     return _per_frame_session(
-        _sse_single_gen(symbol, freq, start_time, end_time, src), src)
+        _sse_single_gen(symbol, freq, start_time, end_time, src,
+                        reset_selection=reset_selection), src)
 
 
-def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=None):
+def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=None,
+                    reset_selection=False):
     """期货 SSE 单窗口 · 同步生成器（本体；对外经 _per_frame_session 包装）
 
     事件协议：
@@ -733,6 +776,13 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
     tick 路径更新末根 K 线 OHLC/MACD，K线完成路径全量快照）→ 收尾清理。
     source 可注入（默认 CTqSdkSession）；Test/test_sse_gray.py 用 MockSource
     驱动确定性比对。锁：每连接独立会话，共享缓存经 AppData 按资源加锁。
+
+    reset_selection：复盘连接**不继承 CSV 选点**（切到建议合约的那一次用它）。
+    空 start_time 在协议里同时表示「前端没带 L」与「前端不要 L」两种意思，
+    而后端对空值的语义是「从 CSV 恢复」——切到建议合约（月份合约）时，
+    若该合约在 CSV 里存过晚于 D 的选点，复盘窗口 L 会被这个选点钉住，
+    随即又报 before_selection（D/G），而 D/G 是**仅提示**、无「切换」按钮，
+    用户切过去等于白切一次。切过去的目标是「看那一天」，不该继承选点。
     """
     # 修复：删除全局日志级别污染（原在此处将 tqsdk 及 root 全部 handler
     # 设 WARNING，永不恢复，导致整个进程 log.info 消失）。tqsdk 抑制已在
@@ -772,17 +822,19 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
         # meta.saved_selection_date 恒回显 CSV 真值（与股票同规则）：
         # A 复盘的 start=A左 不会冒充选点，复盘态选点/取消选点驱动前端菜单。
         if end_time:
-            if start_time is None:
+            if start_time is None and not reset_selection:
                 _saved = _get_saved_point(symbol, freq) or None
                 if _saved:
                     start_time = _saved
                     log.info(f"[{display_key}] 复盘恢复选点: {start_time}")
+            elif reset_selection:
+                log.info(f"[{display_key}] 切合约连接：本次不继承选点（reset_selection）")
             if start_time:
                 _s_dt = _parse_flex_time(start_time)
                 _e_dt = _parse_flex_time(end_time)
                 if _s_dt is not None and _e_dt is not None and _s_dt >= _e_dt:
                     # 起止倒挂 ≠ 一律「请扩大数据范围」：按 L 被谁钉住分四类
-                    # （合约范围 / 天勤10000根 / 选点 / 方式C，见方案 v1.17 §3.6）
+                    # （合约范围 / 天勤10000根 / 选点 / 方式C，见方案 v1.18 §3.6）
                     _saved_pt = _get_saved_point(symbol, freq) or ""
                     _is_sel = _same_minute(_s_dt, _saved_pt)
                     _blk = _classify_futures_replay(
@@ -793,8 +845,7 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
                         log.info(f"[{display_key}] {_blk.code}: {_blk.message}")
                         yield _sse_frame("init", {
                             "error": _blk.message, "code": _blk.code,
-                            "suggest": _blk.suggest, "retryable": _blk.retryable,
-                            "symbol": symbol})
+                            "suggest": _blk.suggest, "symbol": symbol})
                         return
                     # 兜底（探针全失败且不属四类）：保留原判据文案
                     _msg = f"复盘起始时间 {start_time} 不早于复盘截止时间 {end_time}"
@@ -1145,18 +1196,20 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
         session_clear()
 
 
-def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_start_time=None, end_time=None, source=None):
+def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_start_time=None, end_time=None, reset_selection=False, source=None):
     """期货 SSE 双窗口 · 建会话并返回「逐帧重绑定会话」的生成器。
 
     与 sse_futures_stream_single 同构：普通函数（非生成器），会话提前建好
     后交给 _per_frame_session 逐帧重绑定。
+    reset_selection：切到建议合约的这次连接，上下窗都不继承 CSV 选点（同单窗）。
     """
     src = source if source is not None else CTqSdkSession()
     return _per_frame_session(
-        _sse_dual_gen(symbol, main_freq, sub_freq, start_time, sub_start_time, end_time, src), src)
+        _sse_dual_gen(symbol, main_freq, sub_freq, start_time, sub_start_time, end_time, src,
+                      reset_selection=reset_selection), src)
 
 
-def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_start_time=None, end_time=None, source=None):
+def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_start_time=None, end_time=None, source=None, reset_selection=False):
     """期货 SSE 双窗口 · 同步生成器（本体；对外经 _per_frame_session 包装）
 
     事件协议：
@@ -1221,7 +1274,7 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
         main_start_time = start_time
         _inv_msg = None   # 起止倒挂错误文案（非 None ⇒ 报错中止本次连接，见下）
         # 四类诊断上下文 (freq_sec, start_dt, start_is_selection, end_dt)：
-        # 倒挂不等于「请扩大数据范围」，按 L 被谁钉住分别提示（方案 v1.17 §3.6）
+        # 倒挂不等于「请扩大数据范围」，按 L 被谁钉住分别提示（方案 v1.18 §3.6）
         _inv_ctx = None
         try:
             qualified_code = symbol
@@ -1231,12 +1284,17 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
             col_sub = app_data.freq_to_col(sub_freq) or ""
             if col_sub:
                 sub_saved_selection_date = _get_saved_point(qualified_code, sub_freq)
-            if main_start_time is None and saved_selection_date:
+            # 切到建议合约时两窗都不继承选点：空 start 在协议里同时表示「前端没带
+            # L」和「前端不要 L」，而默认语义是「从 CSV 恢复」——继承会让刚切过去
+            # 的窗口 L 被该合约旧选点钉住，立刻又报 before_selection（仅提示、无出路）。
+            if main_start_time is None and saved_selection_date and not reset_selection:
                 main_start_time = saved_selection_date
                 log.info(f"[{display_key}] 上窗恢复选点: {saved_selection_date}")
-            if sub_start_time is None and sub_saved_selection_date:
+            if sub_start_time is None and sub_saved_selection_date and not reset_selection:
                 sub_start_time = sub_saved_selection_date
                 log.info(f"[{display_key}] 下窗恢复选点: {sub_saved_selection_date}")
+            if reset_selection:
+                log.info(f"[{display_key}] 切合约连接：本次上下窗均不继承选点（reset_selection）")
             # 复盘起止倒挂（start ≥ end）→ 记错误文案，稍后报错中止本次连接：
             # **任一窗倒挂即中止**（对齐越界判定口径「任一窗越界即拦/回」），不再
             # 静默丢弃该窗 start、回退默认窗口——与 `_sse_single_gen`、股票
@@ -1275,8 +1333,7 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
             if _blk is not None:
                 log.info(f"[{display_key}] {_blk.code}: {_msg}")
                 yield _sse_frame("init", {"error": _msg, "code": _blk.code,
-                                          "suggest": _blk.suggest,
-                                          "retryable": _blk.retryable, "symbol": symbol})
+                                          "suggest": _blk.suggest, "symbol": symbol})
                 return
             log.info(f"[{display_key}] {_inv_msg}")
             yield _sse_frame("init", {"error": _inv_msg, "symbol": symbol})

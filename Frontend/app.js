@@ -5284,14 +5284,17 @@
                     ? _pendingFuturesReplay : null;
                 _pendingFuturesReplay = null;
                 const _endForLoad = _pend ? _pend.endTime : "";
+                // 「切换」来的：不继承选点（后端对空 start_time 会从 CSV 恢复，
+                // 而这次的目标是「看那一天」，继承会把 L 钉在旧选点上）
+                const _resetSel = !!_pend;
                 if (isDualWindow) {
                     // 双窗口换期货合约：走双窗 SSE，两窗同步重连
                     // （wasFutures→isFuturesCode 路径保持周期不变，dualSubFreq 仍然有效；
                     //   空/失效时按映射回退，期货周期全为日内，getDualSubFreq 必有解或回退 1m）
                     const subFreq = dualSubFreq || getDualSubFreq(fetchFreq) || '1m';
-                    connectRealtimeDual(code, fetchFreq, subFreq, _endForLoad);
+                    connectRealtimeDual(code, fetchFreq, subFreq, _endForLoad, "", "", _resetSel);
                 } else {
-                    connectRealtimeInit(code, fetchFreq, "", _endForLoad);
+                    connectRealtimeInit(code, fetchFreq, "", _endForLoad, _resetSel);
                 }
                 return;
             }
@@ -8388,7 +8391,7 @@
         }
 
         // ========== SSE 初始化连接（初始快照 + 增量合一） ==========
-        function connectRealtimeInit(symbol, freq, startTime, endTime) {
+        function connectRealtimeInit(symbol, freq, startTime, endTime, resetSelection) {
             disconnectRealtime();
             realtimeSymbol = symbol;
             realtimeFreq = freq;
@@ -8417,6 +8420,10 @@
                     // 复盘软断开：把终点传入前端，后端把更新停在该边界，不拉最新
                     sseUrl += '&end_time=' + encodeURIComponent(endTime);
                 }
+                if (resetSelection) {
+                    // 切到建议合约：本次连接不继承 CSV 选点（原因见 connectRealtimeDual 同名分支）
+                    sseUrl += '&reset_selection=1';
+                }
                 realtimeEventSource = new EventSource(sseUrl);
                 realtimeConnected = true;
 
@@ -8425,7 +8432,7 @@
                     try {
                         const data = JSON.parse(event.data);
                         if (data.error) {
-                            // 后端 init 错误必须让用户看见。左边界诊断（v1.17 §3.6）
+                            // 后端 init 错误必须让用户看见。左边界诊断（v1.18 §3.6）
                             //   contract_range（A）/ tq_10000（B/E）→ 提示 + 「切换」按钮
                             //     （换到该日主力合约，切过去后直接以目标日为右端加载）
                             //   way_c（C/F）/ before_selection（D/G）→ **只提示**
@@ -8542,7 +8549,7 @@
         // 期货双窗口SSE连接（独立于 connectRealtimeInit，与股票双窗口解耦）
         // startTime: 上窗选点时间 T（B 操作双窗：上窗 [T, 最新]、下窗自动对齐同一区间）
         // endTime: 复盘终点（软断开；复盘模式下后端忽略 startTime——复盘不加载选点）
-        function connectRealtimeDual(symbol, mainFreq, subFreq, endTime, startTime, subStartTime) {
+        function connectRealtimeDual(symbol, mainFreq, subFreq, endTime, startTime, subStartTime, resetSelection) {
             disconnectRealtime();
             realtimeSymbol = symbol;
             realtimeFreq = mainFreq;
@@ -8570,6 +8577,12 @@
                 }
                 if (endTime) {
                     sseUrl += '&end_time=' + encodeURIComponent(endTime);
+                }
+                if (resetSelection) {
+                    // 切到建议合约：本次连接不继承 CSV 选点（后端空 start_time
+                    // 的默认语义是「从 CSV 恢复」，会把窗口 L 钉在该合约的旧选点上，
+                    // 切过去立刻又报 before_selection——仅提示、没有出路）
+                    sseUrl += '&reset_selection=1';
                 }
                 realtimeEventSource = new EventSource(sseUrl);
                 realtimeConnected = true;
