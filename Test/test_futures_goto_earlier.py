@@ -348,11 +348,23 @@ def test_contract_suggest():
     cnt = _CountSrc(bond_feed.bars)
     _suggest_contract_with_expiry(cnt, "CFFEX.T2409", 60, _d_bond)
     assert Counter(cnt.fetch_calls) == Counter({("CFFEX.T2406", 60)}), cnt.fetch_calls
+    # 国债换月窗口（D=06-10，距 T2406 交割 06-14 = 第二周五 仅 4 天 ≤ 15）
+    # → 与次候选比目标日 vol：+ 次候选窗口探针 = 2 次（建议链分档，方案 §3.6 ⑤）
+    cnt = _CountSrc({
+        ("CFFEX.T2406", 60): _span(datetime(2024, 4, 1, 9, 30), datetime(2024, 6, 14, 14, 59),
+                                   vol=100, mid=datetime(2024, 6, 10, 9, 30)),
+        ("CFFEX.T2409", 60): _span(datetime(2024, 4, 1, 9, 30), datetime(2024, 9, 13, 14, 59),
+                                   vol=900, mid=datetime(2024, 6, 10, 9, 30)),
+    })
+    sug, exp = _suggest_contract_with_expiry(cnt, "CFFEX.T2406", 60, datetime(2024, 6, 10, 10, 0))
+    assert (sug, exp) == ("CFFEX.T2409", datetime(2024, 9, 13).date()), (sug, exp)
+    assert Counter(cnt.fetch_calls) == Counter(
+        {("CFFEX.T2406", 60), ("CFFEX.T2409", 60)}), cnt.fetch_calls
 
     print("[PASS] [1] 合约候选/建议：CFFEX 股指四个真实月份（当月/下月/两季月）+ 国债三个季月"
           "+ 生成处随附交割日（股指第三周五 / 国债第二周五）+ 非换月窗口直取当月 / 换月窗口 vol 仲裁"
           " / 回退兜底 + 国债切换不自指 + 数据验证当前周期可取 + 未连接时自动补连"
-          "+ 取数分档计数桩（A=2 / B-init=2 / B-倒挂=3 / 换月=4 / 非CFFEX全扫=5 / 早退=0）")
+          "+ 取数分档计数桩（A=2 / B-init=2 / B-倒挂=3 / 换月=4 / 国债建议链=1、换月=2 / 非CFFEX全扫=5 / 早退=0）")
 
 
 # ═══════════════════════ [2] 四类诊断 ═══════════════════════

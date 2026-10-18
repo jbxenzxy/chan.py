@@ -828,7 +828,9 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
                     start_time = _saved
                     log.info(f"[{display_key}] 复盘恢复选点: {start_time}")
             elif reset_selection:
-                log.info(f"[{display_key}] 切合约连接：本次不继承选点（reset_selection）")
+                # 只述机制不述场景：本分支在「start 非空 + reset」组合（前端不发、
+                # API 直调可达）也会进入，旧措辞「切合约连接」在那个组合下不属实。
+                log.info(f"[{display_key}] reset_selection=1：跳过 CSV 选点恢复（不继承选点）")
             if start_time:
                 _s_dt = _parse_flex_time(start_time)
                 _e_dt = _parse_flex_time(end_time)
