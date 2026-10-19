@@ -585,6 +585,13 @@ def test_frontend_contracts():
     # 「查上周六」（末根=周五）也会带 end_time 进来，无守卫会被 out_late 误报成 A′。
     assert "def _futures_series_stale(" in sse and sse.count("_futures_series_stale(") >= 2, \
         "晚向缺 _futures_series_stale 守卫：休市日会被误报成「晚于最后交易日」"
+    # v1.19：复盘态判据必须**统一**走 `_is_replay_eff`（= end_time 且非「晚向但仍在市」）。
+    # 五处快照 + 两条更新循环判据都要用它；留一处 `bool(end_time)` 就会出现
+    # 「meta 说复盘、or 循环仍冻结」的不一致（休市日输入后开盘不更新）。
+    assert "is_replay=bool(end_time)" not in sse, \
+        "快照的复盘态判据未统一走 _is_replay_eff（休市日会得到「● 实时但永不更新」的图）"
+    assert "def _late_boundary_is_live(" in sse and sse.count("is_replay=_is_replay_eff") >= 5, \
+        "缺 _late_boundary_is_live / 五处快照未接线"
     # 探针取数前必须确保已连接（否则 api=None → AttributeError → A/B 全退化）
     src_py = _read(SRC_PY)
     assert "_ensure_futures_src_connected(src)" in sse and sse.count("_ensure_futures_src_connected(src)") >= 2, \
@@ -1063,8 +1070,24 @@ def test_late_direction_stale_guard():
             pass
     assert _blocked is None, \
         f"休市日不得报 A′（_futures_series_stale 守卫失效）：{_blocked.code} {_blocked.message}"
-    print("[PASS] [6] 晚向守卫：已交割 ⇒ 停更；休市日 ⇒ 不报"
-          "（分类器本身会误报，故守卫必需）")
+
+    # ④ 边界落在末根之后 ⇒ 本次连接按「回最新」服务（不冻结）。
+    #    否则盘前输入上周六会得到一张徽标 ● 实时、实际永不更新的图。
+    #    今天的边界例外（用户可能想看今天早些时候）⇒ 仍冻结。
+    from App.AppSSE import _late_boundary_is_live
+    _recs = [{"dt": _last, "vol": 1}]
+    assert _late_boundary_is_live(_next.strftime("%Y/%m/%d %H:%M"), _next, _recs), \
+        "边界落在末根之后且是历史日期 ⇒ 应按实时服务（_is_replay_eff=False）"
+    _today_early = _now.replace(hour=9, minute=30, second=0, microsecond=0)
+    assert not _late_boundary_is_live(_today_early.strftime("%Y/%m/%d %H:%M"),
+                                      _today_early, _recs), \
+        "今天的边界不得改判为实时（那是「复盘到今天早些时候」）"
+    assert not _late_boundary_is_live(None, _next, _recs), "无 end_time ⇒ 不是晚向边界"
+    assert not _late_boundary_is_live(_next.strftime("%Y/%m/%d %H:%M"),
+                                      _last - timedelta(days=1), _recs), \
+        "边界早于末根 ⇒ 真复盘，不得改判为实时"
+    print("[PASS] [6] 晚向守卫：已交割 ⇒ 停更；休市日 ⇒ 不报；"
+          "边界落末根后 ⇒ 按实时服务（非冻结）")
 
 
 def main():

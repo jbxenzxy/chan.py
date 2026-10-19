@@ -383,6 +383,24 @@ def _futures_series_stale(symbol, last_dt, end_dt):
     return (datetime.now() - last_dt) > timedelta(days=_FUTURES_STALE_DAYS)
 
 
+def _late_boundary_is_live(end_time, end_dt, records):
+    """复盘边界落在序列末根之后（且是历史日期）⇒ 本次连接按「回最新」服务。
+
+    能走到这里说明 init 的晚向守卫已判「非停更」⇒ 该日没有 K 线（休市日 / 长假），
+    「截至该日」与「最新」是同一张图。此时若仍冻结，会得到一张徽标显示 ● 实时、
+    实际永不更新的图（盘前输入上周六、页面不关跨过开盘即命中）。
+    故按 §2 规则③「输入 ≥ 末根 ⇒ 回最新」服务：`is_replay=False`、更新循环不冻结。
+
+    ⚠️ 今天的边界不走此路（保持冻结）：用户可能就想看「今天早些时候」。
+    前端 `isToday` 已把它导向回实时，本条只对 API 直调生效。
+    """
+    if not end_time or end_dt is None or not records:
+        return False
+    if end_dt.date() >= datetime.now().date():
+        return False
+    return end_dt.date() > records[-1]["dt"].date()
+
+
 def _futures_series(src, symbol, freq_sec):
     """该周期「最近 10000 根」的 records（按会话缓存）。
 
@@ -956,13 +974,16 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
             yield _sse_frame("init", {"error": "初始化失败（无数据或网络异常）", "symbol": symbol})
             return
         chan, klines, kl_type, records = result
+        # 复盘边界落在末根之后且非停更（休市日/长假）⇒ 按「回最新」服务：
+        # is_replay 与更新循环的冻结判据都由它派生，避免出现「徽标 ● 实时但永不更新」。
+        _is_replay_eff = bool(end_time) and not _late_boundary_is_live(end_time, _end_dt, records)
 
         # === 2. 推送初始快照 ===
         t0 = time.time()
         try:
             init_data = _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label,
                                             saved_selection_date=saved_selection_date,
-                                            is_replay=bool(end_time))
+                                            is_replay=_is_replay_eff)
             # ★ 追加当前形成中的K线（klines[-1]），让前端立即看到新K线
             # ⚠️ 复盘态（end_time 非空）不追加：复盘语义 = 末根冻结在复盘点、
             #   不被实时拉最新（本函数 update 循环的「复盘软断开」注释同款口径）。
@@ -971,7 +992,9 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
             #   2024/09/20）；且前端复盘态重连以末根当复盘点（app.js 的
             #   _replayEndMain/replayEnd3）→ 复盘点被悄悄改写为边界外时刻。
             #   复盘快照的边界末根由 records 截断保证（已含），无需此追加。
-            if (not end_time) and klines is not None and len(klines) > 0:
+            #   v1.19 起判据改用 `_is_replay_eff`：边界落在末根之后但合约仍在市
+            #   （休市日）时按实时服务，形成中的K线照常追加。
+            if (not _is_replay_eff) and klines is not None and len(klines) > 0:
                 _lr = klines.iloc[-1]; _dns = _lr.get('datetime')
                 if _dns is not None:
                     _bdt = datetime.fromtimestamp(_dns / 1e9)
@@ -1055,7 +1078,9 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
 
             # 复盘软断开：end_time 模式下，一但墙钟越过复盘边界所属周期，
             # 即停止推进 K 线/chan/快照（update 不把图"拉最新"），只保活连接。
-            if end_time and _end_dt is not None and now > _end_dt:
+            # 判据用 `_is_replay_eff`：边界落在末根之后但仍在市（休市日/长假）时
+            # 本次连接按实时服务，不冻结（否则开盘后图不再更新）。
+            if _is_replay_eff and _end_dt is not None and now > _end_dt:
                 continue
 
             if len(klines) == 0:
@@ -1205,7 +1230,7 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
                                                 saved_selection_date=saved_selection_date,
                                                 prev_klines=(cached_snapshot or {}).get("klines"),
                                                 prev_ema_state=(cached_snapshot or {}).get("meta", {}).get("_ema_state"),
-                                                is_replay=bool(end_time))
+                                                is_replay=_is_replay_eff)
                 # ★ 用 completed_time + freq_sec 计算下一根K线时间（不用klines[-1]，因为壁钟触发时klines未推进）
                 _next_dt = datetime.fromtimestamp(completed_dt_ns / 1e9 + freq_sec)
                 _next_ds = _next_dt.strftime(_get_date_fmt(freq_label))
@@ -1456,7 +1481,11 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
             return
         # init_chan_symbol 返回 (chan, klines, kl_type, records)——第二项是
         # get_kline_serial 的 klines DataFrame 而非 records（本分支未使用）
-        main_chan, _main_klines, main_kl_type, _ = main_result
+        main_chan, _main_klines, main_kl_type, _main_records = main_result
+        # 同单窗：边界落在末根之后且非停更（休市日/长假）⇒ 两窗都按「回最新」服务。
+        # 判据只取上窗 records（同一 symbol、同一 end_time，两窗必然同时命中）。
+        _is_replay_eff = bool(end_time) and not _late_boundary_is_live(
+            end_time, _end_dt, _main_records)
         main_kl_type = _get_kl_type(main_freq)
         if _SSE_DEBUG:
             log.info(f"[{display_key}] 上窗({main_freq}) chan.py: 合并K线={len(main_chan[main_kl_type].lst)}, "
@@ -1466,11 +1495,11 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
         t_snap = time.time()
         main_snapshot = _extract_realtime_snapshot(main_chan, main_kl_type, symbol, name, main_freq_label,
                                                  saved_selection_date=saved_selection_date,
-                                                 is_replay=bool(end_time))
+                                                 is_replay=_is_replay_eff)
         sub_snapshot = _extract_realtime_snapshot(sub_chan, sub_kl_type, symbol, name, sub_freq_label,
                                                        saved_selection_date=sub_saved_selection_date,
                                                        klines=None,
-                                                       is_replay=bool(end_time))
+                                                       is_replay=_is_replay_eff)
         # 期货双窗口：上窗 bis 的 fx_a_raw_dt/fx_b_raw_dt 是上层K线时间，
         # 需要换算成子级别K线时间，前端 calcRedRange 才能正确匹配
         _futures_red_range(main_snapshot, main_freq_sec, sub_freq_sec, sub_freq)
@@ -1481,7 +1510,7 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
         # 上窗
         # ⚠️ 复盘态（end_time 非空）不追加「数据源最新一根」——同单窗口径：
         #   复盘末根冻结在复盘点，_main_klines_for_init.iloc[-1] 在边界外。
-        if (not end_time) and _main_klines_for_init is not None and len(_main_klines_for_init) > 0:
+        if (not _is_replay_eff) and _main_klines_for_init is not None and len(_main_klines_for_init) > 0:
             _lr = _main_klines_for_init.iloc[-1]; _dns = _lr.get('datetime')
             if _dns is not None:
                 _bdt = datetime.fromtimestamp(_dns / 1e9)
@@ -1498,7 +1527,7 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
                     main_snapshot['meta']['kline_count'] = len(_ex)
         # 下窗
         # ⚠️ 复盘态（end_time 非空）不追加——同上窗（复盘末根冻结在复盘点）。
-        if (not end_time) and _sub_klines_for_init is not None and len(_sub_klines_for_init) > 0:
+        if (not _is_replay_eff) and _sub_klines_for_init is not None and len(_sub_klines_for_init) > 0:
             _lr = _sub_klines_for_init.iloc[-1]; _dns = _lr.get('datetime')
             if _dns is not None:
                 _bdt = datetime.fromtimestamp(_dns / 1e9)
@@ -1730,7 +1759,7 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
                                                            saved_selection_date=saved_selection_date,
                                                            prev_klines=(cached_snapshot or {}).get("klines"),
                                                            prev_ema_state=(cached_snapshot or {}).get("meta", {}).get("_ema_state"),
-                                                           is_replay=bool(end_time))
+                                                           is_replay=_is_replay_eff)
                 if is_main:
                     _futures_red_range(snapshot, freq_sec, sub_freq_sec, sub_freq)
                 _next_dt = datetime.fromtimestamp(completed_dt_ns / 1e9 + freq_sec)
@@ -1774,7 +1803,8 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
 
             # 复盘软断开：end_time 模式下，一但墙钟越过复盘边界，
             # 即停止推进双窗 K 线/chan/快照（不把图"拉最新"），只保活连接。
-            if end_time and _end_dt is not None and now > _end_dt:
+            # 判据用 `_is_replay_eff`（同单窗：休市日按实时服务，不冻结）。
+            if _is_replay_eff and _end_dt is not None and now > _end_dt:
                 continue
 
             # 处理下窗（次级别优先：区间套分析需先分析次级别）
