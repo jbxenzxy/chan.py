@@ -383,22 +383,46 @@ def _futures_series_stale(symbol, last_dt, end_dt):
     return (datetime.now() - last_dt) > timedelta(days=_FUTURES_STALE_DAYS)
 
 
-def _late_boundary_is_live(end_time, end_dt, records):
-    """复盘边界落在序列末根之后（且是历史日期）⇒ 本次连接按「回最新」服务。
+def _series_last_dt(klines):
+    """未截断序列（get_kline_serial 的 klines DataFrame）末根时间；取不到 → None。
 
-    能走到这里说明 init 的晚向守卫已判「非停更」⇒ 该日没有 K 线（休市日 / 长假），
-    「截至该日」与「最新」是同一张图。此时若仍冻结，会得到一张徽标显示 ● 实时、
-    实际永不更新的图（盘前输入上周六、页面不关跨过开盘即命中）。
-    故按 §2 规则③「输入 ≥ 末根 ⇒ 回最新」服务：`is_replay=False`、更新循环不冻结。
+    datetime 列是纳秒时间戳（可能 None），转换口径与「追加当前形成中K线」处
+    （`_lr = klines.iloc[-1]`）同款。判 `_late_boundary_is_live` 必须用它：
+    init 返回的 records 已被截断到复盘点，拿它自比会把「D=历史休市日」
+    误判成实时（2026-10-19 P1 回归）。
+    """
+    if klines is None or len(klines) == 0:
+        return None
+    _dns = klines.iloc[-1].get("datetime")
+    return datetime.fromtimestamp(_dns / 1e9) if _dns is not None else None
+
+
+def _late_boundary_is_live(end_time, end_dt, series_last_dt):
+    """复盘边界落在**数据源**末根之后（且是历史日期）⇒ 本次连接按「回最新」服务。
+
+    只处理「晚向休市」：D 晚于真实末根、但不是未来（末根=周五、盘前输入上周六）——
+    该日没有 K 线，「截至该日」与「最新」是同一张图；仍冻结会得到一张徽标显示
+    ● 实时、实际永不更新的图（页面不关跨过开盘即命中）。故按 §2 规则③
+    「输入 ≥ 末根 ⇒ 回最新」服务：`is_replay=False`、更新循环不冻结。
+
+    ⚠️ 第三参必须是**未截断**的序列末根（`_series_last_dt(klines)`）：
+    2026-10-19 P1 回归的根因就是把 init 返回的**已截断** records 传进来自我比较——
+    「D=历史休市日」截断后末根=D 前一交易日，`D > 它` 恒真 ⇒ 普通复盘（D 早于
+    真实末根，该日之后还有 K 线）被静默改成实时 + 追加边界外最新根，图变成
+    「截断历史 + 孤立一根」且中间不回补。传真实末根后：D 早于末根 ⇒ False
+    （冻结复盘，回到 v1.18 行为）；只有 D 晚于末根才 True。
+
+    series_last_dt 取不到（klines 空 / datetime 列 None）⇒ 保守判 False（冻结）：
+    误冻结可由前端「回实时」按钮纠正，误实时是错乱图，两害取其轻。
 
     ⚠️ 今天的边界不走此路（保持冻结）：用户可能就想看「今天早些时候」。
     前端 `isToday` 已把它导向回实时，本条只对 API 直调生效。
     """
-    if not end_time or end_dt is None or not records:
+    if not end_time or end_dt is None or series_last_dt is None:
         return False
     if end_dt.date() >= datetime.now().date():
         return False
-    return end_dt.date() > records[-1]["dt"].date()
+    return end_dt.date() > series_last_dt.date()
 
 
 def _futures_series(src, symbol, freq_sec):
@@ -974,9 +998,12 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
             yield _sse_frame("init", {"error": "初始化失败（无数据或网络异常）", "symbol": symbol})
             return
         chan, klines, kl_type, records = result
-        # 复盘边界落在末根之后且非停更（休市日/长假）⇒ 按「回最新」服务：
+        # 复盘边界落在**数据源**末根之后且非停更（休市日/长假）⇒ 按「回最新」服务：
         # is_replay 与更新循环的冻结判据都由它派生，避免出现「徽标 ● 实时但永不更新」。
-        _is_replay_eff = bool(end_time) and not _late_boundary_is_live(end_time, _end_dt, records)
+        # ⚠️ 必须传未截断末根（klines 末根，_series_last_dt）：init 返回的 records
+        # 已截断到复盘点，拿它自比会把「D=历史休市日」误判成实时（2026-10-19 P1 回归）。
+        _is_replay_eff = bool(end_time) and not _late_boundary_is_live(
+            end_time, _end_dt, _series_last_dt(klines))
 
         # === 2. 推送初始快照 ===
         t0 = time.time()
@@ -1482,10 +1509,12 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
         # init_chan_symbol 返回 (chan, klines, kl_type, records)——第二项是
         # get_kline_serial 的 klines DataFrame 而非 records（本分支未使用）
         main_chan, _main_klines, main_kl_type, _main_records = main_result
-        # 同单窗：边界落在末根之后且非停更（休市日/长假）⇒ 两窗都按「回最新」服务。
-        # 判据只取上窗 records（同一 symbol、同一 end_time，两窗必然同时命中）。
+        # 同单窗：边界落在**数据源**末根之后且非停更（休市日/长假）⇒ 两窗都按「回最新」服务。
+        # ⚠️ 判据只取上窗**未截断**末根（_series_last_dt；同一 symbol、同一 end_time，
+        # 两窗必然同时命中）。传已截断的 _main_records 自比会把「D=历史休市日」
+        # 误判成实时（2026-10-19 P1 回归）。
         _is_replay_eff = bool(end_time) and not _late_boundary_is_live(
-            end_time, _end_dt, _main_records)
+            end_time, _end_dt, _series_last_dt(_main_klines))
         main_kl_type = _get_kl_type(main_freq)
         if _SSE_DEBUG:
             log.info(f"[{display_key}] 上窗({main_freq}) chan.py: 合并K线={len(main_chan[main_kl_type].lst)}, "

@@ -592,6 +592,24 @@ def test_frontend_contracts():
         "快照的复盘态判据未统一走 _is_replay_eff（休市日会得到「● 实时但永不更新」的图）"
     assert "def _late_boundary_is_live(" in sse and sse.count("is_replay=_is_replay_eff") >= 5, \
         "缺 _late_boundary_is_live / 五处快照未接线"
+    # v1.19 P1 修复（2026-10-19）：晚向判据第三参必须收死为未截断末根——签名留
+    # records 就会有人传截断后的 init 返回值自比（= P1 回归形态，历史休市日复盘被改实时）。
+    assert "def _late_boundary_is_live(end_time, end_dt, series_last_dt)" in sse, \
+        "晚向判据签名未收死为 series_last_dt（传截断后 records 自比 = P1 回归）"
+    assert "def _series_last_dt(" in sse, "缺 _series_last_dt（未截断末根提取）"
+    # ⚠️ 调用点形态必须用 AST 查：字符串计数会被 docstring 引用稀释（2026-10-19
+    # 变异 A 实测漏拦）——调用点退回「传截断后末根」时计数不变、护栏假绿。
+    import ast as _ast
+    _ast_tree = _ast.parse(sse)
+    _lb_calls = [n for n in _ast.walk(_ast_tree) if isinstance(n, _ast.Call)
+                 and isinstance(n.func, _ast.Name) and n.func.id == "_late_boundary_is_live"]
+    assert len(_lb_calls) == 2, \
+        f"晚向判据调用点应恰为 2 处（单/双窗），实测 {len(_lb_calls)}"
+    for _c in _lb_calls:
+        _a3 = _c.args[2] if len(_c.args) >= 3 else None
+        assert isinstance(_a3, _ast.Call) and isinstance(_a3.func, _ast.Name) \
+            and _a3.func.id == "_series_last_dt", \
+            "晚向判据第三参必须是 _series_last_dt(...) 直接调用（传截断后末根 = P1 回归形态）"
     # 探针取数前必须确保已连接（否则 api=None → AttributeError → A/B 全退化）
     src_py = _read(SRC_PY)
     assert "_ensure_futures_src_connected(src)" in sse and sse.count("_ensure_futures_src_connected(src)") >= 2, \
@@ -1058,36 +1076,70 @@ def test_late_direction_stale_guard():
     blk = _classify_futures_replay(_LazySrc(dict(_bars)), _live, 60, _next)
     assert blk is not None and blk.code == "contract_range", \
         f"分类器对「D 略晚于末根」本就判 contract_range（这正是守卫的必要性）：{blk}"
-    # 桩无 set_data，建 chan 那步必然失败并打 traceback（与本节无关）⇒ 屏蔽输出
+    # 桩无 set_data，建 chan 那步必然失败并打 traceback（与本节无关）⇒ 屏蔽输出。
+    # ⚠️ 同时 monkeypatch 分类器计数：休市形态下 init 的晚向守卫必须在分类器**之前**
+    # 拦下（计数 0）——只断言「未抛 FuturesReplayBlocked」区分不了「守卫生效」与
+    # 「压根没走到守卫」（2026-10-19 P3-2）。
+    import App.AppSSE as _appsse
+    _orig_cls = _appsse._classify_futures_replay
+    _cls_calls = {"n": 0}
+    def _spy_cls(*a, **kw):
+        _cls_calls["n"] += 1
+        return _orig_cls(*a, **kw)
+    _appsse._classify_futures_replay = _spy_cls
     _blocked, _sink = None, io.StringIO()
-    with contextlib.redirect_stdout(_sink), contextlib.redirect_stderr(_sink):
-        try:
-            init_chan_symbol(_LazySrc(dict(_bars)), _live, "IF", 60, "1m", None,
-                             _next.strftime("%Y/%m/%d %H:%M"))
-        except FuturesReplayBlocked as b:
-            _blocked = b
-        except Exception:
-            pass
+    try:
+        with contextlib.redirect_stdout(_sink), contextlib.redirect_stderr(_sink):
+            try:
+                init_chan_symbol(_LazySrc(dict(_bars)), _live, "IF", 60, "1m", None,
+                                 _next.strftime("%Y/%m/%d %H:%M"))
+            except FuturesReplayBlocked as b:
+                _blocked = b
+            except Exception:
+                pass
+    finally:
+        _appsse._classify_futures_replay = _orig_cls
     assert _blocked is None, \
         f"休市日不得报 A′（_futures_series_stale 守卫失效）：{_blocked.code} {_blocked.message}"
+    assert _cls_calls["n"] == 0, \
+        f"晚向守卫必须挡在分类器之前（休市形态分类器被调 {_cls_calls['n']} 次）"
 
-    # ④ 边界落在末根之后 ⇒ 本次连接按「回最新」服务（不冻结）。
+    # ④ 边界落在**数据源**末根之后 ⇒ 本次连接按「回最新」服务（不冻结）。
     #    否则盘前输入上周六会得到一张徽标 ● 实时、实际永不更新的图。
     #    今天的边界例外（用户可能想看今天早些时候）⇒ 仍冻结。
-    from App.AppSSE import _late_boundary_is_live
-    _recs = [{"dt": _last, "vol": 1}]
-    assert _late_boundary_is_live(_next.strftime("%Y/%m/%d %H:%M"), _next, _recs), \
-        "边界落在末根之后且是历史日期 ⇒ 应按实时服务（_is_replay_eff=False）"
+    #    ⚠️ 第三参必须是未截断末根：2026-10-19 P1 回归 = 传 init 已截断的 records
+    #    自比 ⇒ 「D=历史休市日/盘前时刻」恒判实时（截断后末根=D 前一交易日）。
+    from App.AppSSE import _late_boundary_is_live, _series_last_dt
+    assert _late_boundary_is_live(_next.strftime("%Y/%m/%d %H:%M"), _next, _last), \
+        "边界落在数据源末根之后且是历史日期 ⇒ 应按实时服务（_is_replay_eff=False）"
     _today_early = _now.replace(hour=9, minute=30, second=0, microsecond=0)
     assert not _late_boundary_is_live(_today_early.strftime("%Y/%m/%d %H:%M"),
-                                      _today_early, _recs), \
+                                      _today_early, _last), \
         "今天的边界不得改判为实时（那是「复盘到今天早些时候」）"
-    assert not _late_boundary_is_live(None, _next, _recs), "无 end_time ⇒ 不是晚向边界"
+    assert not _late_boundary_is_live(None, _next, _last), "无 end_time ⇒ 不是晚向边界"
     assert not _late_boundary_is_live(_next.strftime("%Y/%m/%d %H:%M"),
-                                      _last - timedelta(days=1), _recs), \
+                                      _last - timedelta(days=1), _last), \
         "边界早于末根 ⇒ 真复盘，不得改判为实时"
+    # P1 回归钉（2026-10-19）：D=历史休市日、真实末根晚于 D ⇒ 必须冻结复盘。
+    # 修复前的错误口径（拿截断后末根自比）在此恒判实时 ⇒ 本断言红。
+    _p1_d = datetime(2025, 10, 4, 15, 0)          # 历史周六（休市日形态）
+    assert not _late_boundary_is_live(
+        _p1_d.strftime("%Y/%m/%d %H:%M"), _p1_d,
+        _now.replace(hour=15, minute=0, second=0, microsecond=0)), \
+        "P1 回归钉：D=历史休市日、真实末根晚于 D ⇒ 必须冻结复盘（不得用截断后末根自比）"
+    # 末根取不到 ⇒ 保守冻结（误冻结可由前端「回实时」纠正，误实时=错乱图）
+    assert not _late_boundary_is_live(_next.strftime("%Y/%m/%d %H:%M"), _next, None), \
+        "series_last_dt=None ⇒ 保守判冻结（不得误判实时）"
+    # _series_last_dt：klines 末根纳秒时间戳 → datetime；取不到 → None
+    import pandas as pd
+    assert _series_last_dt(None) is None
+    assert _series_last_dt(pd.DataFrame()) is None
+    assert _series_last_dt(pd.DataFrame([{"datetime": None}])) is None
+    _df = pd.DataFrame([{"datetime": None}, {"datetime": 1727000000 * 10**9}])
+    assert _series_last_dt(_df) == datetime.fromtimestamp(1727000000), \
+        "末根时间戳转换口径（纳秒 → datetime）"
     print("[PASS] [6] 晚向守卫：已交割 ⇒ 停更；休市日 ⇒ 不报；"
-          "边界落末根后 ⇒ 按实时服务（非冻结）")
+          "边界落数据源末根后 ⇒ 按实时服务；P1 回归钉（截断自比=实时）已封")
 
 
 def main():
