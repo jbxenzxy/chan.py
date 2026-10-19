@@ -16,9 +16,14 @@
 2026-10-17 v1.18：建议合约**最近交割优先**——最近候选存续期覆盖由生成规则结构保证
 （免探），只验当前周期窗口；换月窗口内（≤15 日历天）与次月比目标日 vol，窗口外直接
 当月；最近候选不覆盖才回退全扫 + vol 仲裁（异常兜底）。suggest 恒为 str（前端契约）。
+2026-10-19 v1.19：**晚向（A′）在前端实时态不可达**的现场缺陷——`wantLive` 把「D ≥ 末根」
+一律钳成回实时，已交割合约的 D 根本到不了后端（IF2409 1m + 日历 2024-09-23：图不变、
+日历跳回末根、无提示）。修法两处：前端 wantLive 加合取项「D ≥ 今天」；后端晚向加
+`_futures_series_stale` 守卫（放行后「查上周六」不得误报 A′）。见 [6]。
 
 分层：[1] 合约推荐纯函数 / [2] 四类诊断（FakeSrc）/ [3] 源码契约
-     / [5] init 晚向接线 / [4] 真浏览器（tq_10000 切换合约、way_c 仅提示）。
+     / [5] init 晚向接线 / [6] 晚向守卫（休市 vs 停更）
+     / [4] 真浏览器（tq_10000 切换合约、way_c 仅提示）。
 运行：python Test/test_futures_goto_earlier.py
 """
 import functools
@@ -520,7 +525,10 @@ def test_init_out_late():
 
     F1 指出的接线缺失：分类器单测覆盖了 A′，但 `init_chan_symbol` 原先只判
     「D < 10000 根首根」；晚向被 `_truncate_records_by_end` 静默吞掉，页面停在
-    存续期末根、既无提示也无切换建议（前端 wantLive 只拦「今天/未来」）。
+    存续期末根、既无提示也无切换建议。
+    ⚠️ 勘误（v1.19）：本 docstring 原写「前端 wantLive 只拦今天/未来」——**不成立**。
+    非复盘态的 wantLive 是 `dateStr >= lastKlineInput`，比「今天/未来」宽得多，
+    因此本用例只能证明**后端**接线，证明不了 UI 可达；UI 侧由 [6] 的源码契约兜住。
     """
     from App.AppSSE import init_chan_symbol, FuturesReplayBlocked
 
@@ -573,6 +581,10 @@ def test_frontend_contracts():
     assert "最后交易日约" in sse, "方案二文案（最后交易日约）未落地"
     assert "suggest 恒为 str" in sse, "FuturesReplayBlocked 契约注记缺失"
     assert "目标日全天" in sse, "vol 时点口径（目标日全天累计）未注明"
+    # v1.19：晚向必须带「序列确实停更」守卫 —— 前端放行「D ≥ 末根 且 D < 今天」后，
+    # 「查上周六」（末根=周五）也会带 end_time 进来，无守卫会被 out_late 误报成 A′。
+    assert "def _futures_series_stale(" in sse and sse.count("_futures_series_stale(") >= 2, \
+        "晚向缺 _futures_series_stale 守卫：休市日会被误报成「晚于最后交易日」"
     # 探针取数前必须确保已连接（否则 api=None → AttributeError → A/B 全退化）
     src_py = _read(SRC_PY)
     assert "_ensure_futures_src_connected(src)" in sse and sse.count("_ensure_futures_src_connected(src)") >= 2, \
@@ -596,6 +608,11 @@ def test_frontend_contracts():
     # 留着只会让人误以为「能不能重试」有后端判据。谁加回来这里就红。
     assert 'data.retryable' not in js, "前端不应依赖 retryable"
     assert "retryable" not in sse, "FuturesReplayBlocked 不应再有 retryable 字段（无人消费）"
+    # v1.19：非复盘态钳位必须带「D ≥ 今天」合取项。少这一项 ⇒ 已交割合约的
+    # 「D ≥ 末根」被当成回实时 ⇒ 请求不带 end_time ⇒ 后端晚向 A′ 永远不可达
+    # （2026-10-19 用户现场：CFFEX.IF2409 1m + 日历 2024-09-23 → 图不变、日历跳回末根）。
+    assert "dateStr.slice(0, 10) >= todayStr" in js, \
+        "wantLive 缺「D ≥ 今天」合取项：已交割合约的晚向复盘会被静默回实时"
     assert 'def __init__(self, code, message, suggest=""):' in sse, \
         "FuturesReplayBlocked 构造签名不应再带 retryable"
     assert 'if (data.suggest && (_code === "contract_range" || _code === "tq_10000"))' in js, \
@@ -984,6 +1001,72 @@ def test_browser():
           "方式C → 仅提示「请加载更多数据」，不动窗口、不重连")
 
 
+# ═══════════════ [6] 晚向守卫：休市 vs 停更（v1.19） ═══════════════
+
+def test_late_direction_stale_guard():
+    """`D > 末根 且 D < now` 必须分开「休市」与「停更」。
+
+    为什么需要这条守卫：v1.19 之前前端 `wantLive` 把「D ≥ 末根」一律钳成回实时，
+    已交割合约的 D 到不了后端（A′ 不可达）；放行之后「查上周六」也会带 `end_time`
+    进来，而 `_classify_futures_replay` 的 out_late 判据是 `day > last_bar.date()`，
+    对「末根=周五、D=周六」同样命中 ⇒ 会把休市误报成「晚于最后交易日」。
+    """
+    from App.AppSSE import (_cffex_contract_month, _futures_series_stale,
+                            _classify_futures_replay, init_chan_symbol,
+                            FuturesReplayBlocked)
+    import contextlib
+    import io
+
+    # ① 合约月份解析：CFFEX 四位 YYMM（股指/国债同形）；主连、非 CFFEX → None
+    assert _cffex_contract_month("CFFEX.IF2409") == (2024, 9)
+    assert _cffex_contract_month("CFFEX.T2403") == (2024, 3)
+    assert _cffex_contract_month("KQ.m@CFFEX.IF") is None
+    assert _cffex_contract_month("SHFE.rb2405") is None
+
+    # ② 停更判定（CFFEX 走交割日精确值；其它交易所走 _FUTURES_STALE_DAYS 时限）
+    assert _futures_series_stale(
+        "CFFEX.IF2409", datetime(2024, 9, 20, 14, 59), datetime(2024, 9, 23, 9, 30)), \
+        "IF2409 交割 2024-09-20，D=2024-09-23 ⇒ 停更"
+    _now = datetime.now()
+    _y, _m = _now.year, _now.month + 3
+    if _m > 12:
+        _y, _m = _y + 1, _m - 12
+    _live = f"CFFEX.IF{_y % 100:02d}{_m:02d}"   # 交割日远未到 ⇒ 仍在市
+    _last = _now - timedelta(days=3)             # 末根 ≈ 上一交易日
+    _next = _last + timedelta(days=1)            # D = 次日（休市日形态）
+    assert not _futures_series_stale(_live, _last, _next), \
+        f"{_live} 仍在市，「D 略晚于末根」只是休市 ⇒ 不得判停更"
+    assert not _futures_series_stale("SHFE.rb2405", _last, _next), \
+        "非 CFFEX：末根距今 3 天在 15 天容差内 ⇒ 仍在市"
+    assert _futures_series_stale("SHFE.rb2405", _now - timedelta(days=30),
+                                 _now - timedelta(days=29)), \
+        "非 CFFEX：末根距今 30 天 ⇒ 停更（时限兜底）"
+
+    # ③ 行为接线：分类器本身对该形态就判 contract_range（= 守卫必须挡在它前面），
+    #    而 init 的晚向分支带守卫 ⇒ 不得抛 A′。
+    _bars = {
+        (_live, 1800): _span(_last - timedelta(days=60), _last),
+        (_live, 60): _span(_last - timedelta(days=10), _last),
+    }
+    blk = _classify_futures_replay(_LazySrc(dict(_bars)), _live, 60, _next)
+    assert blk is not None and blk.code == "contract_range", \
+        f"分类器对「D 略晚于末根」本就判 contract_range（这正是守卫的必要性）：{blk}"
+    # 桩无 set_data，建 chan 那步必然失败并打 traceback（与本节无关）⇒ 屏蔽输出
+    _blocked, _sink = None, io.StringIO()
+    with contextlib.redirect_stdout(_sink), contextlib.redirect_stderr(_sink):
+        try:
+            init_chan_symbol(_LazySrc(dict(_bars)), _live, "IF", 60, "1m", None,
+                             _next.strftime("%Y/%m/%d %H:%M"))
+        except FuturesReplayBlocked as b:
+            _blocked = b
+        except Exception:
+            pass
+    assert _blocked is None, \
+        f"休市日不得报 A′（_futures_series_stale 守卫失效）：{_blocked.code} {_blocked.message}"
+    print("[PASS] [6] 晚向守卫：已交割 ⇒ 停更；休市日 ⇒ 不报"
+          "（分类器本身会误报，故守卫必需）")
+
+
 def main():
     restore_iso = isolate_side_effects()
     try:
@@ -992,6 +1075,7 @@ def main():
         test_non_cffex_suggest_30m_missing()
         test_frontend_contracts()
         test_init_out_late()
+        test_late_direction_stale_guard()
         test_switch_connection_drops_selection()
         test_browser()
     finally:

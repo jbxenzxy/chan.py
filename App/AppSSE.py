@@ -164,6 +164,11 @@ def _futures_window_fetch_bars(freq_sec, start_time=None, end_time=None, base_ba
 _FUTURES_LIFE_FREQ = 1800   # 30m：探合约存续期（10000 根跨度 ≫ 合约存续期）
 _FREQ_CN_BY_SEC = {15: "15秒", 60: "1分钟", 300: "5分钟", 1800: "30分钟"}
 _CFFEX_ROLL_WINDOW_DAYS = 15   # 交割前 15 个日历天内视为换月窗口（保守值；窗口内才与次月比 vol）
+# 非 CFFEX 无法按合约规则推算交割日，「序列是否已停更」只能用时限兜底：
+# 末根距今超过该天数 ⇒ 判定为停更（已交割 / 长期停牌），而非撞上休市。
+# 取值依据：A 股/期货最长连续休市 ≈ 9~10 个日历天（春节、国庆），取 15 留足余量；
+# 且必须 > 休市上限，否则「查上周六」会被误报成 A′。CFFEX 走交割日精确判定，不用它。
+_FUTURES_STALE_DAYS = 15
 
 
 class FuturesReplayBlocked(Exception):
@@ -334,6 +339,48 @@ def _futures_contract_life(src, symbol):
         return None
     recs = _futures_series(src, symbol, _FUTURES_LIFE_FREQ)
     return (recs[0]["dt"], recs[-1]["dt"]) if recs else None
+
+
+def _cffex_contract_month(symbol):
+    """`CFFEX.IF2409` → (2024, 9)；非 CFFEX / 主连 / 解析不出 → None。
+
+    CFFEX 两个品种根（股指 IF/IH/IC/IM、国债 T/TF/TS/TL）合约代码都是四位 YYMM，
+    故只做形状解析、不区分套别（套别由 `_CFFEX_BOND_ROOTS` 另行判定）。
+    主连 `KQ.m@CFFEX.IF` 经 `split("@")[-1]` 后仍带交易所前缀，但 `_split_product`
+    拿不到月份数字（它只返回字母根），故此处从原始代码重新取数字段。
+    """
+    ex, _root = _split_product(symbol)
+    if ex != "CFFEX":
+        return None
+    body = symbol.split("@")[-1]
+    if "." not in body:
+        return None
+    _ex, prod = body.split(".", 1)
+    m = re.match(r"^[A-Za-z]{1,3}(\d{2})(\d{2})$", prod)
+    if not m:
+        return None
+    return (2000 + int(m.group(1)), int(m.group(2)))
+
+
+def _futures_series_stale(symbol, last_dt, end_dt):
+    """序列在 end_dt 之后是否**已停更**——区别于「只是撞上休市日」。
+
+    晚向（`D > 序列末根 且 D < now`）必须分开两件事，否则「查上周六」会被误报成 A′：
+      · **休市**：序列仍在市，末根 = 上一交易日 ⇒ 不得报 A′（按正常截断处理）；
+      · **停更**：合约已交割 / 长期停牌 ⇒ 报 A′（晚于最后交易日 + 建议切换）。
+    判据按「合约规则优先、时限兜底」取，不维护交易日历表：
+      · CFFEX：由合约代码月份算交割日（`_cffex_expiry`，股指第三周五 / 国债第二周五，
+        节假日 ±1 交易日），`end_dt` 越过它 ⇒ 已交割 ——「刚交割几天」同样命中，
+        不受 `_FUTURES_STALE_DAYS` 时限限制（那是给没有交割日规则的交易所用的）；
+      · 其它交易所：退回时限兜底（末根距今 > `_FUTURES_STALE_DAYS`）。
+    """
+    ex, root = _split_product(symbol)
+    if ex == "CFFEX":
+        ym = _cffex_contract_month(symbol)
+        if ym is not None:
+            return end_dt.date() > _cffex_expiry(
+                ym[0], ym[1], root.upper() in _CFFEX_BOND_ROOTS)
+    return (datetime.now() - last_dt) > timedelta(days=_FUTURES_STALE_DAYS)
 
 
 def _futures_series(src, symbol, freq_sec):
@@ -604,11 +651,15 @@ def init_chan_symbol(src, symbol, _name, freq_sec, freq_label, start_time=None, 
                     if _blk is not None:
                         raise _blk
                 elif (_end_dt < datetime.now()
-                        and _end_dt.date() > records[-1]["dt"].date()):
+                        and _end_dt.date() > records[-1]["dt"].date()
+                        and _futures_series_stale(symbol, records[-1]["dt"], _end_dt)):
                     # **晚向**：D 晚于该序列末根、且不是未来。
-                    # 前端对「非复盘态输入 ≥ 末根」会静默回实时（app.js wantLive），
-                    # 复盘态只拦今天/未来 ⇒ 这里的「已交割合约 + 之后日期」原先会被
-                    # 静默截断到存续期末根，既无提示也无切换建议（A′ 不可达）。
+                    # v1.19 起前端已放行「D ≥ 末根 但 D < 今天」这一组合（app.js wantLive
+                    # 加了 `D ≥ 今天` 合取项）——该组合只可能是「已交割 / 停牌的序列」，
+                    # 因为仍在市的序列末根就是最新，不可能落后于一个历史日期。
+                    # 但放行后「查上周六」（末根 = 周五）也会进到这里，所以必须用
+                    # `_futures_series_stale` 区分「休市」与「停更」：休市不报（按正常截断
+                    # 处理，等价于截至该休市日），停更才报 A′。
                     # 只认 contract_range：晚向不可能命中 10000 根/选点/方式C。
                     _blk = _classify_futures_replay(
                         src, symbol, freq_sec, _end_dt, raw_first=records[0]["dt"])

@@ -4693,7 +4693,14 @@
             const isFutureDate = dateStr.slice(0, 10) > todayStr; // 输入框格式YYYY-MM-DD前缀，字典序即时间序
             // 回实时/回最新钳位：非复盘态末根=数据源最新，≥末根即回；
             // 复盘态末根=复盘点<最新，只拦今天/未来（回实时），(复盘点,最新) 内放行往右复盘
-            const wantLive = isFutures && (!replayMode ? dateStr >= lastKlineInput
+            // ⚠️ 「末根=数据源最新」只对**仍在更新**的序列成立。已交割/长期停牌的序列末根 =
+            //    该合约最后交易日，右端早在过去，右侧其实有路（换到该日主力合约）。
+            //    故非复盘态再加合取项「D ≥ 今天」：只有 D ≥ 末根 **且** D ≥ 今天，才是
+            //    「R 已在最右、右侧无处可去」；D < 今天 且 D ≥ 末根 ⇒ 该序列已停更 ⇒
+            //    放行给后端晚向诊断（A′ → 「切换」按钮），否则会被静默重连吞掉
+            //    （图不变、日历跳回末根、无任何提示）。
+            const wantLive = isFutures && (!replayMode
+                ? (dateStr >= lastKlineInput && dateStr.slice(0, 10) >= todayStr)
                 : (isToday || isFutureDate));
             if (wantLive) {
                 // 复盘态回实时 = 取消复盘：引擎运行中拦截（四类拦截之一）
