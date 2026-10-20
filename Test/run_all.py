@@ -259,6 +259,11 @@ COMPONENTS = [
      [sys.executable, os.path.join("Test", "test_futures_sub_key.py")]),
     ("futures_session_binding",
      [sys.executable, os.path.join("Test", "test_futures_session_binding.py")]),
+    # 期货符号大小写规范化（2026-10-20）：天勤 instrument_id 大小写敏感，且各所
+    #   品种根大小写不统一（CFFEX.IF 大写 / SHFE.rb 小写）——「不能统一 upper」
+    #   这条前提本身就是断言之一，防有人图省事改成全大写把 rb 写坏。
+    ("futures_symbol_case",
+     [sys.executable, os.path.join("Test", "test_futures_symbol_case.py")]),
     ("scanpool_fallback",
      [sys.executable, os.path.join("Test", "test_scanpool_fallback.py")]),
     ("frontend_smoke",

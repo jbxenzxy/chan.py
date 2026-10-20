@@ -12,11 +12,11 @@
   ② KLineChart 内容契约：渲染管线关键函数（render 族 / draw* 族 /
      priceToY 坐标系 / onWheel 交互）物理位于 KLineChart 区块内
      （阶段 8 拆 kline/ 子目录时按区块整体迁移）。
-  ③ window API 面冻结：app.js 全文件 window.* 赋值名集合 == 基线 61 个
-     + 4 个登记性新增（ChanApp / stockTpslFromMenu / stockTpslCancel /
-     toggleBacktestPanel）+ 4 个 HTML 内联事件桥（合计 69；阶段 6 组件化为纯
-     代码搬移，对既有 API 面零漂移，HTML onclick / 控制台调试依赖此面）。
-  ③b HTML 内联事件桥：登记的 4 个桥接必须既在 window 绑定、又被
+  ③ window API 面冻结：app.js 全文件 window.* 赋值名集合 == 基线
+     + 登记性新增 + HTML 内联事件桥（三份字面量的并集；项数不写死，
+     由 ③ 处按实测打印。阶段 6 组件化为纯代码搬移，对既有 API 面零漂移，
+     HTML onclick / 控制台调试依赖此面）。
+  ③b HTML 内联事件桥：登记的桥接必须既在 window 绑定、又被
      app.html 引用（与 ④ 互为补集：既拦「摘绑定」也拦「僵尸条目」）。
   ④ app.html 事件引用完整：全部内联事件（onclick/oninput/onkeydown/
      onchange/…）调用的标识符均可解析到 window 绑定。
@@ -111,6 +111,12 @@ WINDOW_ALLOWED_NEW = {"ChanApp", "stockTpslFromMenu", "stockTpslCancel",
 WINDOW_INLINE_BRIDGES = {
     "closeStatsPanel", "onAutoOrderToggle", "toggleAutoOrderLedger",
     "closeBacktestPanel",
+    #   onCodeInputFocus     <- app.html  onfocus="onCodeInputFocus()"
+    #     2026-10-20：输入框聚焦不再清空已有代码（原先是聚焦即先 clearInput()，
+    #     导致 CFFEX.IF2409 只能整串重打、没法只改末两位）。聚焦链路上的
+    #     toggleInputClear / showHistory 都在 IIFE 闭包内，故必须挂 window 才能
+    #     被 HTML 内联事件调到；app.js 的 onCodeInputFocus 亦有同源注释。
+    "onCodeInputFocus",
 }
 # 允许的区块外顶层辅助函数（既有基线即存在的必要工具，非业务组件）
 ALLOWED_STRAY = {"getLayoutParams",

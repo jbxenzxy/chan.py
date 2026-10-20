@@ -6,6 +6,7 @@ TqSdkAPI - 天勤期货/期指行情数据源适配器
 d/w 周期因天勤主连合约返回垃圾数据，已排除并在前端禁用。
 """
 import os
+import re
 import json
 import logging
 import threading
@@ -502,75 +503,168 @@ def fetch_futures_kline(api, symbol, freq_sec=15, num_bars=None, display_key=Non
 # 期货代码/名称工具函数
 # ============================================================
 
+FUTURES_NAMES = {
+    "KQ.m@CFFEX.IF": "沪深300主连", "KQ.m@CFFEX.IH": "上证50主连",
+    "KQ.m@CFFEX.IC": "中证500主连", "KQ.m@CFFEX.IM": "中证1000主连",
+    "KQ.m@CFFEX.T":  "10年国债主连", "KQ.m@CFFEX.TF": "5年国债主连",
+    "KQ.m@CFFEX.TL": "30年国债主连", "KQ.m@CFFEX.TS": "2年国债主连",
+    "KQ.m@SHFE.rb":  "螺纹钢主连", "KQ.m@SHFE.au": "沪金主连",
+    "KQ.m@SHFE.ag":  "沪银主连", "KQ.m@SHFE.cu": "沪铜主连",
+    "KQ.m@SHFE.al":  "沪铝主连", "KQ.m@SHFE.zn": "沪锌主连",
+    "KQ.m@SHFE.ni":  "沪镍主连", "KQ.m@SHFE.ru": "橡胶主连",
+    "KQ.m@SHFE.bu":  "沥青主连", "KQ.m@SHFE.fu": "燃油主连",
+    "KQ.m@SHFE.sp":  "纸浆主连", "KQ.m@SHFE.hc": "热卷主连",
+    "KQ.m@SHFE.ss":  "不锈钢主连", "KQ.m@SHFE.sn": "沪锡主连",
+    "KQ.m@SHFE.pb":  "沪铅主连", "KQ.m@SHFE.wr": "线材主连",
+    "KQ.m@SHFE.ao":  "氧化铝主连", "KQ.m@SHFE.br": "丁二烯主连",
+    "KQ.m@DCE.m":    "豆粕主连", "KQ.m@DCE.y": "豆油主连",
+    "KQ.m@DCE.a":    "豆一主连", "KQ.m@DCE.b": "豆二主连",
+    "KQ.m@DCE.p":    "棕榈油主连", "KQ.m@DCE.j": "焦炭主连",
+    "KQ.m@DCE.jm":   "焦煤主连", "KQ.m@DCE.i": "铁矿石主连",
+    "KQ.m@DCE.c":    "玉米主连", "KQ.m@DCE.cs": "淀粉主连",
+    "KQ.m@DCE.l":    "塑料主连", "KQ.m@DCE.v": "PVC主连",
+    "KQ.m@DCE.pp":   "PP主连", "KQ.m@DCE.eg": "乙二醇主连",
+    "KQ.m@DCE.eb":   "苯乙烯主连", "KQ.m@DCE.pg": "LPG主连",
+    "KQ.m@DCE.fb":   "纤维板主连", "KQ.m@DCE.bb": "胶合板主连",
+    "KQ.m@DCE.rr":   "粳米主连", "KQ.m@DCE.lh": "生猪主连",
+    "KQ.m@DCE.jd":   "鸡蛋主连", "KQ.m@CZCE.TA": "PTA主连",
+    "KQ.m@CZCE.MA":  "甲醇主连", "KQ.m@CZCE.FG": "玻璃主连",
+    "KQ.m@CZCE.SA":  "纯碱主连", "KQ.m@CZCE.SR": "白糖主连",
+    "KQ.m@CZCE.CF":  "棉花主连", "KQ.m@CZCE.CY": "棉纱主连",
+    "KQ.m@CZCE.OI":  "菜油主连", "KQ.m@CZCE.RM": "菜粕主连",
+    "KQ.m@CZCE.ZC":  "动力煤主连", "KQ.m@CZCE.UR": "尿素主连",
+    "KQ.m@CZCE.PF":  "短纤主连", "KQ.m@CZCE.PK": "花生主连",
+    "KQ.m@CZCE.AP":  "苹果主连", "KQ.m@CZCE.CJ": "红枣主连",
+    "KQ.m@CZCE.SM":  "锰硅主连", "KQ.m@CZCE.SF": "硅铁主连",
+    "KQ.m@CZCE.SH":  "烧碱主连", "KQ.m@CZCE.PX": "对二甲苯主连",
+    "KQ.m@CZCE.LR":  "晚籼稻主连", "KQ.m@CZCE.RI": "早籼稻主连",
+    "KQ.m@CZCE.JR":  "粳稻主连", "KQ.m@CZCE.WH": "强麦主连",
+    "KQ.m@CZCE.PM":  "普麦主连", "KQ.m@CZCE.RS": "菜籽主连",
+    "KQ.m@INE.sc":   "原油主连", "KQ.m@INE.lu": "低硫燃油主连",
+    "KQ.m@INE.nr":   "20号胶主连", "KQ.m@INE.bc": "国际铜主连",
+    "KQ.m@INE.ec":   "集运指数主连", "KQ.m@GFEX.si": "工业硅主连",
+    "KQ.m@GFEX.lc":  "碳酸锂主连", "KQ.m@GFEX.ps": "多晶硅主连",
+    "KQD.m@SGX.CN": "A50主连",
+}
+
+# ============================================================
+# 期货符号大小写规范化（2026-10-20）
+# ============================================================
+# 为什么需要：天勤 instrument_id **大小写敏感**。用户实测 `KQ.m@CFFEX.Im`
+#   被拒绝（`contains non-existent instrument: KQ.m@CFFEX.Im`），而
+#   `KQ.m@CFFEX.IM` 能正常连上行情服务。
+# 为什么**不能**统一 upper()/lower()：各交易所品种根大小写并不统一，这是
+#   交易所原生代码，不是我们的约定 ——
+#     · 大写：中金所 CFFEX.IF/IM、郑商所 CZCE.MA/TA
+#     · 小写：上期所 SHFE.rb、大商所 DCE.m、能源中心 INE.sc、广期所 GFEX.lc
+#   全大写会把 SHFE.rb 变成 SHFE.RB，全小写会把 CFFEX.IM 变成 CFFEX.im ——
+#   两种都是**把能用的改成不能用的**，比报错更糟（静默失败）。
+# 做法：用既有两张表的键值派生 `(交易所, 品种根.upper()) → 规范品种根`
+#   反查表，输入时大小写不敏感匹配、命中后替换成规范写法；命中不到就
+#   **原样返回**（不猜），让天勤照旧报它自己的错 —— 不引入新的失败路径。
+_FUTURES_EXCHANGES = ("CFFEX", "SHFE", "DCE", "CZCE", "INE", "GFEX", "SGX")
+# 主连/指数前缀：天勤要求 `KQ.m@` / `KQ.i@` / `KQD.m@` 里的 m/i **小写**，
+# 而用户很容易打成大写（KQ.M@）。这里给出「大写形态 → 规范形态」映射。
+_FUTURES_MAIN_PREFIXES = (("KQD.M@", "KQD.m@"), ("KQ.M@", "KQ.m@"), ("KQ.I@", "KQ.i@"))
+
+
+def _build_futures_root_canon():
+    """(交易所, 品种根.upper()) → 天勤规范品种根。
+
+    数据源只有 FUTURES_NAMES / FUTURES_ALIASES 两条既有表（不新增数据）：
+    这些键就是**在天勤上实际能取到行情**的写法，是事实而非约定。
+
+    同一 (所, 根) 出现两种写法 ⇒ 表自身有歧义，规范化只能靠猜 —— 直接抛错
+    暴露，不做「取第一个」的静默处理。
+    """
+    canon = {}
+    conflicts = []
+    for sym in list(FUTURES_NAMES) + list(FUTURES_ALIASES.values()):
+        body = sym.split("@")[-1]
+        if "." not in body:
+            continue
+        ex, root = body.split(".", 1)
+        m = re.match(r"^([A-Za-z]+)\d*$", root)
+        if not m:
+            continue
+        key = (ex.upper(), m.group(1).upper())
+        prev = canon.get(key)
+        if prev is not None and prev != m.group(1):
+            conflicts.append((key, prev, m.group(1)))
+            continue
+        canon[key] = m.group(1)
+    if conflicts:
+        raise ValueError(f"FUTURES_NAMES/FUTURES_ALIASES 品种根大小写冲突: {conflicts}")
+    return canon
+
+
+_FUTURES_ROOT_CANON = _build_futures_root_canon()
+
+
+def normalize_futures_symbol(code):
+    """识别期货代码并规范化大小写；非期货形态返回 None。
+
+    返回 None ⇔ 不是期货代码（调用方据此走股票路径）。
+    返回 str ⇔ 是期货代码；品种根在本地表里则**规范写法**，表里没有则原样
+                返回（不做无依据的猜测，交天勤按它自己的规则报错）。
+
+    容忍的输入形态（大小写均不敏感）：
+        PTA / pta                  → KQ.m@CZCE.TA        （别名表）
+        KQ.m@CFFEX.Im              → KQ.m@CFFEX.IM
+        kq.m@shfe.rb2410           → KQ.m@SHFE.rb2410
+        KQ.M@CFFEX.IM              → KQ.m@CFFEX.IM       （前缀 m 归小写）
+        CFFEX.im                   → CFFEX.IM            （无 KQ 前缀形态）
+        cffex.if2409               → CFFEX.IF2409
+    """
+    if not code:
+        return None
+    raw = str(code).strip()
+    if not raw:
+        return None
+
+    # ① 短名/别名：别名表键恒为大写，输入侧不区分大小写
+    alias = FUTURES_ALIASES.get(raw.upper())
+    if alias:
+        return alias
+
+    # ② 拆「主连前缀 + 交易所.品种根[月份]」
+    prefix = ""
+    body = raw
+    upper = raw.upper()
+    for lead_upper, lead_canon in _FUTURES_MAIN_PREFIXES:
+        if upper.startswith(lead_upper):
+            prefix = lead_canon
+            body = raw[len(lead_upper):]     # 前缀长度与大小写无关
+            break
+    if "." not in body:
+        return None
+    ex_raw, rest = body.split(".", 1)
+    ex = ex_raw.upper()
+    if ex not in _FUTURES_EXCHANGES:
+        return None
+
+    m = re.match(r"^([A-Za-z]+)(\d{0,4})$", rest)
+    if not m:
+        # 形状不认识（带后缀/特殊品种）：只规范交易所与前缀，品种段原样，
+        # 保持改造前「不认识的也照旧透传」的行为
+        return f"{prefix}{ex}.{rest}"
+    root_raw, digits = m.group(1), m.group(2)
+    root = _FUTURES_ROOT_CANON.get((ex, root_raw.upper()), root_raw)
+    return f"{prefix}{ex}.{root}{digits}"
+
 
 def _get_futures_code(code):
-    """识别期货/期指代码，返回天勤标准代码；非期货返回 None。"""
-    # 格式: EXCHANGE.SYMBOL (如 CFFEX.IM2507, SHFE.rb2505)
-    # 或主连: KQ.m@EXCHANGE.SYMBOL, KQ.i@EXCHANGE.SYMBOL
-    # 注意：天勤要求 KQ 前缀中的 m/i 小写，所以先 upper() 匹配，再恢复小写
-    FUTURE_EXCHANGES = ['CFFEX', 'SHFE', 'DCE', 'CZCE', 'INE', 'GFEX', 'SGX']
-    for ex in FUTURE_EXCHANGES:
-        if code.startswith(ex + '.'):
-            return code
-        if code.startswith('KQ.M@' + ex + '.'):
-            return code.replace('KQ.M@', 'KQ.m@', 1)
-        if code.startswith('KQ.I@' + ex + '.'):
-            return code.replace('KQ.I@', 'KQ.i@', 1)
-        # 外盘延时行情: KQD.m@ 前缀
-        if code.startswith('KQD.M@' + ex + '.'):
-            return code.replace('KQD.M@', 'KQD.m@', 1)
+    """识别期货/期指代码，返回天勤标准代码；非期货返回 None。
 
-    # 期货别名映射：支持直接输入短名称（如 PTA、IF、rb、TA 等）
-    if code in FUTURES_ALIASES:
-        return FUTURES_ALIASES[code]
-    return None
+    2026-10-20 起只做委托：唯一规范化入口是 `normalize_futures_symbol`
+    （大小写不敏感 + 品种根按各所事实写法归一）。保留本函数名是因为
+    既有调用方（AppUtils._get_market_code / DataAPI.__init__）按这个名字导入。
+    """
+    return normalize_futures_symbol(code)
 
 
 def _get_futures_name(code):
-    """获取期货品种的中文名称"""
-    FUTURES_NAMES = {
-        "KQ.m@CFFEX.IF": "沪深300主连", "KQ.m@CFFEX.IH": "上证50主连",
-        "KQ.m@CFFEX.IC": "中证500主连", "KQ.m@CFFEX.IM": "中证1000主连",
-        "KQ.m@CFFEX.T":  "10年国债主连", "KQ.m@CFFEX.TF": "5年国债主连",
-        "KQ.m@CFFEX.TL": "30年国债主连", "KQ.m@CFFEX.TS": "2年国债主连",
-        "KQ.m@SHFE.rb":  "螺纹钢主连", "KQ.m@SHFE.au": "沪金主连",
-        "KQ.m@SHFE.ag":  "沪银主连", "KQ.m@SHFE.cu": "沪铜主连",
-        "KQ.m@SHFE.al":  "沪铝主连", "KQ.m@SHFE.zn": "沪锌主连",
-        "KQ.m@SHFE.ni":  "沪镍主连", "KQ.m@SHFE.ru": "橡胶主连",
-        "KQ.m@SHFE.bu":  "沥青主连", "KQ.m@SHFE.fu": "燃油主连",
-        "KQ.m@SHFE.sp":  "纸浆主连", "KQ.m@SHFE.hc": "热卷主连",
-        "KQ.m@SHFE.ss":  "不锈钢主连", "KQ.m@SHFE.sn": "沪锡主连",
-        "KQ.m@SHFE.pb":  "沪铅主连", "KQ.m@SHFE.wr": "线材主连",
-        "KQ.m@SHFE.ao":  "氧化铝主连", "KQ.m@SHFE.br": "丁二烯主连",
-        "KQ.m@DCE.m":    "豆粕主连", "KQ.m@DCE.y": "豆油主连",
-        "KQ.m@DCE.a":    "豆一主连", "KQ.m@DCE.b": "豆二主连",
-        "KQ.m@DCE.p":    "棕榈油主连", "KQ.m@DCE.j": "焦炭主连",
-        "KQ.m@DCE.jm":   "焦煤主连", "KQ.m@DCE.i": "铁矿石主连",
-        "KQ.m@DCE.c":    "玉米主连", "KQ.m@DCE.cs": "淀粉主连",
-        "KQ.m@DCE.l":    "塑料主连", "KQ.m@DCE.v": "PVC主连",
-        "KQ.m@DCE.pp":   "PP主连", "KQ.m@DCE.eg": "乙二醇主连",
-        "KQ.m@DCE.eb":   "苯乙烯主连", "KQ.m@DCE.pg": "LPG主连",
-        "KQ.m@DCE.fb":   "纤维板主连", "KQ.m@DCE.bb": "胶合板主连",
-        "KQ.m@DCE.rr":   "粳米主连", "KQ.m@DCE.lh": "生猪主连",
-        "KQ.m@DCE.jd":   "鸡蛋主连", "KQ.m@CZCE.TA": "PTA主连",
-        "KQ.m@CZCE.MA":  "甲醇主连", "KQ.m@CZCE.FG": "玻璃主连",
-        "KQ.m@CZCE.SA":  "纯碱主连", "KQ.m@CZCE.SR": "白糖主连",
-        "KQ.m@CZCE.CF":  "棉花主连", "KQ.m@CZCE.CY": "棉纱主连",
-        "KQ.m@CZCE.OI":  "菜油主连", "KQ.m@CZCE.RM": "菜粕主连",
-        "KQ.m@CZCE.ZC":  "动力煤主连", "KQ.m@CZCE.UR": "尿素主连",
-        "KQ.m@CZCE.PF":  "短纤主连", "KQ.m@CZCE.PK": "花生主连",
-        "KQ.m@CZCE.AP":  "苹果主连", "KQ.m@CZCE.CJ": "红枣主连",
-        "KQ.m@CZCE.SM":  "锰硅主连", "KQ.m@CZCE.SF": "硅铁主连",
-        "KQ.m@CZCE.SH":  "烧碱主连", "KQ.m@CZCE.PX": "对二甲苯主连",
-        "KQ.m@CZCE.LR":  "晚籼稻主连", "KQ.m@CZCE.RI": "早籼稻主连",
-        "KQ.m@CZCE.JR":  "粳稻主连", "KQ.m@CZCE.WH": "强麦主连",
-        "KQ.m@CZCE.PM":  "普麦主连", "KQ.m@CZCE.RS": "菜籽主连",
-        "KQ.m@INE.sc":   "原油主连", "KQ.m@INE.lu": "低硫燃油主连",
-        "KQ.m@INE.nr":   "20号胶主连", "KQ.m@INE.bc": "国际铜主连",
-        "KQ.m@INE.ec":   "集运指数主连", "KQ.m@GFEX.si": "工业硅主连",
-        "KQ.m@GFEX.lc":  "碳酸锂主连", "KQ.m@GFEX.ps": "多晶硅主连",
-        "KQD.m@SGX.CN": "A50主连",
-    }
+    """获取期货品种的中文名称（表 = 模块级 FUTURES_NAMES，供规范化表复用）"""
     if code in FUTURES_NAMES:
         return FUTURES_NAMES[code]
     # 尝试从具体合约代码中提取品种名
@@ -578,6 +672,12 @@ def _get_futures_name(code):
         if code.startswith(ex + '.'):
             return code  # 返回原始代码作为名称
     return code
+
+
+# 服务层（AppSSE）以 `CTqSdkAPI.normalize_futures_symbol` 访问类这一层元数据
+# 接口。类定义在本文件前部，而规范化函数依赖后部才定义的两张表，类体执行时
+# 函数尚不存在（写进类体会 NameError），故在模块加载末尾补挂。
+CTqSdkAPI.normalize_futures_symbol = staticmethod(normalize_futures_symbol)
 
 
 if __name__ == "__main__":

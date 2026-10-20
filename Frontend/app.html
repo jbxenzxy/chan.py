@@ -23,7 +23,11 @@
             <div class="stock-input">
                 <label>代码:</label>
                 <div class="stock-input-wrap">
-                    <input type="text" id="stock-code-input" placeholder="如 SZZS、GZMT、600519" onkeydown="onInputKeydown(event)" onfocus="clearInput();showHistory()" oninput="onInputChange()">
+                    <!-- 聚焦保留已有代码（2026-10-20 用户反馈）：原先是「聚焦即先 clearInput()
+                         再展开历史」，从图表点回输入框时代码被抹掉，
+                         想把 CFFEX.IF2409 改成 CFFEX.IF2410 只能整串重打。
+                         现在聚焦只展开历史下拉 + 有内容时亮出 × 清除按钮，文本与光标位置都不动。 -->
+                    <input type="text" id="stock-code-input" placeholder="如 600519、SZZS、CFFEX.IF2409" onkeydown="onInputKeydown(event)" onfocus="onCodeInputFocus()" oninput="onInputChange()">
                     <span class="stock-input-clear" id="input-clear" onclick="clearInput();document.getElementById('stock-code-input').focus()" style="display:none">×</span>
                 </div>
                 <button onclick="loadStock()">查询</button>

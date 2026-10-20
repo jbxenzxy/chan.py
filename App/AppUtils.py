@@ -219,7 +219,9 @@ def _get_market_code(code):
         _get_futures_code = None
     code = code.strip()
     if _get_futures_code:
-        futures_code = _get_futures_code(code.upper())
+        # 不预先 upper()：规范化在 normalize_futures_symbol 内部按「品种根
+        # 事实写法」做，外层 upper 会把 SHFE.rb 写成 SHFE.RB —— 天勤拒绝。
+        futures_code = _get_futures_code(code)
         if futures_code:
             return 'futures', futures_code
     return _get_stock_market_code(code)

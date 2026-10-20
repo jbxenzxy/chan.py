@@ -4985,9 +4985,28 @@
 
 // ══════════════════════════════════════════════════════════════════
 
-        // 判断是否为期货/期指代码
+        // ⚠️ 本表必须与后端 DataAPI/TqSdkAPI.FUTURES_ALIASES **键集一致**
+        //   （收窄到 16 品种；原为 83 条全表）。
+        //   用途：判定"用户敲的短代码是不是期货"。只改一边会出现
+        //   「本表命中 → 认作期货 → connectRealtimeInit → 后端解析不出代码」的空转。
+        //   契约测试：Trading/Test/test_p47_product_case_whitelist.py [4] 段
+        //   （逐键比对本表 ⇔ FUTURES_ALIASES，改漏即打红）。
+        //   注意：这不是"可交易清单"—— 可自动下单的只有 8 个品种，
+        //   由后端 /api/trader/product-check 判定，前端不复制白名单。
+        const FUTURES_ALIAS_KEYS = new Set(["IF","IH","IC","IM","AU","AG","CU","RB","M","P","JM","LH","TA","PTA","MA","SC","LC"]);
+
+        // 判断是否为期货/期指代码 —— **全站唯一判据**（2026-10-20 收敛）。
+        // 原先 loadStock 内另有一份内联判据，两套并存 ⇒ 「页面头判定期货、
+        // loadStock 判成股票」时直接走错链路，且内联版区分大小写。
+        // 大小写不敏感的依据：天勤 instrument_id 大小写敏感，但**用户输入**不该
+        // 被大小写刁难 —— kq.m@cffex.im / KQ.M@CFFEX.IM 都应认作期货并交后端
+        // normalize_futures_symbol 归一。旧写法把全小写输入判成股票代码，
+        // 报「代码不存在」，与真实原因（期货大小写）完全错位。
         function isFuturesCode(code) {
-            return code.includes('KQ.m@') || code.includes('KQ.i@') || code.includes('KQD.m@') || /^[A-Z]+\.[A-Z]/.test(code);
+            if (!code) return false;
+            if (/^kqd?\.(m|i)@/i.test(code)) return true;          // KQ.m@ / KQ.i@ / KQD.m@
+            if (/^[A-Za-z]+\.[A-Za-z]/.test(code)) return true;    // CFFEX.IF2409 / shfe.rb2410
+            return FUTURES_ALIAS_KEYS.has(code.toUpperCase());    // IF / pta / rb
         }
 
         // 归一化股票代码：标准写法唯一 = market(小写)+code(数字)，market 在前、无连接符。
@@ -5032,6 +5051,17 @@
             showHistory();
         };
 
+        // 输入框聚焦：**不再清空**已有代码（2026-10-20 用户反馈）。
+        // 回归背景：原先的绑定是「聚焦即先 clearInput() 再展开历史」——鼠标点进输入框的
+        //   瞬间就把代码抹掉；期货复盘常要切临近月份（CFFEX.IF2409 -> 2410），
+        //   抹掉后只能整串重打，没法只改末两位。
+        // 现语义：文本与光标都不动（光标按浏览器原生落在点击处，可直接改末两位）；
+        //   有内容时亮出 × 清除按钮供「整串重输」；历史下拉照旧展开，可直接点选切换。
+        window.onCodeInputFocus = function() {
+            toggleInputClear();
+            showHistory();
+        };
+
         window.clearInput = function() {
             const input = document.getElementById("stock-code-input");
             input.value = "";
@@ -5061,29 +5091,51 @@
             searchTimer = setTimeout(() => doSearch(val), 300);
         };
 
+        // data-code 属性转义：只需处理会破坏双引号属性的三个字符。
+        // 读回时浏览器已自动解码，dataset.code 拿到的是原值。
+        function escAttr(s) {
+            return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+        }
+
         window.onInputKeydown = function(e) {
             const el = document.getElementById("stock-history");
-            if (!el.classList.contains("show") || !searchResults.length) {
+            // 可导航项 = 带 data-code 的条目（固定指数 / 用户历史 / 搜索结果三类同构）。
+            // 2026-10-20 前的门禁是 `searchResults.length`，而 showHistory() 会把
+            // searchResults 清空（历史视图本就不经搜索）——于是历史下拉展开时方向键
+            // 直接落进「不可导航」早退分支，历史项只能用鼠标点。改为以 DOM 为准：
+            // 只要渲染出了可导航条目，键盘就该能用。
+            //
+            // data-code 是**唯一契约**：它的值就是鼠标点击时传给 selectHistory 的
+            // 那个代码。键鼠同源，不会出现「回车选的和点进去的不是同一个」。
+            const navItems = el.classList.contains("show")
+                ? el.querySelectorAll(".stock-history-item[data-code]")
+                : [];
+            if (!navItems.length) {
                 if (e.key === "Enter") loadStock();
                 return;
             }
-            const items = el.querySelectorAll(".stock-history-item");
             if (e.key === "ArrowDown") {
                 e.preventDefault();
-                selectedIndex = (selectedIndex + 1) % items.length;
-                updateSearchSelection(items);
+                selectedIndex = (selectedIndex + 1) % navItems.length;
+                updateSearchSelection(navItems);
             } else if (e.key === "ArrowUp") {
                 e.preventDefault();
-                selectedIndex = (selectedIndex - 1 + items.length) % items.length;
-                updateSearchSelection(items);
+                // -1（未导航）时向上应落到**最后一项**；写成 (i-1+len)%len 会得到
+                // len-2，是经典 off-by-one
+                selectedIndex = selectedIndex < 0
+                    ? navItems.length - 1
+                    : (selectedIndex - 1 + navItems.length) % navItems.length;
+                updateSearchSelection(navItems);
             } else if (e.key === "Enter") {
                 e.preventDefault();
-                if (selectedIndex >= 0 && selectedIndex < searchResults.length) {
-                    const item = searchResults[selectedIndex];
-                    selectHistory(item.market === 'futures' ? item.code : item.market + item.code);
-                } else {
-                    loadStock();
-                }
+                // 语义（2026-10-20 用户拍板）：**只有按过方向键才用高亮项**。
+                // selectedIndex 就是这条语义的载具 —— 搜索结果由 doSearch 预设为 0
+                // （保持「敲关键词回车选第一个」的原有手感），历史视图由 showHistory
+                // 预设为 -1，只有 ↑/↓ 能把它变成非负。所以历史下拉里「不导航直接
+                // 回车」= 加载输入框当前文字（含期货代码），不会莫名选中历史第一条。
+                const item = navItems[selectedIndex];
+                if (item) selectHistory(item.dataset.code);
+                else loadStock();
             } else if (e.key === "Escape") {
                 el.classList.remove("show");
             }
@@ -5094,6 +5146,10 @@
                 item.style.background = i === selectedIndex ? "#0f3460" : "";
                 item.style.color = i === selectedIndex ? "#e0e0e0" : "";
             });
+            // 历史列表可能长过一屏：高亮到看不见的项等于「按了没反应」。
+            // nearest = 已在视野内就不动，避免每按一下整列表跳动。
+            const cur = items[selectedIndex];
+            if (cur && cur.scrollIntoView) cur.scrollIntoView({ block: "nearest" });
         };
 
         window.doSearch = function(keyword) {
@@ -5118,9 +5174,13 @@
                         const safeMarket = item.market.replace(/'/g, "\\'").replace(/\\/g, "\\\\");
                         const fullCode = item.market === 'futures' ? safeCode : safeMarket + safeCode;
                         const displayCode = item.market === 'futures' ? item.code : item.market + item.code;
+                        // data-code 放**未做 JS 转义**的原值：键盘回车读它，鼠标点击
+                        // 走 onclick 的 fullCode（转义只服务于内联 JS 字符串），
+                        // 两者解析后必须相等 —— 由 test_frontend_smoke 的 ⑧ 段锁住
+                        const rawFullCode = item.market === 'futures' ? item.code : item.market + item.code;
                         const typeMap = {"深A":"深A","沪A":"沪A","深B":"深B","沪B":"沪B","指数":"指数","基金":"基金","场外基金":"场外基金","港股":"港股"};
                         const typeLabel = typeMap[item.type] || item.type;
-                        return `<div class="stock-history-item" data-idx="${idx}"><span onclick="selectHistory('${fullCode}')" style="flex:1;display:block">${displayCode} - ${item.name} (${item.pinyin}) <span style="color:#888;font-size:11px;margin-left:8px">${typeLabel}</span></span></div>`;
+                        return `<div class="stock-history-item" data-idx="${idx}" data-code="${escAttr(rawFullCode)}"><span onclick="selectHistory('${fullCode}')" style="flex:1;display:block">${displayCode} - ${item.name} (${item.pinyin}) <span style="color:#888;font-size:11px;margin-left:8px">${typeLabel}</span></span></div>`;
                     }).join("");
                     positionStockHistory();
                     el.classList.add("show");
@@ -5163,14 +5223,14 @@
             // 顶部固定快捷入口区（不可删除）
             let html = FIXED_INDICES.map(item => {
                 const safe = item.code.replace(/'/g, "\\'").replace(/\\/g, "\\\\");
-                return `<div class="stock-history-item"><span onclick="selectHistory('${safe}')" style="flex:1;display:block">${item.code} - ${item.name}</span></div>`;
+                return `<div class="stock-history-item" data-code="${escAttr(item.code)}"><span onclick="selectHistory('${safe}')" style="flex:1;display:block">${item.code} - ${item.name}</span></div>`;
             }).join("");
             // 用户浏览历史区（可单条删除）；首项顶部加分割线，与底部"清除全部"风格一致
             html += list.map((c, i) => {
                 const safe = c.code.replace(/'/g, "\\'").replace(/\\/g, "\\\\");
                 const label = c.name ? c.code + " - " + c.name : c.code;
                 const sepStyle = i === 0 ? 'border-top:1px solid #0f3460;' : '';
-                return `<div class="stock-history-item" style="${sepStyle}"><span onclick="selectHistory('${safe}')" style="flex:1;display:block">${label}</span><span class="stock-history-del" onclick="event.stopPropagation();removeHistory('${safe}')">&times;</span></div>`;
+                return `<div class="stock-history-item" data-code="${escAttr(c.code)}" style="${sepStyle}"><span onclick="selectHistory('${safe}')" style="flex:1;display:block">${label}</span><span class="stock-history-del" onclick="event.stopPropagation();removeHistory('${safe}')">&times;</span></div>`;
             }).join("");
             // 有用户历史时才显示"清除全部"（仅清用户历史，不影响固定项）
             if (list.length) {
@@ -5209,16 +5269,8 @@
             }
             document.getElementById("stock-history").classList.remove("show");
             document.getElementById("loading").classList.remove("hidden");
-            // ⚠️ 本表必须与后端 DataAPI/TqSdkAPI.FUTURES_ALIASES **键集一致**
-            //   （收窄到 16 品种；原为 83 条全表）。
-            //   用途：判定"用户敲的短代码是不是期货"。只改一边会出现
-            //   「本表命中 → 认作期货 → connectRealtimeInit → 后端解析不出代码」的空转。
-            //   契约测试：Trading/Test/test_p47_product_case_whitelist.py [4] 段
-            //   （逐键比对本表 ⇔ FUTURES_ALIASES，改漏即打红）。
-            //   注意：这不是"可交易清单"—— 可自动下单的只有 8 个品种，
-            //   由后端 /api/trader/product-check 判定，前端不复制白名单。
-            const FUTURES_ALIAS_KEYS = new Set(["IF","IH","IC","IM","AU","AG","CU","RB","M","P","JM","LH","TA","PTA","MA","SC","LC"]);
-            const isFuturesCode = code.includes('KQ.m@') || code.includes('KQ.i@') || code.includes('KQD.m@') || /^[A-Z]+\.[A-Z]/.test(code) || FUTURES_ALIAS_KEYS.has(code.toUpperCase());
+            // 期货判定统一走全局 isFuturesCode（含别名表与大小写不敏感）。
+            // 本处原有一份内联副本，与全局判据并存 ⇒ 两套真相；已删除。
             // 判断切换前是否为期指
             const wasFutures = chartData && chartData.meta && chartData.meta.market === 'futures';
             // 同类继承上一周期，异类使用默认周期

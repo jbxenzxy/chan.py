@@ -893,10 +893,11 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
     display_key = None
     freq_sec = None
     try:
-        # 别名解析：支持 PTA→KQ.m@CZCE.TA 等短名称
-        symbol_upper = symbol.upper()
-        if symbol_upper in CTqSdkAPI.FUTURES_ALIASES:
-            symbol = CTqSdkAPI.FUTURES_ALIASES[symbol_upper]
+        # 期货符号规范化（唯一入口）：短名 PTA→KQ.m@CZCE.TA，大小写
+        # KQ.m@CFFEX.Im→KQ.m@CFFEX.IM。天勤 instrument_id **大小写敏感**，
+        # 且各所品种根大小写不统一（CFFEX.IF 大写 / SHFE.rb 小写），
+        # 所以不能在这里简单 upper()——那会把能用的改成不能用的。
+        symbol = CTqSdkAPI.normalize_futures_symbol(symbol) or symbol
 
         freq_sec = CTqSdkAPI.FREQ_SEC_MAP.get(freq, 15)
         freq_label = freq
@@ -1347,10 +1348,8 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
         log.info(f"\n[{display_key}] ═══ SSE双窗口连接建立 ═══")
 
     try:
-        # 别名解析
-        symbol_upper = symbol.upper()
-        if symbol_upper in CTqSdkAPI.FUTURES_ALIASES:
-            symbol = CTqSdkAPI.FUTURES_ALIASES[symbol_upper]
+        # 期货符号规范化（与单窗同一入口，见 _sse_single_gen 处说明）
+        symbol = CTqSdkAPI.normalize_futures_symbol(symbol) or symbol
 
         src.connect()
         name = _get_futures_name(symbol)
@@ -2482,10 +2481,8 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0", end_date=None, s
     """
     import time
 
-    # 别名解析
-    symbol_upper = symbol.upper()
-    if symbol_upper in CTqSdkAPI.FUTURES_ALIASES:
-        symbol = CTqSdkAPI.FUTURES_ALIASES[symbol_upper]
+    # 期货符号规范化（与单窗/双窗同一入口）
+    symbol = CTqSdkAPI.normalize_futures_symbol(symbol) or symbol
 
     freq_sec = CTqSdkAPI.FREQ_SEC_MAP.get(freq, 15)
     freq_label = freq
