@@ -385,6 +385,14 @@ COMPONENTS = [
     # 70·30 互换，以及「纵轴中间档恒 50（不是 MACD 的零线 0）」。
     ("bottom_slots",
      [sys.executable, os.path.join("Test", "test_bottom_slots.py")]),
+    # MACD 金叉/死叉箭头（2026-10-20）：DIF/DEA 交叉处画箭头 —— 金叉红向上、
+    #   死叉绿向下（颜色取 COLORS.macdUp/macdDown，与红绿柱同一个常量）。
+    #   判据三层：① 源码契约（`!valOf` 闸拦住类MACD、无颜色字面量、等于不算）；
+    #   ② node 抽真实函数跑几何（箭头数==交叉数 / 方向 / 柱心对齐 / 越界夹回 /
+    #   翻转视图只镜像锚点不翻朝向）；③ 真渲染记 fill() 序列反查交叉根
+    #   （浏览器不在位时降级 SKIP）。
+    ("macd_cross_arrows",
+     [sys.executable, os.path.join("Test", "test_macd_cross_arrows.py")]),
     # 指标区十字线读数白框（2026-10-16 需求，用户指定）：把 K 线区已有的「横虚线
     #   右端坐标轴白框读数」补齐到下方指标槽位 —— 鼠标落在指标绘图窗内时白框贴在
     #   mouseY 上，显示该 y 反算出的指标值（vol 柱状 / vol 类MACD / MACD / RSI

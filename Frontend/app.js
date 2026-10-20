@@ -2091,6 +2091,72 @@
             ctx.stroke();
             ctx.strokeStyle = "rgba(255,255,255,0.2)"; ctx.lineWidth = 1;
             ctx.beginPath(); ctx.moveTo(macdArea.x, zeroY); ctx.lineTo(macdArea.x + macdArea.w, zeroY); ctx.stroke();
+            // ── 金叉 / 死叉箭头（只画价格MACD）────────────────────────────
+            // 类MACD（drawVolumeMacd）复用本函数但传了 valOf：成交额/量的交叉不是
+            // 价格信号，用 !valOf 拦住，副图里的交叉不会顶进 MACD 槽。
+            if (!valOf) drawMacdCrossArrows(klines, macdArea, macdToY, barStep, subPixelOffset, getVals);
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // MACD 金叉 / 死叉箭头
+        // ═══════════════════════════════════════════════════════════════
+        // 判定口径：
+        //   金叉 = 本根 dif > dea（等于不算）且 前一根 dif <= dea
+        //   死叉 = 本根 dif < dea（等于不算）且 前一根 dif >= dea
+        // 用户口径里的「等于不算」落在**本根**的严格不等号上：本根 dif == dea 时
+        // 既不是金叉也不是死叉。前一根相等按 CROSS() 惯例并入旧侧（贴着零轴走一串
+        // 等值后一旦分开仍记一次交叉；否则横盘贴线段会整段漏信号）。首根无前值不判。
+        // 颜色取 COLORS.macdUp / COLORS.macdDown —— 与红/绿柱**同一个常量**，
+        // 不另写字面量：改柱色时箭头自动跟随，也不会出现"两套红"。
+        // 方向固定为语义方向（金叉恒朝上、死叉恒朝下）：翻转视图只翻 Y 轴，交叉的
+        // 多空含义不随之翻转；落点仍由调用方传进来的 macdToY 算，故自动跟随翻转。
+        // 几何：尾巴落在交叉点（dif/dea 均值），箭头朝语义方向生长；尖端越出绘图窗
+        // 时整体夹回窗内 —— 宁可尖端离交叉点几像素，也不许画到标签行或相邻槽上。
+        const MACD_CROSS_H = 10;   // 箭头总高（尾 → 尖，px）
+        const MACD_CROSS_HW = 4;   // 箭头头部半宽（px）
+        function drawMacdCrossArrows(klines, area, macdToY, barStep, subPixelOffset, valsOf) {
+            const n = klines ? klines.length : 0;
+            if (n < 2 || !(area.h > MACD_CROSS_H + 2)) return;
+            const at = function (i) {
+                const v = (valsOf && valsOf(klines[i])) || ZERO_MACD_VALS;
+                const dif = v.dif, dea = v.dea;
+                // 只认有限数值：缺字段 / null / NaN 一律不判。
+                // （NaN 的比较恒 false，会静默吞掉交叉；null 若走 Number() 会被当成
+                //   0 这个**合法值**参与比较 —— 两条都会伪造或漏掉信号。）
+                return (typeof dif === 'number' && typeof dea === 'number'
+                        && isFinite(dif) && isFinite(dea)) ? { dif: dif, dea: dea } : null;
+            };
+            const headH = Math.round(MACD_CROSS_H * 0.6);    // 箭头头部高（其余为杆）
+            const stemHW = 1;                                // 杆半宽
+            const lo = area.y + 1, hi = area.y + area.h - 1; // 可视窗口（留 1px 余量）
+            let prev = at(0);
+            for (let i = 1; i < n; i++) {
+                const cur = at(i);
+                if (!prev || !cur) { prev = cur; continue; }   // 缺值/NaN 不判，也不中断后续
+                const golden = cur.dif > cur.dea && prev.dif <= prev.dea;
+                const death = cur.dif < cur.dea && prev.dif >= prev.dea;
+                prev = cur;
+                if (!golden && !death) continue;
+                // 交叉点高度 = 两根线交点：同根已一上一下，取均值即交点的线性近似。
+                let yTail = macdToY((cur.dif + cur.dea) / 2);
+                const dir = golden ? -1 : 1;                   // −1 = 朝上（屏幕），+1 = 朝下
+                let yTip = yTail + dir * MACD_CROSS_H;
+                if (dir < 0 && yTip < lo) { yTail += lo - yTip; yTip = lo; }
+                if (dir > 0 && yTip > hi) { yTail -= yTip - hi; yTip = hi; }
+                const x = area.x + barStep * i + barStep / 2 - subPixelOffset;
+                const yOf = function (off) { return yTail + dir * off; };  // off: 0 = 尾 … H = 尖
+                ctx.fillStyle = golden ? COLORS.macdUp : COLORS.macdDown;
+                ctx.beginPath();
+                ctx.moveTo(x, yOf(MACD_CROSS_H));
+                ctx.lineTo(x - MACD_CROSS_HW, yOf(MACD_CROSS_H - headH));
+                ctx.lineTo(x - stemHW, yOf(MACD_CROSS_H - headH));
+                ctx.lineTo(x - stemHW, yOf(0));
+                ctx.lineTo(x + stemHW, yOf(0));
+                ctx.lineTo(x + stemHW, yOf(MACD_CROSS_H - headH));
+                ctx.lineTo(x + MACD_CROSS_HW, yOf(MACD_CROSS_H - headH));
+                ctx.closePath();
+                ctx.fill();
+            }
         }
 
         // 成交额/量 的类MACD绘制：画法完全复用 drawMacd，只换取值来源
