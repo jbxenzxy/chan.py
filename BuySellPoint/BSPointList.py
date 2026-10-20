@@ -1604,14 +1604,14 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           zs_high=pivot_a.high, zs_low=pivot_a.low)
             return
 
-        # ── ⑴ 笔N 整笔 DIF 是否全在趋势侧（口径对齐 _cal_bs0point_3rd 的 ⑴）──
+        # 笔N 整笔 DIF 是否全在趋势侧（口径对齐 _cal_bs0point_3rd 的 ⑴）
         # 三买（向下笔N）：整笔 DIF 全在 0 轴上（等于0也算）
         # 三卖（向上笔N）：整笔 DIF 全在 0 轴下（等于0也算）
         is_buy = stroke_n.is_down()
         dif_positive = is_buy
         n_dif_ok = self._dif_all_same_side(stroke_n, dif_positive)
 
-        # ── ⑵ MACD DIF 回抽0轴比例 ──
+        # MACD DIF 回抽0轴比例
         # 笔N 的分型极值 K 线：向下笔 起点=顶分型极值、终点=底分型极值；向上笔反之
         # 三买（笔N 向下）：A = 底分型极值 DIF（到0轴距离）；B = 顶分型极值 DIF 绝对值（到0轴距离）
         # 三卖（笔N 向上）：A = 顶分型极值 DIF 绝对值（到0轴距离）；B = 底分型极值 DIF 绝对值（到0轴距离）
@@ -1640,13 +1640,10 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           threshold=round(config.retrace_zero_axis_ratio, 4))
             return
 
-        # ── ⑶ 笔N-1 极值相对笔N-3 不推进（避开趋势末段）──
-        # 三买（笔N 向下）：向上笔N-1 底分型极值 <= 向上笔N-3 底分型极值
-        # 三卖（笔N 向上）：向下笔N-1 顶分型极值 >= 向下笔N-3 顶分型极值
-        # 用意：N-3/N-2/N-1 若走成低点不断抬高（多）或高点不断降低（空）的推进形态，
-        #       笔N 之后接的那一笔恰是该形态的末笔，容易在末端介入；
-        #       拦住后留下的三买/三卖，后续才是新一轮推进的首笔。
-        # 无条件生效（2026-10-20 用户裁定：不做开关）；笔数不足（idx-3 越界）时不拦
+        # 笔N-1 极值相对笔N-3 不推进(避开趋势末段)
+        # 三买(笔N 向下)：向上笔N-1 底分型极值 <= 向上笔N-3 底分型极值
+        # 三卖(笔N 向上)：向下笔N-1 顶分型极值 >= 向下笔N-3 顶分型极值
+        # N-3/N-2/N-1 若走成低点不断抬高(多) 或 高点不断降低(空)的推进形态，笔N后介入的恰是ABCDE形态的末端E段
         if stroke_n.idx >= 3:
             stroke_nm3 = bi_list[stroke_n.idx - 3]  # 前第三笔N-3
             if is_buy:
@@ -1656,7 +1653,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                 nm1_ext, nm3_ext = stroke_nm1._high(), stroke_nm3._high()
                 trend_pushed = nm1_ext < nm3_ext
             if trend_pushed:
-                self._dbg_bs3('cal_bs3point', '跳过: 笔N-1极值较笔N-3沿趋势方向推进',
+                self._dbg_bs3('cal_bs3point', '跳过: 笔N-1极值较笔N-3沿趋势方向推进，容易做在ABCDE的末端E段',
                               stroke_n_idx=stroke_n.idx, is_buy=is_buy,
                               n_1_idx=stroke_nm1.idx, n_1_ext=round(nm1_ext, 2),
                               n_3_idx=stroke_nm3.idx, n_3_ext=round(nm3_ext, 2))
