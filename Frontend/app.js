@@ -5273,15 +5273,23 @@
             // 本处原有一份内联副本，与全局判据并存 ⇒ 两套真相；已删除。
             // 判断切换前是否为期指
             const wasFutures = chartData && chartData.meta && chartData.meta.market === 'futures';
+            // ⚠️ 目标代码的归属只算一次，且**必须带实参调用**。
+            //   isFuturesCode 是函数（不是布尔常量）：漏写 (code) 拿到的是函数对象，
+            //   在条件里**恒真** —— 所有代码都被判成期货、全部走期货 SSE，
+            //   股票/指数被送进天勤并报 non-existent instrument（2026-10-20 实测：
+            //   期货页点固定入口「上证指数」→ sh000001 走 /api/futures/read/stream）。
+            //   test_frontend_smoke ⑨ 段（跑真实 loadStock）与
+            //   test_futures_symbol_case [10]（静态：裸引用）双重锁住。
+            const targetIsFutures = isFuturesCode(code);
             // 同类继承上一周期，异类使用默认周期
             let fetchFreq;
-            if (wasFutures && isFuturesCode) {
+            if (wasFutures && targetIsFutures) {
                 // 期指C → 期指D：保持C的周期
                 fetchFreq = lastFuturesFreq;
-            } else if (!wasFutures && !isFuturesCode) {
+            } else if (!wasFutures && !targetIsFutures) {
                 // 股票A → 股票B：保持A的周期
                 fetchFreq = lastStockFreq;
-            } else if (wasFutures && !isFuturesCode) {
+            } else if (wasFutures && !targetIsFutures) {
                 // 期指 → 股票：默认日K，重置为单窗口，同时彻底清理所有期货数据
                 disconnectRealtime();
                 fetch("/api/futures/cleanup", { method: "POST" }).catch(() => {});
@@ -5344,7 +5352,7 @@
             }
             currentFreq = fetchFreq;
             updateDateInputType();
-            if (isFuturesCode) {
+            if (targetIsFutures) {
                 updateFreqButtonStates(true); // 期货：禁用 d/w，启用 1m/15s
                 // 「切换到建议合约」：目标是**那一天**的历史，所以直接以该日为右端加载
                 // （方式C：L = 该日往前 N 根）。若先方式A 冷启动，已交割合约的窗口落在
@@ -5359,7 +5367,7 @@
                 const _resetSel = !!_pend;
                 if (isDualWindow) {
                     // 双窗口换期货合约：走双窗 SSE，两窗同步重连
-                    // （wasFutures→isFuturesCode 路径保持周期不变，dualSubFreq 仍然有效；
+                    // （wasFutures→targetIsFutures 路径保持周期不变，dualSubFreq 仍然有效；
                     //   空/失效时按映射回退，期货周期全为日内，getDualSubFreq 必有解或回退 1m）
                     const subFreq = dualSubFreq || getDualSubFreq(fetchFreq) || '1m';
                     connectRealtimeDual(code, fetchFreq, subFreq, _endForLoad, "", "", _resetSel);

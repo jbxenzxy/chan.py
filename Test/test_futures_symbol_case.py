@@ -21,7 +21,11 @@
   [6] `_get_futures_code` 与 `normalize_futures_symbol` 同源（委托，不是第二份实现）；
   [7] `AppUtils._get_market_code` 不再预先 upper()（会把品种根写坏）；
   [8] AppSSE 三处入口统一走同一函数，无残留的 `symbol_upper` 别名解析副本；
-  [9] 前端 `isFuturesCode` 大小写不敏感、且全站只剩一处定义（用 node 跑真实函数）。
+  [9] 前端 `isFuturesCode` 大小写不敏感、且全站只剩一处定义（用 node 跑真实函数）；
+  [10] **静态**：`isFuturesCode` 只允许被调用 —— 裸引用得到函数对象、在条件里恒真
+       （2026-10-20 实测后果：所有代码都走期货 SSE，`sh000001` 被送进天勤报
+        non-existent instrument）；
+  [11] 期货 SSE 入口对股票/指数代码回可读错误，**不连天勤**（省 1.2s + websocket）。
 
 跑法：python Test/test_futures_symbol_case.py
 """
@@ -258,6 +262,154 @@ def test_frontend_is_futures_code():
         check("isFuturesCode(%r)" % k, got.get(k), want)
 
 
+
+def _strip_js_comments(src):
+    """去掉 JS 注释（保留换行，行号仍对得上）；字符串与正则字面量原样保留。
+
+    必须识别正则字面量：app.js 里有 `replace(/'/g, ...)`，只按引号配对的朴素
+    扫描会把它当成字符串开头，从此引号状态全乱（后续注释都剥不掉）。
+    """
+    out = []
+    i, n = 0, len(src)
+    quote = None
+    last_sig = ""      # 上一个非空白字符，用来判 `/` 是除号还是正则开头
+    while i < n:
+        c = src[i]
+        if quote:
+            out.append(c)
+            if c == "\\" and i + 1 < n:
+                out.append(src[i + 1])
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+            last_sig = c
+            i += 1
+            continue
+        if c in "\"'`":
+            quote = c
+            out.append(c)
+            last_sig = c
+            i += 1
+            continue
+        if c == "/" and i + 1 < n and src[i + 1] == "/":
+            while i < n and src[i] not in "\r\n":
+                i += 1
+            continue
+        if c == "/" and i + 1 < n and src[i + 1] == "*":
+            i += 2
+            while i + 1 < n and not (src[i] == "*" and src[i + 1] == "/"):
+                if src[i] == "\n":
+                    out.append("\n")
+                i += 1
+            i += 2
+            continue
+        if c == "/" and (last_sig == "" or last_sig in "(,=:[!&|?{};+-*%<>~^"):
+            j = i + 1
+            in_class = False
+            while j < n:
+                ch = src[j]
+                if ch == "\\":
+                    j += 2
+                    continue
+                if ch == "[":
+                    in_class = True
+                elif ch == "]":
+                    in_class = False
+                elif ch == "/" and not in_class:
+                    j += 1
+                    break
+                elif ch == "\n":
+                    break
+                j += 1
+            out.append(src[i:j])
+            last_sig = "/"
+            i = j
+            continue
+        out.append(c)
+        if not c.isspace():
+            last_sig = c
+        i += 1
+    return "".join(out)
+
+
+def test_frontend_no_bare_reference():
+    """[10] 前端 isFuturesCode 只能被**调用**，不得当布尔用（静态判据）。"""
+    print("\n[10] 前端 isFuturesCode 无裸引用")
+    with open(APP_JS, encoding="utf-8") as f:
+        raw = f.read()
+    src = _strip_js_comments(raw)
+    bad = []
+    for m in re.finditer(r"\bisFuturesCode\b", src):
+        pos = m.start()
+        before = src[max(0, pos - 40):pos]
+        if re.search(r"\bfunction\s+$", before):
+            continue                      # 函数定义本身
+        rest = src[pos + len("isFuturesCode"):]
+        if rest.lstrip().startswith("("):
+            continue                      # 正常调用
+        line = src.count("\n", 0, pos) + 1
+        bad.append("L%d: %s" % (line, src[pos:pos + 30].split("\n")[0]))
+    check_true("全部引用都是调用（无「函数对象当布尔」写法）", not bad,
+               "裸引用 %d 处：%s" % (len(bad), bad[:4]))
+    check_true("loadStock 的判据只算一次",
+               src.count("const targetIsFutures = isFuturesCode(code);") == 1,
+               "实际 %d 处" % src.count("const targetIsFutures = isFuturesCode(code);"))
+
+
+class _NoConnectSource(object):
+    """假数据源：只用来证明「股票代码不会走到 src.connect()」。"""
+
+    def connect(self):
+        raise AssertionError("股票代码不应连天勤")
+
+    def close(self):
+        pass
+
+    def close_api(self):
+        pass
+
+    def cleanup_records(self, key):
+        pass
+
+
+def _first_frame(gen):
+    try:
+        return next(gen)
+    except StopIteration:
+        return b""
+    except Exception as e:      # 变异（守卫被删）时假源会抛：转成可读的失败信息
+        return ("EXC: %s: %s" % (type(e).__name__, e)).encode("utf-8")
+
+
+def test_sse_rejects_non_futures():
+    """[11] 期货 SSE 入口：股票/指数代码回可读错误，且**不连天勤**。"""
+    print("\n[11] 期货 SSE 拒绝股票代码")
+    from App.AppSSE import _non_futures_reject, _sse_single_gen, _sse_dual_gen
+
+    for code in ("sh000001", "sz399001", "SZ399001", "bj430047", "hk00700"):
+        check_true("拒绝 %s" % code, bool(_non_futures_reject(code)), "未拦下")
+    for code in ("KQ.m@CFFEX.IM", "CFFEX.IF2409", "IF", "pta", "KQD.M@SGX.CN", ""):
+        check_true("放行 %r" % code, _non_futures_reject(code) is None,
+                   "被误拦：%r" % (_non_futures_reject(code),))
+
+    gen = _sse_single_gen("sh000001", "5m", source=_NoConnectSource())
+    frame = _first_frame(gen)
+    text = frame.decode("utf-8") if isinstance(frame, bytes) else str(frame)
+    check_true("单窗回 init 错误帧", text.startswith("event: init"), text[:80])
+    check_true("单窗错误文案点明股票接口", "/api/stocks/sh000001/analyze" in text, text[:200])
+    try:
+        next(gen)
+        _more = True
+    except StopIteration:
+        _more = False
+    check_true("单窗发完错误帧即结束（不进入实时循环）", not _more, "还有后续帧")
+
+    frame2 = _first_frame(_sse_dual_gen("sh000001", "5m", "1m", source=_NoConnectSource()))
+    text2 = frame2.decode("utf-8") if isinstance(frame2, bytes) else str(frame2)
+    check_true("双窗回 init 错误帧", text2.startswith("event: init"), text2[:80])
+
+
 def main():
     test_canon_table()
     test_user_reported_input()
@@ -268,6 +420,8 @@ def main():
     test_market_code_no_upper()
     test_appsse_single_entry()
     test_frontend_is_futures_code()
+    test_frontend_no_bare_reference()
+    test_sse_rejects_non_futures()
     print()
     if failures:
         print("===== 期货符号大小写规范化: 失败 %d 项 =====" % len(failures))

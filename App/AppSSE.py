@@ -61,6 +61,28 @@ log = get_logger(__name__)
 # 区域 1 · SSE 实时流
 # ═══════════════════════════════════════════════════════════════════════
 
+# 股票/指数代码形态：sh/sz/bj + 6 位数字、hk + 5 位数字。
+# 判据刻意只取「像股票」这一窄形态，**不用**「必须在 FUTURES_NAMES 表里」——
+# 后者会把天勤支持、但本项目两张表尚未收录的合约一起误拒（把能用的挡掉）。
+# 期货 instrument_id 恒为 `<所>.<品种根><月份>` 或 `KQ.m@<所>.<品种根>`，不会撞上。
+_NON_FUTURES_CODE_RE = re.compile(r"^(?:sh|sz|bj)\d{6}$|^hk\d{5}$", re.IGNORECASE)
+
+
+def _non_futures_reject(symbol):
+    """股票/指数代码走期货实时流 → 返回可执行提示；期货代码返回 None。
+
+    背景（2026-10-20 用户实测）：期货页点固定入口「上证指数」时前端判定出错，
+    `sh000001` 被送进本端点 —— 先白连一次天勤（1.2s + websocket），再由
+    tqsdk 抛 `contains non-existent instrument: sh000001`（GraphQL 原文，
+    用户读不出「这是走错端点了」）。前端判定已在同一轮修好；本判据守住**直接
+    调 API** 的入口（Trading/Tool 脚本、陈旧页面、手敲 URL），并省掉那次连接。
+    """
+    if _NON_FUTURES_CODE_RE.match((symbol or "").strip()):
+        return ("%s 是股票/指数代码，期货实时流只接受期货合约（如 "
+                "KQ.m@CFFEX.IM、CFFEX.IF2409）；股票请改用 "
+                "/api/stocks/%s/analyze" % (symbol, symbol))
+    return None
+
 # 期货窗口取数的公共参数（对齐股票 A/B/C 语义；见 _futures_window_fetch_bars）
 _TQ_MAX_BARS = 10000      # 天勤单序列上限（官方 docstring「每个序列最大支持请求 10000 个数据」）
 _BAR_ESTIMATE_MARGIN = 50 # 墙钟估算根数的固定余量（覆盖会话边界的不完整K线/估算误差）
@@ -904,6 +926,13 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
         freq_cn = CTqSdkAPI.FREQ_LABEL_CN.get(freq_label, freq_label)
         display_key = f"{symbol}:{freq_cn}"
 
+        # 股票/指数代码：直接回错误帧，**不连天勤**（省 1.2s + websocket）。
+        _nonfut = _non_futures_reject(symbol)
+        if _nonfut:
+            log.info(f"[{display_key}] 拒绝非期货代码: {_nonfut}")
+            yield _sse_frame("init", {"error": _nonfut, "symbol": symbol})
+            return
+
         # 选点继承（2026-10-03 二期，对齐股票复盘窗口 X 语义）：
         #   · 复盘（end_time）继承选点：显式 start_time 优先生效（前端带
         #     当前窗口首根 = 窗口左边界 L），缺失时从 CSV 恢复（F5 刷新后
@@ -1350,6 +1379,13 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
     try:
         # 期货符号规范化（与单窗同一入口，见 _sse_single_gen 处说明）
         symbol = CTqSdkAPI.normalize_futures_symbol(symbol) or symbol
+
+        # 股票/指数代码：回错误帧，不连天勤（与单窗同判据）
+        _nonfut = _non_futures_reject(symbol)
+        if _nonfut:
+            log.info(f"[{display_key}] 拒绝非期货代码: {_nonfut}")
+            yield _sse_frame("init", {"error": _nonfut, "symbol": symbol})
+            return
 
         src.connect()
         name = _get_futures_name(symbol)

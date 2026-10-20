@@ -603,6 +603,249 @@ def test_history_dropdown_keyboard(failures):
           " / 回绕与滚动跟随均正确")
 
 
+def test_load_stock_dispatch(failures):
+    """⑨ 取数分流：loadStock 必须把股票送到 /api/stocks/*，把期货送到 SSE
+
+    需求背景（2026-10-20 用户实测）：期货页点固定入口「上证指数」，
+    `sh000001` 被送进 `/api/futures/read/stream` —— 先白连一次天勤（1.2s +
+    websocket），再由 tqsdk 抛
+    `contains non-existent instrument: sh000001`（GraphQL 原文，读不出"走错端点"）。
+
+    根因（可达路径，代码证据）：上一轮把 loadStock 内的内联 `const isFuturesCode = <布尔>`
+    收敛到全局函数时，**四处引用没有跟着加实参**：
+        if (wasFutures && isFuturesCode)          // 函数对象恒真
+        } else if (!wasFutures && !isFuturesCode)  // 恒假
+        } else if (wasFutures && !isFuturesCode)   // 恒假
+        if (isFuturesCode) {                        // 恒真 ⇒ 所有代码都走期货 SSE
+    静态断言（"只有一处 function 定义"）挡不住这类"当布尔用了"的回归。
+
+    做法：把 app.js 里**真实的** `FUTURES_ALIAS_KEYS` / `isFuturesCode` /
+    `loadStock` 三段源码丢进 node，桩掉 DOM 与所有副作用函数，跑四条分流序列，
+    断言「谁调用了、用什么周期」：
+      T1 股票→股票：/api/stocks/...?freq=<lastStockFreq>，不连期货 SSE；
+      T2 期货→股票：先 POST /api/futures/cleanup，再 /api/stocks/...?freq=d；
+      T3 股票→期货：connectRealtimeInit(freq='5m')，不请求股票接口；
+      T4 期货→期货：connectRealtimeInit(freq=<lastFuturesFreq>，继承不重置)。
+    判别力：把任一处改回裸引用 `isFuturesCode`，T1/T2 立刻红（全部走期货 SSE）。
+    """
+    if not os.path.exists(APP_JS):
+        failures.append("⑨ app.js 缺失")
+        print("[FAIL] ⑨ app.js 缺失")
+        return
+    with open(APP_JS, encoding="utf-8") as f:
+        js = f.read()
+
+    node = shutil.which("node")
+    if not node:
+        print("[SKIP] ⑨ node 不在位，分流行为层跳过（② 已单独判 node 缺失）")
+        return
+
+    def grab_fn(name):
+        start = js.find("function %s(code)" % name)
+        if start < 0:
+            return None
+        i = js.find("{", start)
+        depth, j = 0, i
+        while j < len(js):
+            if js[j] == "{":
+                depth += 1
+            elif js[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    return js[start:j + 1]
+            j += 1
+        return None
+
+    def grab_window(name):
+        start = js.find("window.%s = function" % name)
+        if start < 0:
+            return None
+        i = js.find("{", start)
+        depth, j = 0, i
+        while j < len(js):
+            if js[j] == "{":
+                depth += 1
+            elif js[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    return js[start:j + 1] + ";"
+            j += 1
+        return None
+
+    alias_start = js.find("const FUTURES_ALIAS_KEYS = new Set(")
+    alias_end = js.find(";", alias_start)
+    need = {
+        "FUTURES_ALIAS_KEYS": js[alias_start:alias_end + 1] if alias_start >= 0 else None,
+        "isFuturesCode": grab_fn("isFuturesCode"),
+        "loadStock": grab_window("loadStock"),
+    }
+    for k, v in need.items():
+        if not v:
+            failures.append("⑨ app.js 抽不到 %s（测试与实现的锚点漂移）" % k)
+            print("[FAIL] ⑨ 抽不到 " + k)
+            return
+
+    harness = "\n".join([
+        "// ── 桩环境：只保留 loadStock 用到的全局，副作用全部记账 ──",
+        "var calls = [];",
+        "function rec() { calls.push(Array.prototype.slice.call(arguments)); }",
+        "var els = {};",
+        "function getEl(id) {",
+        "    if (!els[id]) { els[id] = { id: id, value: '', style: {},",
+        "        classList: { add: function () {}, remove: function () {},",
+        "                     toggle: function () {}, contains: function () { return false; } },",
+        "        remove: function () {}, appendChild: function () {} }; }",
+        "    return els[id];",
+        "}",
+        "var document = { getElementById: getEl };",
+        "var window = globalThis;",
+        "var chartData = null, autoOrderRunning = false, isDualWindow = false;",
+        "var _pendingFuturesReplay = null, _rangeSelect = { mode: 'IDLE' };",
+        "var lastFuturesFreq = '30m', lastStockFreq = '30m', currentFreq = 'd';",
+        "var dualSubFreq = '', dualSubData = null, dualHighlightRange = null, dualRedRange = null;",
+        "var dualNewZsData = null, dualShowNewZs = false, dualNewZsLeftDate = '', dualNewZsRightDate = '';",
+        "var activeDualWindow = 'main';",
+        "var canvas = null, mainCanvas = { id: 'main' }, ctx = null, mainCtx = { id: 'ctx' };",
+        "function _tpslReset() { rec('tpslReset'); }",
+        "function showAlert(m) { rec('alert', m); }",
+        "function disconnectRealtime() { rec('disconnect'); }",
+        "function resizeCanvas() { rec('resize'); }",
+        "function updateDateInputType() { rec('dateType'); }",
+        "function updateFreqButtonStates(isF) { rec('freqButtons', isF); }",
+        "function getDualSubFreq(f) { return null; }",
+        "function isValidStockDualPair(a, b) { return false; }",
+        "function _bumpChartActionSeq() { return 1; }",
+        "function _isChartActionStale(s) { return false; }",
+        "function isFuturesMode() {",
+        "    return !!(chartData && chartData.meta && chartData.meta.market === 'futures');",
+        "}",
+        "function connectRealtimeInit(sym, freq, st, et, rs) {",
+        "    rec('futuresInit', sym, freq, st || '', et || '', !!rs);",
+        "}",
+        "function connectRealtimeDual(sym, mf, sf, et) {",
+        "    rec('futuresDual', sym, mf, sf, et || '');",
+        "}",
+        "function fetch(url, opt) {",
+        "    rec('fetch', url, (opt && opt.method) ? opt.method : 'GET');",
+        "    // 不执行任何回调：真实响应链（.then 里的 DOM 操作）不在本测试范围内，",
+        "    // 但必须可链式调用，否则 loadStock 在 fetch(...) 处就抛错。",
+        "    var t = { then: function () { return t; }, catch: function () { return t; } };",
+        "    return t;",
+        "}",
+    ] + [need["FUTURES_ALIAS_KEYS"], need["isFuturesCode"], need["loadStock"]] + [
+        "",
+        "function reset(nextChart, code) {",
+        "    calls = [];",
+        "    chartData = nextChart;",
+        "    getEl('stock-code-input').value = code;",
+        "    isDualWindow = false;",
+        "    dualSubFreq = '';",
+        "    currentFreq = 'd';",
+        "}",
+        "function run(nextChart, code) {",
+        "    reset(nextChart, code);",
+        "    loadStock();",
+        "    return calls.slice();",
+        "}",
+        "var out = {};",
+        "out.t1 = run({ meta: { market: 'stock', symbol: 'sh600519' } }, 'sh000001');",
+        "out.t2 = run({ meta: { market: 'futures', symbol: 'KQ.m@CFFEX.IM' } }, 'sh000001');",
+        "out.t3 = run(null, 'KQ.m@CFFEX.IM');",
+        "out.t4 = run({ meta: { market: 'futures', symbol: 'KQ.m@CFFEX.IF' } }, 'CFFEX.IF2410');",
+        "console.log(JSON.stringify(out));",
+    ]) + "\n"
+
+    fd, jf = tempfile.mkstemp(suffix=".js", prefix="load_dispatch_")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            f.write(harness)
+        proc = subprocess.run([node, jf], capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=60)
+        if proc.returncode != 0:
+            failures.append("⑨ node 执行 loadStock harness 失败: "
+                            + (proc.stderr or proc.stdout)[:300])
+            print("[FAIL] ⑨ node 执行失败: " + (proc.stderr or proc.stdout)[:200])
+            return
+        lines = (proc.stdout or "").strip().splitlines()
+        res = json.loads(lines[-1]) if lines else {}
+    finally:
+        try:
+            os.unlink(jf)
+        except OSError:
+            pass
+
+    def kinds(calls):
+        return [c[0] for c in calls]
+
+    def first(calls, kind):
+        for c in calls:
+            if c[0] == kind:
+                return c
+        return None
+
+    def bad(msg):
+        failures.append(msg)
+        print("[FAIL] " + msg)
+
+    # T1 股票 → 股票
+    t1 = res.get("t1") or []
+    f1 = first(t1, "fetch")
+    if first(t1, "futuresInit") or first(t1, "futuresDual"):
+        bad("⑨ T1 股票代码却走了期货 SSE（isFuturesCode 未带实参 ⇒ 函数对象恒真）")
+        return
+    if not f1 or "/api/stocks/sh000001/analyze" not in f1[1]:
+        bad("⑨ T1 未请求股票接口，实际调用 %r" % (kinds(t1),))
+        return
+    if "freq=30m" not in f1[1]:
+        bad("⑨ T1 股票→股票应继承 lastStockFreq(30m)，实际 %r" % f1[1])
+        return
+    if (first(t1, "freqButtons") or [None, None])[1] is not False:
+        bad("⑨ T1 股票页周期按钮未按股票态刷新")
+        return
+
+    # T2 期货 → 股票
+    t2 = res.get("t2") or []
+    if first(t2, "futuresInit") or first(t2, "futuresDual"):
+        bad("⑨ T2 期货页切股票仍走期货 SSE（切市场清理分支未命中）")
+        return
+    cleanup = [c for c in t2 if c[0] == "fetch" and "/api/futures/cleanup" in c[1]]
+    if not cleanup or cleanup[0][2] != "POST":
+        bad("⑨ T2 期货→股票未 POST /api/futures/cleanup，实际 %r" % (kinds(t2),))
+        return
+    f2 = [c for c in t2 if c[0] == "fetch" and "/api/stocks/" in c[1]]
+    if not f2 or "freq=d" not in f2[0][1]:
+        bad("⑨ T2 期货→股票应重置为日线（freq=d），实际 %r" % (f2[0][1] if f2 else None))
+        return
+    if first(t2, "disconnect"):
+        pass  # 断流是清理的一部分，不单独断言
+
+    # T3 股票 → 期货
+    t3 = res.get("t3") or []
+    if [c for c in t3 if c[0] == "fetch" and "/api/stocks/" in c[1]]:
+        bad("⑨ T3 期货代码却请求了股票接口（大小写/别名判据失效）")
+        return
+    i3 = first(t3, "futuresInit")
+    if not i3:
+        bad("⑨ T3 期货代码未连期货 SSE，实际调用 %r" % (kinds(t3),))
+        return
+    if i3[1] != "KQ.m@CFFEX.IM" or i3[2] != "5m":
+        bad("⑨ T3 股票→期货应默认 5m，实际 %r" % (i3,))
+        return
+    if (first(t3, "freqButtons") or [None, None])[1] is not True:
+        bad("⑨ T3 期货页周期按钮未按期货态刷新（1m/15s 会不可用）")
+        return
+
+    # T4 期货 → 期货：周期继承
+    t4 = res.get("t4") or []
+    i4 = first(t4, "futuresInit")
+    if not i4 or i4[2] != "30m":
+        bad("⑨ T4 期货→期货应继承 lastFuturesFreq(30m)，实际 %r" % (i4,))
+        return
+
+    print("[PASS] ⑨ 取数分流: 股票→/api/stocks（继承/重置周期）"
+          " / 期货→SSE（5m 首进、30m 继承），无一走错端点")
+
+
 def main():
     ap = argparse.ArgumentParser(description="P2-2 ④ 前端 JS 冒烟测试")
     ap.add_argument("--update", action="store_true", help="兼容 run_all --update")
@@ -616,6 +859,7 @@ def main():
     test_code_input_focus_keeps_value(failures)
     test_history_dropdown_keyboard(failures)
     test_chart_action_guards(failures)
+    test_load_stock_dispatch(failures)
 
     print()
     if failures:
