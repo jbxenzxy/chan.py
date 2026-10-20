@@ -1640,6 +1640,28 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           threshold=round(config.retrace_zero_axis_ratio, 4))
             return
 
+        # ── ⑶ 笔N-1 极值相对笔N-3 不推进（避开趋势末段）──
+        # 三买（笔N 向下）：向上笔N-1 底分型极值 <= 向上笔N-3 底分型极值
+        # 三卖（笔N 向上）：向下笔N-1 顶分型极值 >= 向下笔N-3 顶分型极值
+        # 用意：N-3/N-2/N-1 若走成低点不断抬高（多）或高点不断降低（空）的推进形态，
+        #       笔N 之后接的那一笔恰是该形态的末笔，容易在末端介入；
+        #       拦住后留下的三买/三卖，后续才是新一轮推进的首笔。
+        # 无条件生效（2026-10-20 用户裁定：不做开关）；笔数不足（idx-3 越界）时不拦
+        if stroke_n.idx >= 3:
+            stroke_nm3 = bi_list[stroke_n.idx - 3]  # 前第三笔N-3
+            if is_buy:
+                nm1_ext, nm3_ext = stroke_nm1._low(), stroke_nm3._low()
+                trend_pushed = nm1_ext > nm3_ext
+            else:
+                nm1_ext, nm3_ext = stroke_nm1._high(), stroke_nm3._high()
+                trend_pushed = nm1_ext < nm3_ext
+            if trend_pushed:
+                self._dbg_bs3('cal_bs3point', '跳过: 笔N-1极值较笔N-3沿趋势方向推进',
+                              stroke_n_idx=stroke_n.idx, is_buy=is_buy,
+                              n_1_idx=stroke_nm1.idx, n_1_ext=round(nm1_ext, 2),
+                              n_3_idx=stroke_nm3.idx, n_3_ext=round(nm3_ext, 2))
+                return
+
         # ── 生成3类买卖点 ──
         self._dbg_bs3('cal_bs3point', 'OK 生成3类买/卖点',
                       stroke_n_idx=stroke_n.idx, is_buy=is_buy)

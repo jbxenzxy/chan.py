@@ -131,12 +131,15 @@ def part1():
     #   整段注释，59b55e8）⇒ 进入买卖点分支的笔更多，本切片 6 笔的**构成**变化：
     #   2胜4平0负 → 3胜3平0负、期望 R 1.517883 → 1.76755（笔数恰好仍为 6，
     #   属构成变化而非增减笔）。拦截是**内核行为**，基线必须跟着内核走。
-    check("交易笔数 = 6（P0-④ 基线）", run["filled"] == 6, "filled=%r" % run["filled"])
-    check("胜负平 = 3/3/0", (s["w"], s["l"], s["e"]) == (3, 3, 0),
+    # 2026-10-20 重冻：cal_bs3point ⑶「笔N-1 极值相对笔N-3 不推进」无条件生效
+    #   ⇒ 3 个三买全部被拦（T3 6→3，留下的 3 个都是三卖），本切片 6→4 笔，
+    #   构成 3 个 0 类 + 1 个三卖；胜负平 3/3/0→3/1/0、期望 R 1.76755→3.00095。
+    check("交易笔数 = 4（P0-④ 基线）", run["filled"] == 4, "filled=%r" % run["filled"])
+    check("胜负平 = 3/1/0", (s["w"], s["l"], s["e"]) == (3, 1, 0),
           "w/l/e=%r" % ((s["w"], s["l"], s["e"]),))
-    check("实际胜率 = 3/6 = 0.5", abs(s["win_rate"] - 3.0 / 6.0) < 1e-6,
+    check("实际胜率 = 3/4 = 0.75", abs(s["win_rate"] - 3.0 / 4.0) < 1e-6,
           "win_rate=%r" % s["win_rate"])
-    check("期望 R ≈ 1.76755（L3 启动阈值 2R 口径）", abs(s["expectancy_r"] - 1.76755) < 1e-3,
+    check("期望 R ≈ 3.00095（L3 启动阈值 2R 口径）", abs(s["expectancy_r"] - 3.00095) < 1e-3,
           "expectancy_r=%r" % s["expectancy_r"])
     check("区间 [2021-01-04, 2026-09-30] 且 bars=1393",
           tgt["date_from"] == "2021-01-04" and tgt["date_to"] == "2026-09-30"
@@ -198,16 +201,18 @@ def part2():
     # 2026-10-14 重冻：㈢ 分型检查停用（BSPointList.cal_bsp_precondition，59b55e8）
     #   + cal_bs3point 新增「笔N 整笔 DIF 趋势侧闸」⇒ 30m 切片 8→17 笔
     #   （3 类 10 + 0 类 7；新闸只收紧 3 类、不放大，17 笔全部来自 ㈢ 停用）。
-    check("30m：笔数 = 17（P0-④ 基线）", d30["run"]["filled"] == 17,
+    # 2026-10-20 重冻：cal_bs3point ⑶ 无条件生效 ⇒ 30m 切片 17→11 笔
+    #   （3 类 10→4、0 类 7 不变；期望 R 0.433188→0.208873）。
+    check("30m：笔数 = 11（P0-④ 基线）", d30["run"]["filled"] == 11,
           "filled=%r" % d30["run"]["filled"])
-    check("30m：期望 R ≈ 0.433188", abs(d30["summary"]["expectancy_r"] - 0.433188) < 1e-3,
+    check("30m：期望 R ≈ 0.208873", abs(d30["summary"]["expectancy_r"] - 0.208873) < 1e-3,
           "expectancy_r=%r" % d30["summary"]["expectancy_r"])
     check("30m：区间首根 = 切片首根（2025-09-30）",
           d30["target"]["date_from"] == "2025-09-30", "target=%r" % d30["target"])
-    # 2026-10-14 起 30m 切片在新内核下全平（closed=17 / still_open=0）；
-    #   「未平仓不进指标分母」的判别样本由 part12 的 15m 切片承担（still_open=1）。
-    check("30m：closed=17 / still_open=0（全平）",
-          d30["run"]["closed"] == 17 and d30["run"]["still_open"] == 0,
+    # 2026-10-14 起 30m 全切片在新内核下全平（closed=17 / still_open=0）；
+    #   「未平仓不进指标分母」的判别样本由 part12 的 30m 前 1600 根切片承担（still_open=1）。
+    check("30m：closed=11 / still_open=0（全平）",
+          d30["run"]["closed"] == 11 and d30["run"]["still_open"] == 0,
           "run=%r" % d30["run"])
     check("30m：w + l + e == closed（指标分母只含已平仓笔）",
           d30["summary"]["w"] + d30["summary"]["l"] + d30["summary"]["e"]
@@ -221,7 +226,7 @@ def part2():
     #   （10 + 7 = 17）；"3" 不再单独 ≡ 全放行（旧断言前提「无 0 类信号」失效）。
     d30_2 = _call("sz002190", "30m", kl30, bsp_types="2")
     check('30m："3"+"0" ≡ 全放行（无 2 类可差）；单筛 "2" 恒 0 笔',
-          d30_3["run"]["filled"] + d30_0["run"]["filled"] == d30["run"]["filled"] == 17
+          d30_3["run"]["filled"] + d30_0["run"]["filled"] == d30["run"]["filled"] == 11
           and d30_2["run"]["filled"] == 0,
           '"3" filled=%r "0" filled=%r "2" filled=%r 全放行=%r'
           % (d30_3["run"]["filled"], d30_0["run"]["filled"],
@@ -229,9 +234,10 @@ def part2():
     check('30m：`"0"` → 7 笔（㈢ 停用后本切片出现 0 类信号）',
           d30_0["run"]["filled"] == 7,
           'filled=%r' % d30_0["run"]["filled"])
-    check('30m：`"0"` 的 filled + filtered == seen == 24（信号三分解在 30m 同样自洽）',
+    # 2026-10-20：⑶ 生效后本切片的 3 类信号全被拦（seen 24→15，全是 0 类）。
+    check('30m：`"0"` 的 filled + filtered == seen == 15（信号三分解在 30m 同样自洽）',
           d30_0["run"]["filled"] + d30_0["run"]["signals_filtered"]
-          == d30_0["run"]["signals_seen"] == 24,
+          == d30_0["run"]["signals_seen"] == 15,
           "run=%r" % d30_0["run"])
 
     klw = _page_klines("sz002190_w.json")
@@ -273,8 +279,8 @@ def part3(kl, base_exp):
     check('"0" → 3 笔 / R≈3.962067',
           d0["run"]["filled"] == 3 and abs(d0["summary"]["expectancy_r"] - 3.962067) < 1e-3,
           "filled=%r R=%r" % (d0["run"]["filled"], d0["summary"]["expectancy_r"]))
-    check('"3" → 3 笔 / R≈-0.426967',
-          d3["run"]["filled"] == 3 and abs(d3["summary"]["expectancy_r"] + 0.426967) < 1e-3,
+    check('"3" → 1 笔 / R≈0.1176（⑶ 拦掉 2 笔三买，只剩三卖）',
+          d3["run"]["filled"] == 1 and abs(d3["summary"]["expectancy_r"] - 0.1176) < 1e-3,
           "filled=%r R=%r" % (d3["run"]["filled"], d3["summary"]["expectancy_r"]))
     # 2026-10-08 最新内核（`_has_bsp_for_bi` 拦截生效）后：本切片**不含** 2 类
     #   买卖点 ⇒ 「内核无该类型」的三条证据链 —— 单筛 "2" 恒 0 笔、"0,3" 即全
@@ -283,10 +289,10 @@ def part3(kl, base_exp):
           d2["run"]["filled"] == 0,
           'filled=%r' % d2["run"]["filled"])
     check('"0,3" ≡ 全放行（切片无 2 类可差）',
-          d03["run"]["filled"] == d_none["run"]["filled"] == 6,
+          d03["run"]["filled"] == d_none["run"]["filled"] == 4,
           "filled=%r 全放行=%r" % (d03["run"]["filled"], d_none["run"]["filled"]))
     check('"0,2,3" ≡ 全放行（多勾不存在的 2 类不改变结果）',
-          d032["run"]["filled"] == d_none["run"]["filled"] == 6
+          d032["run"]["filled"] == d_none["run"]["filled"] == 4
           and abs(d032["summary"]["expectancy_r"] - base_exp) < 1e-9,
           "filled=%r R=%r base=%r" % (d032["run"]["filled"],
                                       d032["summary"]["expectancy_r"], base_exp))
@@ -358,9 +364,9 @@ def part45(d):
                                         sum(t["net_return_pct"] for t in tr) / len(tr)))
         # 含浮口径（2026-10-06 新增）：`*_with_open` = 已平仓 + 未平仓浮动 的等权平均，
         #   `*_open_count` = 并进来的未平仓笔数。日线样本**全平** ⇒ 两个口径必然相等、
-        #   计数为 0（面板也就不加「浮」字）。"真的含浮"由 ⑫ 段的 15m 样本单独钉
-        #   （那个切片末尾留 1 笔未平仓，是判别力所在；2026-10-14 起 30m 切片在新
-        #   内核下全平，未平仓样本已从 30m 换成 15m）。
+        #   计数为 0（面板也就不加「浮」字）。"真的含浮"由 ⑫ 段的 30m 前 1600 根样本
+        #   单独钉（那个切片末尾留 1 笔未平仓，是判别力所在；2026-10-14 起 30m 全切片
+        #   在新内核下全平，2026-10-20 起 15m 全切片也被 ⑶ 闸成全平 ⇒ 改用 30m 窗口）。
         check("含浮口径：日线全平 ⇒ `*_with_open` ≡ 已实现口径，且 open_count == 0",
               s["avg_net_return_open_count"] == 0
               and abs(s["avg_net_return_pct_with_open"]
@@ -544,7 +550,7 @@ def _extract_any_fn(appjs, fn_name):
     raise AssertionError("app.js 花括号不配平: " + fn_name)
 
 
-def part8_9_10_11(d_idx, d_stock, d15=None, d1=None):
+def part8_9_10_11(d_idx, d_stock, d_open=None, d1=None):
     print("══ ⑧⑨⑩⑪⑫ 前端真函数（node 抽段；node 不在位则 SKIP）══")
     node = shutil.which("node")
     if not node:
@@ -665,7 +671,7 @@ def part8_9_10_11(d_idx, d_stock, d15=None, d1=None):
         " plainBucket: BT_HTML.indexOf('(n1/R') >= 0 || BT_HTML.indexOf('/R2.') >= 0,"
         " bucket: BT_HTML.indexOf('笔 · 均R') >= 0,"
         " solo: BT_HTML.indexOf('最好＝最差') >= 0 }); }\n"
-        "BT_HTML = ''; renderBacktest(" + json.dumps(d15) + ");\n"
+        "BT_HTML = ''; renderBacktest(" + json.dumps(d_open) + ");\n"
         "out.push('F1=' + _tSnap());\n"
         "BT_HTML = ''; renderBacktest(" + json.dumps(d1) + ");\n"
         "out.push('F2=' + _tSnap());\n"
@@ -780,7 +786,7 @@ def part8_9_10_11(d_idx, d_stock, d15=None, d1=None):
 
     # ⑫ 出场原因三选一 / 持仓中浮动 / ⑶⑷ 可读性（喂真响应渲染）
     f1, f2 = json.loads(kv["F1"]), json.loads(kv["F2"])
-    check("⑫ 个股 15m 页渲染出三种中文原因（止损 / 保本 / 跟踪止盈）",
+    check("⑫ 个股 30m 页渲染出三种中文原因（止损 / 保本 / 跟踪止盈）",
           f1["stop"] and f1["be"] and f1["trail"], kv["F1"])
     check("⑫ HTML 里**不再出现**英文 reason（sl / breakeven / trailing）",
           f1["rawReason"] is False, kv["F1"])
@@ -1015,14 +1021,17 @@ def part12():
                   and t["unrealized_net_return_pct"] is None for t in d["trades"]),
           "still_open=%r" % d["run"]["still_open"])
 
-    # ── 15m：末尾留 1 笔未平仓 → 浮动字段非空、已平笔恒 null ──
-    #    2026-10-14 重冻换样本：30m 切片在新内核（㈢ 停用）下全平（still_open=0），
-    #    样本换成 15m 切片（closed=14 / still_open=1，未平仓笔 side=short 与原 30m 同向）。
-    kl15 = _page_klines("sz002190_15m.json", minute=True)
-    d15 = _call("sz002190", "15m", kl15)
-    opens = [t for t in d15["trades"] if t["open"]]
-    closed = [t for t in d15["trades"] if not t["open"]]
-    check("⑫ 15m 末尾留 1 笔未平仓（样本前提）", len(opens) == 1,
+    # ── 30m 前 1600 根：末尾留 1 笔未平仓 → 浮动字段非空、已平笔恒 null ──
+    #    2026-10-14 重冻换样本：30m 全切片在新内核（㈢ 停用）下全平（still_open=0），
+    #    样本换成 15m 全切片（closed=14 / still_open=1）。
+    #    2026-10-20 重冻再换：cal_bs3point ⑶ 生效后 15m 全切片 7 笔全平，
+    #    样本换成 30m 前 1600 根真区间（closed=9 / still_open=1，且已平仓覆盖三种出场
+    #    原因、指数同窗也留 1 笔未平 —— 全切片扫 400~3840 只有这一个窗口同时满足）。
+    kl30w = _page_klines("sz002190_30m.json", minute=True, hi=1600)
+    d_open = _call("sz002190", "30m", kl30w)
+    opens = [t for t in d_open["trades"] if t["open"]]
+    closed = [t for t in d_open["trades"] if not t["open"]]
+    check("⑫ 30m 前 1600 根末尾留 1 笔未平仓（样本前提）", len(opens) == 1,
           "open=%d closed=%d" % (len(opens), len(closed)))
     t = opens[0]
     check("⑫ 未平仓笔浮动三字段齐全（价 / R / 净收益率）",
@@ -1041,7 +1050,7 @@ def part12():
               and x["unrealized_net_return_pct"] is None for x in closed),
           "脏笔=%r" % [x["trade_id"] for x in closed
                        if x["unrealized_r"] is not None][:3])
-    last_close = kl15[-1]["close"]
+    last_close = kl30w[-1]["close"]
     sign = 1 if t["side"] == "long" else -1
     check("⑫ unrealized_price ≡ 页面序列最后一根收盘价（估值锚点唯一）",
           abs(t["unrealized_price"] - last_close) < 1e-9,
@@ -1054,12 +1063,12 @@ def part12():
               - (last_close - t["entry_price"]) * sign / t["r_distance"]) < 1e-4,
           "got=%r" % t["unrealized_r"])
     check("⑫ 未平仓 落进 run.still_open / 逐笔 open 计数一致",
-          d15["run"]["still_open"] == len(opens)
-          and d15["run"]["closed"] + d15["run"]["still_open"] == d15["run"]["filled"])
+          d_open["run"]["still_open"] == len(opens)
+          and d_open["run"]["closed"] + d_open["run"]["still_open"] == d_open["run"]["filled"])
 
-    # ── 含浮口径（2026-10-06）：15m 切片末尾留 1 笔未平仓 ⇒ 两口径必须**不等** ──
+    # ── 含浮口径（2026-10-06）：30m 前 1600 根末尾留 1 笔未平仓 ⇒ 两口径必须**不等** ──
     #    这才是"真的含浮"的判别力所在：日线样本全平，两口径恒等，什么都证不出来。
-    s15 = d15["summary"]
+    s15 = d_open["summary"]
     _realized = [t["net_return_pct"] for t in closed]
     _float = [t["unrealized_net_return_pct"] for t in opens]
     check("⑫ 含浮口径：open_count == 未平仓笔数（1），且与已实现口径**不等**",
@@ -1081,7 +1090,7 @@ def part12():
                                             sum(_realized) / len(_realized)))
 
     # ── 指数侧：v2.2 同形 —— 未平仓浮动净收益率照常给（不再置 null），价格侧的 R 照常 ──
-    di = _call("sh000001", "15m", kl15)
+    di = _call("sh000001", "30m", kl30w)
     oi = [x for x in di["trades"] if x["open"]]
     check("⑫ 指数页未平仓笔：unrealized_net_return_pct 非 null（同形）/ 毛 R 保留",
           len(oi) == 1 and oi[0]["unrealized_net_return_pct"] is not None
@@ -1093,8 +1102,10 @@ def part12():
     # 被 `River: 跳过` 停用，原 200 根窗口在该口径下 n=0（信号整体消失），已拿不到 n==1。
     # 500 根仍是一段真区间（recs[0:500]），且落在 n==1 的稳定平台内（约 430~790 根），
     # 两端都留了余量，不至于后面再削一个信号就又归零。
-    d1 = _call("sz002190", "15m", _page_klines("sz002190_15m.json", minute=True, hi=500))
-    check("⑫ n==1 样本取自**真区间**（15m 前 500 根：已平 1 / 未平 0）",
+    # 2026-10-20：15m 前 500 根在 ⑶ 生效后已无信号（n=0），样本下移到 30m 真区间；
+    #   n==1 的稳定平台是 240~920 根，取中段 600（两端各留 360 根余量）。
+    d1 = _call("sz002190", "30m", _page_klines("sz002190_30m.json", minute=True, hi=600))
+    check("⑫ n==1 样本取自**真区间**（30m 前 600 根：已平 1 / 未平 0）",
           d1["summary"]["n"] == 1 and d1["run"]["still_open"] == 0,
           "n=%r still_open=%r" % (d1["summary"]["n"], d1["run"]["still_open"]))
     check("⑫ n==1 时最好 R ≡ 最差 R（同一笔既是最好也是最差）—— 后端如实给",
@@ -1102,7 +1113,7 @@ def part12():
           and d1["summary"]["max_win_r"] is not None,
           "max_win=%r max_loss=%r" % (d1["summary"]["max_win_r"],
                                       d1["summary"]["max_loss_r"]))
-    return d15, d1
+    return d_open, d1
 
 
 def main():
@@ -1117,8 +1128,8 @@ def main():
     part6(kl)
     part7()
     d_idx = part11(kl, d)
-    d15, d1 = part12()
-    part8_9_10_11(d_idx, d, d15, d1)
+    d_open, d1 = part12()
+    part8_9_10_11(d_idx, d, d_open, d1)
 
     n_pass = sum(1 for x in _OK if x)
     print("-" * 68)

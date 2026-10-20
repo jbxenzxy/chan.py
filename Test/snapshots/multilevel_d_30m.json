@@ -12787,16 +12787,6 @@
     "type": "3"
    },
    {
-    "date": "2024/11/26 14:00",
-    "fractal_high": 77.11,
-    "fractal_low": 76.51,
-    "high": 74.86,
-    "is_buy": false,
-    "low": 74.38,
-    "price": 74.72,
-    "type": "3"
-   },
-   {
     "date": "2024/05/09 15:00",
     "fractal_high": 22.51,
     "fractal_low": 22.34,
@@ -42372,7 +42362,7 @@
   ],
   "meta": {
    "bi_count": 99,
-   "bsp_count": 8,
+   "bsp_count": 7,
    "chan_version": "chan.py",
    "date_range": "2023/01/03 10:30 ~ 2024/12/02 15:00",
    "freq": "30分钟",

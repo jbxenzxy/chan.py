@@ -33,7 +33,7 @@ v1.18 的两条**显示契约**（2026-10-05 用户裁定），⑩ 的含浮口�
   ⑤ 日线切片实跑：三种原因**都真实出现过**（映射的每个键都有样本覆盖，不是死配置）
   ⑥ 「分原因」摘要行印中文标签（不再出现 `sl:` / `breakeven:` / `trailing:`）
   ⑦ `trades_table` 原因列中文；**未平仓行原因列留空**（状态不冒充原因）
-  ⑧ 15m 切片实跑：未平仓笔 `unrealized_*` 与手算逐项一致（价 / R / 净收益率）
+  ⑧ 30m 切片实跑：未平仓笔 `unrealized_*` 与手算逐项一致（价 / R / 净收益率）
   ⑨ ★ 槽位不串：未平仓笔的已实现字段恒 `None`；已平仓笔的 `unrealized_*` 恒 `None`
   ⑩ 估值**不进** `Metrics`：把未平仓笔的 `unrealized_*` 改成 ±999 后重算，指标不变
   ⑪ `RunResult.exit_params` 记录本轮**实际使用**的参数，口径行据此自述（不是常量）
@@ -59,12 +59,14 @@ FIX_DIR = os.path.join(ROOT, "Test", "fixtures_real")
 SNAP_DIR = os.path.join(HERE, "snapshots")
 SNAP_PATH = os.path.join(SNAP_DIR, "p0_display_labels.json")
 
-# 日线切片：三种 reason 都出现过。15m 切片：末尾留 1 笔未平仓（⑧⑨⑩ 的样本）。
-# 2026-10-14 重冻换样本：㈢ 分型检查停用（BSPointList.cal_bsp_precondition）后 30m
-# 切片在新内核下全平（still_open=0），末尾不再留未平仓 ⇒ 样本换成 15m 切片
-# （closed=14 / still_open=1，未平仓笔 side=short，与原 30m 样本同向）。
+# 日线切片：三种 reason 都出现过。
+# ⑧⑨⑩ 的未平仓样本换过两次：2026-10-14 ㈢ 分型检查停用后 30m 全切片变全平
+# （still_open=0）⇒ 换成 15m 全切片（closed=14 / still_open=1）；2026-10-20
+# cal_bs3point ⑶ 生效后 15m 全切片 7 笔全平 ⇒ 换成 30m **前 1600 根真区间**
+# （closed=9 / still_open=1；全切片扫 400~3840 只有这一窗同时满足「1 笔未平 +
+#   三种出场原因」）。第三项 = 截断根数，None 表示整份切片。
 SAMPLE_ALL_REASONS = ("sz002190_d.json", "d")
-SAMPLE_OPEN = ("sz002190_15m.json", "15m")
+SAMPLE_OPEN = ("sz002190_30m.json", "30m", 1600)
 
 PASS = 0
 FAIL = 0
@@ -82,12 +84,17 @@ def check(name, ok, detail=""):
             print("        " + str(detail).replace("\n", "\n        "))
 
 
-def _run(fixture, freq):
-    """跑一份冻结切片 → `(RunResult, Metrics, records)`。"""
+def _run(fixture, freq, hi=None):
+    """跑一份冻结切片 → `(RunResult, Metrics, records)`。
+
+    `hi` 截前 N 根（真区间，不是手搓样本）：用于取「末尾留 1 笔未平仓」的窗口。
+    """
     from Backtest.Metrics import compute
     from Backtest.Runner import load_records, run
 
     recs = load_records(os.path.join(FIX_DIR, fixture))
+    if hi is not None:
+        recs = recs[:hi]
     res = run("sz", "002190", freq, records=recs)
     return res, compute(res), recs
 
@@ -128,8 +135,9 @@ def build_snapshot():
                 for t in res_d.trades],
             "summary_last_lines": summary_text(res_d, met_d).splitlines()[-2:],
         },
-        "m15": {
+        "open_slice": {
             "fixture": SAMPLE_OPEN[0],
+            "hi": SAMPLE_OPEN[2],
             "last_close": _r(recs_m[-1]["close"], 6),
             "n": int(met_m.n),
             "open": int(met_m.u),
@@ -222,7 +230,7 @@ def part_labels():
     check("③ 图例把「保本保护线位置 = 入场价 ± 0.5R」写出来了（1R 是阈值、不是线位）",
           "0.5R" in lg["breakeven"], "legend=%r" % lg["breakeven"])
 
-    # ③b ★ 图例**双向成立**（2026-10-06 追加）：回测是**双向开仓**的（`m15` 切片末尾
+    # ③b ★ 图例**双向成立**（2026-10-06 追加）：回测是**双向开仓**的（`open_slice` 切片末尾
     #     那笔未平仓就是 `side=short`），而图例**每轮一份**、不区分多空 ⇒ 只写
     #     「跌破」「入场价 − R」「抬到入场价上方」这类多头口径的文案，对着空头持仓读就是错的。
     #     下面四条把「三条必须同时含多空」钉死 —— 只改标题、漏改正文的漂移会立刻红。
@@ -267,7 +275,7 @@ def part_trades(lab):
     reasons = sorted({str(t.exit_reason) for t in res.closed})
     check("⑤ 日线切片三种原因**都真实出现过**（映射每个键都有样本覆盖）",
           set(reasons) == set(lab) == set(EXIT_REASON_ORDER), "reasons=%r" % reasons)
-    check("⑤ 未平仓 0 笔（该切片跑完刚好全平 —— ⑧⑨⑩ 另用 15m 切片）",
+    check("⑤ 未平仓 0 笔（该切片跑完刚好全平 —— ⑧⑨⑩ 另用 30m 前 1600 根）",
           met.u == 0 and len(res.closed) == met.n, "u=%r n=%r" % (met.u, met.n))
 
     txt = summary_text(res, met)
@@ -310,8 +318,8 @@ def part_trades(lab):
 
 
 def part_open(lab):
-    """⑧ ⑨ ⑩：15m 切片 —— 未平仓浮动估值的正确性与槽位隔离。"""
-    print("══ ⑧⑨⑩ 15m 切片（未平仓浮动估值 / 槽位不串 / 不进指标）══")
+    """⑧ ⑨ ⑩：30m 前 1600 根 —— 未平仓浮动估值的正确性与槽位隔离。"""
+    print("══ ⑧⑨⑩ 30m 前 1600 根（未平仓浮动估值 / 槽位不串 / 不进指标）══")
     from Backtest.ExitParams import round_trip_cost
     from Backtest.Metrics import compute
     from Backtest.Report import EXIT_REASON_ORDER, trades_table
@@ -425,7 +433,8 @@ def main(argv):
             f.write("\n")
         print("[FREEZE] 基线已写入 %s" % os.path.relpath(SNAP_PATH, ROOT))
         print("         labels=%r" % got["labels"])
-        print("         d.by_reason=%r  m15.open=%r" % (got["d"]["by_reason"], got["m15"]["open"]))
+        print("         d.by_reason=%r  open_slice.open=%r"
+              % (got["d"]["by_reason"], got["open_slice"]["open"]))
         return 0
 
     if not os.path.exists(SNAP_PATH):

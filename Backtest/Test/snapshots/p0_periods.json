@@ -53,61 +53,29 @@
    "file": "sz002190_d.json",
    "freq": "d",
    "metrics": {
-    "avg_bars_held": 8.83333333,
-    "avg_net_return": 0.0701053683,
+    "avg_bars_held": 10.75,
+    "avg_net_return": 0.1243211386,
     "e": 0,
-    "expectancy_r": 1.76755,
-    "l": 3,
-    "max_loss_r": -1.3665,
+    "expectancy_r": 3.00095,
+    "l": 1,
+    "max_loss_r": -1.3292,
     "max_win_r": 12.7201,
-    "n": 6,
-    "profit_factor": 3.88749335,
+    "n": 4,
+    "profit_factor": 8.20477926,
     "u": 0,
     "w": 3,
-    "win_rate": 0.5
+    "win_rate": 0.75
    },
    "note": "日线；基准样本（p0_sz002190_d.json 详版在 bt01）",
    "run": {
     "bars_total": 1393,
     "signals_filtered": 0,
-    "signals_rejected": 11,
-    "signals_seen": 17,
+    "signals_rejected": 10,
+    "signals_seen": 14,
     "type_appended_after_freeze": 0
    },
    "sha256": "56083668fff052dbfc5edceda3f7c7ae46e7a99f31db094c9e46d0727583fdc0",
    "trades": [
-    {
-     "bars_held": 7,
-     "bsp_type": "3",
-     "entry_date": "2021-08-23",
-     "entry_price": 29.888,
-     "exit_date": "2021-09-01",
-     "exit_price": 27.688,
-     "exit_reason": "sl",
-     "net_return": -0.0742697396,
-     "open": false,
-     "r_distance": 1.61,
-     "r_multiple": -1.3665,
-     "shares": 1700,
-     "side": "long",
-     "trade_id": 1
-    },
-    {
-     "bars_held": 3,
-     "bsp_type": "3",
-     "entry_date": "2021-12-22",
-     "entry_price": 29.698,
-     "exit_date": "2021-12-27",
-     "exit_price": 29.648,
-     "exit_reason": "breakeven",
-     "net_return": -0.0023826049,
-     "open": false,
-     "r_distance": 1.560714,
-     "r_multiple": -0.032,
-     "shares": 1700,
-     "side": "long",
-     "trade_id": 2
-    },
     {
      "bars_held": 4,
      "bsp_type": "3",
@@ -122,7 +90,7 @@
      "r_multiple": 0.1176,
      "shares": 2100,
      "side": "short",
-     "trade_id": 3
+     "trade_id": 1
     },
     {
      "bars_held": 16,
@@ -138,7 +106,7 @@
      "r_multiple": 0.4953,
      "shares": 3300,
      "side": "long",
-     "trade_id": 4
+     "trade_id": 2
     },
     {
      "bars_held": 17,
@@ -154,7 +122,7 @@
      "r_multiple": -1.3292,
      "shares": 1400,
      "side": "long",
-     "trade_id": 5
+     "trade_id": 3
     },
     {
      "bars_held": 6,
@@ -170,7 +138,7 @@
      "r_multiple": 12.7201,
      "shares": 1400,
      "side": "long",
-     "trade_id": 6
+     "trade_id": 4
     }
    ]
   },
@@ -179,25 +147,25 @@
    "file": "sz002190_30m.json",
    "freq": "30m",
    "metrics": {
-    "avg_bars_held": 10.70588235,
-    "avg_net_return": 0.0061721377,
+    "avg_bars_held": 10.09090909,
+    "avg_net_return": 0.0032507509,
     "e": 0,
-    "expectancy_r": 0.43318824,
-    "l": 8,
-    "max_loss_r": -3.1818,
-    "max_win_r": 5.9138,
-    "n": 17,
-    "profit_factor": 2.06645804,
+    "expectancy_r": 0.20887273,
+    "l": 5,
+    "max_loss_r": -2.5556,
+    "max_win_r": 4.3793,
+    "n": 11,
+    "profit_factor": 1.45028234,
     "u": 0,
-    "w": 9,
-    "win_rate": 0.5294117647
+    "w": 6,
+    "win_rate": 0.5454545455
    },
    "note": "30m（由 5m 合成）",
    "run": {
     "bars_total": 1936,
     "signals_filtered": 0,
-    "signals_rejected": 7,
-    "signals_seen": 24,
+    "signals_rejected": 4,
+    "signals_seen": 15,
     "type_appended_after_freeze": 0
    },
    "sha256": "2a0849cee6c2d28e4e5166570caedbf2473c678bbae0ab7cac673f2439ee9f56",
@@ -219,54 +187,6 @@
      "trade_id": 1
     },
     {
-     "bars_held": 14,
-     "bsp_type": "3",
-     "entry_date": "2025-12-01 14:00",
-     "entry_price": 39.53,
-     "exit_date": "2025-12-03 11:30",
-     "exit_price": 38.55,
-     "exit_reason": "trailing",
-     "net_return": 0.0240937769,
-     "open": false,
-     "r_distance": 0.165714,
-     "r_multiple": 5.9138,
-     "shares": 1300,
-     "side": "short",
-     "trade_id": 2
-    },
-    {
-     "bars_held": 1,
-     "bsp_type": "3",
-     "entry_date": "2026-02-13 15:00",
-     "entry_price": 36.09,
-     "exit_date": "2026-02-24 10:00",
-     "exit_price": 36.54,
-     "exit_reason": "sl",
-     "net_return": -0.0131700748,
-     "open": false,
-     "r_distance": 0.141429,
-     "r_multiple": -3.1818,
-     "shares": 1400,
-     "side": "short",
-     "trade_id": 3
-    },
-    {
-     "bars_held": 9,
-     "bsp_type": "3",
-     "entry_date": "2026-02-24 10:00",
-     "entry_price": 36.54,
-     "exit_date": "2026-02-25 10:30",
-     "exit_price": 36.55,
-     "exit_reason": "breakeven",
-     "net_return": -0.0009737001,
-     "open": false,
-     "r_distance": 0.175714,
-     "r_multiple": -0.0569,
-     "shares": 1400,
-     "side": "short",
-     "trade_id": 4
-    },
-    {
      "bars_held": 22,
      "bsp_type": "0",
      "entry_date": "2026-04-03 11:30",
@@ -280,7 +200,7 @@
      "r_multiple": 2.3093,
      "shares": 1700,
      "side": "long",
-     "trade_id": 5
+     "trade_id": 2
     },
     {
      "bars_held": 5,
@@ -296,7 +216,7 @@
      "r_multiple": -1.1556,
      "shares": 1900,
      "side": "long",
-     "trade_id": 6
+     "trade_id": 3
     },
     {
      "bars_held": 2,
@@ -312,23 +232,7 @@
      "r_multiple": -1.0072,
      "shares": 2000,
      "side": "long",
-     "trade_id": 7
-    },
-    {
-     "bars_held": 14,
-     "bsp_type": "3",
-     "entry_date": "2026-07-01 11:00",
-     "entry_price": 24.21,
-     "exit_date": "2026-07-03 10:00",
-     "exit_price": 24.31,
-     "exit_reason": "breakeven",
-     "net_return": -0.0048309376,
-     "open": false,
-     "r_distance": 0.5,
-     "r_multiple": -0.2,
-     "shares": 2100,
-     "side": "short",
-     "trade_id": 8
+     "trade_id": 4
     },
     {
      "bars_held": 4,
@@ -344,7 +248,7 @@
      "r_multiple": -2.1433,
      "shares": 2200,
      "side": "long",
-     "trade_id": 9
+     "trade_id": 5
     },
     {
      "bars_held": 3,
@@ -360,7 +264,7 @@
      "r_multiple": -2.5556,
      "shares": 2200,
      "side": "long",
-     "trade_id": 10
+     "trade_id": 6
     },
     {
      "bars_held": 1,
@@ -376,7 +280,7 @@
      "r_multiple": -1.6124,
      "shares": 2300,
      "side": "long",
-     "trade_id": 11
+     "trade_id": 7
     },
     {
      "bars_held": 9,
@@ -392,23 +296,7 @@
      "r_multiple": 4.3793,
      "shares": 2400,
      "side": "long",
-     "trade_id": 12
-    },
-    {
-     "bars_held": 18,
-     "bsp_type": "3",
-     "entry_date": "2026-07-10 14:30",
-     "entry_price": 22.89,
-     "exit_date": "2026-07-15 10:00",
-     "exit_price": 21.42,
-     "exit_reason": "trailing",
-     "net_return": 0.0635208944,
-     "open": false,
-     "r_distance": 0.59,
-     "r_multiple": 2.4915,
-     "shares": 2200,
-     "side": "short",
-     "trade_id": 13
+     "trade_id": 8
     },
     {
      "bars_held": 8,
@@ -424,7 +312,7 @@
      "r_multiple": 0.3611,
      "shares": 2300,
      "side": "long",
-     "trade_id": 14
+     "trade_id": 9
     },
     {
      "bars_held": 13,
@@ -440,23 +328,7 @@
      "r_multiple": 1.1475,
      "shares": 2300,
      "side": "long",
-     "trade_id": 15
-    },
-    {
-     "bars_held": 15,
-     "bsp_type": "3",
-     "entry_date": "2026-09-18 11:30",
-     "entry_price": 24.43,
-     "exit_date": "2026-09-22 11:00",
-     "exit_price": 24.4,
-     "exit_reason": "breakeven",
-     "net_return": 0.0005281212,
-     "open": false,
-     "r_distance": 0.3,
-     "r_multiple": 0.1,
-     "shares": 2100,
-     "side": "short",
-     "trade_id": 16
+     "trade_id": 10
     },
     {
      "bars_held": 4,
@@ -472,7 +344,7 @@
      "r_multiple": 2.055,
      "shares": 2100,
      "side": "short",
-     "trade_id": 17
+     "trade_id": 11
     }
    ]
   },
@@ -481,61 +353,29 @@
    "file": "sz002190_15m.json",
    "freq": "15m",
    "metrics": {
-    "avg_bars_held": 15.35714286,
-    "avg_net_return": 0.0007829846,
+    "avg_bars_held": 20.28571429,
+    "avg_net_return": -0.0126207115,
     "e": 0,
-    "expectancy_r": 0.58827143,
-    "l": 5,
+    "expectancy_r": -0.28082857,
+    "l": 4,
     "max_loss_r": -2.8776,
-    "max_win_r": 4.0,
-    "n": 14,
-    "profit_factor": 1.08331338,
-    "u": 1,
-    "w": 9,
-    "win_rate": 0.6428571429
+    "max_win_r": 3.7931,
+    "n": 7,
+    "profit_factor": 0.27810591,
+    "u": 0,
+    "w": 3,
+    "win_rate": 0.4285714286
    },
    "note": "15m（由 5m 合成）",
    "run": {
     "bars_total": 3872,
     "signals_filtered": 0,
-    "signals_rejected": 9,
-    "signals_seen": 24,
+    "signals_rejected": 6,
+    "signals_seen": 13,
     "type_appended_after_freeze": 0
    },
    "sha256": "9e8d3d43d61ea27a6a1bb1b0b66555937a7d771dc30a579d4431db715ce4fd7f",
    "trades": [
-    {
-     "bars_held": 25,
-     "bsp_type": "3",
-     "entry_date": "2025-11-11 13:30",
-     "entry_price": 40.1,
-     "exit_date": "2025-11-13 10:15",
-     "exit_price": 39.3,
-     "exit_reason": "trailing",
-     "net_return": 0.0192521197,
-     "open": false,
-     "r_distance": 0.46,
-     "r_multiple": 1.7391,
-     "shares": 1300,
-     "side": "short",
-     "trade_id": 1
-    },
-    {
-     "bars_held": 3,
-     "bsp_type": "3",
-     "entry_date": "2025-12-12 14:30",
-     "entry_price": 37.15,
-     "exit_date": "2025-12-15 09:45",
-     "exit_price": 36.41,
-     "exit_reason": "trailing",
-     "net_return": 0.0192212382,
-     "open": false,
-     "r_distance": 0.185,
-     "r_multiple": 4.0,
-     "shares": 1400,
-     "side": "short",
-     "trade_id": 2
-    },
     {
      "bars_held": 7,
      "bsp_type": "3",
@@ -550,7 +390,7 @@
      "r_multiple": 0.8824,
      "shares": 1400,
      "side": "long",
-     "trade_id": 3
+     "trade_id": 1
     },
     {
      "bars_held": 11,
@@ -566,23 +406,7 @@
      "r_multiple": -2.8776,
      "shares": 1400,
      "side": "short",
-     "trade_id": 4
-    },
-    {
-     "bars_held": 16,
-     "bsp_type": "3",
-     "entry_date": "2026-01-15 11:30",
-     "entry_price": 38.99,
-     "exit_date": "2026-01-16 11:30",
-     "exit_price": 38.27,
-     "exit_reason": "trailing",
-     "net_return": 0.0177676288,
-     "open": false,
-     "r_distance": 0.283571,
-     "r_multiple": 2.539,
-     "shares": 1300,
-     "side": "short",
-     "trade_id": 5
+     "trade_id": 2
     },
     {
      "bars_held": 10,
@@ -598,39 +422,7 @@
      "r_multiple": 3.7931,
      "shares": 1500,
      "side": "short",
-     "trade_id": 6
-    },
-    {
-     "bars_held": 7,
-     "bsp_type": "3",
-     "entry_date": "2026-04-21 13:30",
-     "entry_price": 31.77,
-     "exit_date": "2026-04-22 09:45",
-     "exit_price": 31.5,
-     "exit_reason": "sl",
-     "net_return": -0.0091934844,
-     "open": false,
-     "r_distance": 0.111429,
-     "r_multiple": -2.4231,
-     "shares": 1600,
-     "side": "long",
-     "trade_id": 7
-    },
-    {
-     "bars_held": 6,
-     "bsp_type": "3",
-     "entry_date": "2026-06-05 13:45",
-     "entry_price": 26.36,
-     "exit_date": "2026-06-08 09:45",
-     "exit_price": 25.82,
-     "exit_reason": "trailing",
-     "net_return": 0.0197857519,
-     "open": false,
-     "r_distance": 0.22,
-     "r_multiple": 2.4545,
-     "shares": 1900,
-     "side": "short",
-     "trade_id": 8
+     "trade_id": 3
     },
     {
      "bars_held": 47,
@@ -646,7 +438,7 @@
      "r_multiple": -1.0952,
      "shares": 2000,
      "side": "long",
-     "trade_id": 9
+     "trade_id": 4
     },
     {
      "bars_held": 59,
@@ -662,7 +454,7 @@
      "r_multiple": 0.22,
      "shares": 1900,
      "side": "short",
-     "trade_id": 10
+     "trade_id": 5
     },
     {
      "bars_held": 1,
@@ -678,39 +470,7 @@
      "r_multiple": -1.0048,
      "shares": 2200,
      "side": "short",
-     "trade_id": 11
-    },
-    {
-     "bars_held": 13,
-     "bsp_type": "3",
-     "entry_date": "2026-07-27 10:00",
-     "entry_price": 22.69,
-     "exit_date": "2026-07-27 14:45",
-     "exit_price": 23.19,
-     "exit_reason": "breakeven",
-     "net_return": 0.0213229176,
-     "open": false,
-     "r_distance": 1.09,
-     "r_multiple": 0.4587,
-     "shares": 2300,
-     "side": "long",
-     "trade_id": 12
-    },
-    {
-     "bars_held": 3,
-     "bsp_type": "3",
-     "entry_date": "2026-08-31 11:00",
-     "entry_price": 25.3,
-     "exit_date": "2026-08-31 13:15",
-     "exit_price": 25.6,
-     "exit_reason": "trailing",
-     "net_return": 0.0111505929,
-     "open": false,
-     "r_distance": 0.209286,
-     "r_multiple": 1.4334,
-     "shares": 2000,
-     "side": "long",
-     "trade_id": 13
+     "trade_id": 6
     },
     {
      "bars_held": 7,
@@ -726,23 +486,7 @@
      "r_multiple": -1.8837,
      "shares": 1900,
      "side": "short",
-     "trade_id": 14
-    },
-    {
-     "bars_held": null,
-     "bsp_type": "3",
-     "entry_date": "2026-09-16 13:45",
-     "entry_price": 24.58,
-     "exit_date": null,
-     "exit_price": null,
-     "exit_reason": null,
-     "net_return": null,
-     "open": true,
-     "r_distance": 0.6,
-     "r_multiple": null,
-     "shares": 2100,
-     "side": "short",
-     "trade_id": 15
+     "trade_id": 7
     }
    ]
   },
@@ -751,61 +495,29 @@
    "file": "sz002190_5m.json",
    "freq": "5m",
    "metrics": {
-    "avg_bars_held": 13.21917808,
-    "avg_net_return": -0.0031399094,
+    "avg_bars_held": 13.24444444,
+    "avg_net_return": -0.003133507,
     "e": 0,
-    "expectancy_r": -0.93838219,
-    "l": 49,
+    "expectancy_r": -1.28267111,
+    "l": 31,
     "max_loss_r": -31.5,
-    "max_win_r": 10.6,
-    "n": 73,
-    "profit_factor": 0.48284114,
+    "max_win_r": 5.0476,
+    "n": 45,
+    "profit_factor": 0.48217475,
     "u": 0,
-    "w": 24,
-    "win_rate": 0.3287671233
+    "w": 14,
+    "win_rate": 0.3111111111
    },
    "note": "5m（vipdoc fzline 原始周期）",
    "run": {
     "bars_total": 11616,
     "signals_filtered": 0,
-    "signals_rejected": 80,
-    "signals_seen": 153,
+    "signals_rejected": 39,
+    "signals_seen": 84,
     "type_appended_after_freeze": 0
    },
    "sha256": "fc4f7ae44f53e31cc777214d0a4398dccf58e2c47108240b31980e865c61a95f",
    "trades": [
-    {
-     "bars_held": 3,
-     "bsp_type": "3",
-     "entry_date": "2025-10-09 11:15",
-     "entry_price": 43.44,
-     "exit_date": "2025-10-09 11:30",
-     "exit_price": 43.78,
-     "exit_reason": "sl",
-     "net_return": -0.0085276703,
-     "open": false,
-     "r_distance": 0.29,
-     "r_multiple": -1.1724,
-     "shares": 1200,
-     "side": "short",
-     "trade_id": 1
-    },
-    {
-     "bars_held": 8,
-     "bsp_type": "3",
-     "entry_date": "2025-10-15 13:45",
-     "entry_price": 42.02,
-     "exit_date": "2025-10-15 14:25",
-     "exit_price": 42.52,
-     "exit_reason": "sl",
-     "net_return": -0.0126002856,
-     "open": false,
-     "r_distance": 0.38,
-     "r_multiple": -1.3158,
-     "shares": 1200,
-     "side": "short",
-     "trade_id": 2
-    },
     {
      "bars_held": 47,
      "bsp_type": "3",
@@ -820,7 +532,7 @@
      "r_multiple": 1.675,
      "shares": 1200,
      "side": "short",
-     "trade_id": 3
+     "trade_id": 1
     },
     {
      "bars_held": 15,
@@ -836,7 +548,7 @@
      "r_multiple": -1.0332,
      "shares": 1200,
      "side": "long",
-     "trade_id": 4
+     "trade_id": 2
     },
     {
      "bars_held": 2,
@@ -852,39 +564,7 @@
      "r_multiple": -1.8333,
      "shares": 1300,
      "side": "short",
-     "trade_id": 5
-    },
-    {
-     "bars_held": 2,
-     "bsp_type": "3",
-     "entry_date": "2025-11-12 15:00",
-     "entry_price": 39.15,
-     "exit_date": "2025-11-13 09:40",
-     "exit_price": 39.02,
-     "exit_reason": "trailing",
-     "net_return": 0.002620894,
-     "open": false,
-     "r_distance": 0.18,
-     "r_multiple": 0.7222,
-     "shares": 1300,
-     "side": "short",
-     "trade_id": 6
-    },
-    {
-     "bars_held": 12,
-     "bsp_type": "3",
-     "entry_date": "2025-11-14 13:30",
-     "entry_price": 40.15,
-     "exit_date": "2025-11-14 14:30",
-     "exit_price": 40.01,
-     "exit_reason": "sl",
-     "net_return": -0.0041848319,
-     "open": false,
-     "r_distance": 0.085,
-     "r_multiple": -1.6471,
-     "shares": 1300,
-     "side": "long",
-     "trade_id": 7
+     "trade_id": 3
     },
     {
      "bars_held": 19,
@@ -900,7 +580,7 @@
      "r_multiple": -4.9,
      "shares": 1300,
      "side": "short",
-     "trade_id": 8
+     "trade_id": 4
     },
     {
      "bars_held": 3,
@@ -916,7 +596,7 @@
      "r_multiple": -0.0,
      "shares": 1400,
      "side": "short",
-     "trade_id": 9
+     "trade_id": 5
     },
     {
      "bars_held": 14,
@@ -932,23 +612,7 @@
      "r_multiple": -1.6,
      "shares": 1400,
      "side": "short",
-     "trade_id": 10
-    },
-    {
-     "bars_held": 12,
-     "bsp_type": "3",
-     "entry_date": "2025-12-16 14:05",
-     "entry_price": 35.13,
-     "exit_date": "2025-12-17 09:35",
-     "exit_price": 36.71,
-     "exit_reason": "sl",
-     "net_return": -0.0456803017,
-     "open": false,
-     "r_distance": 0.18,
-     "r_multiple": -8.7778,
-     "shares": 1500,
-     "side": "short",
-     "trade_id": 11
+     "trade_id": 6
     },
     {
      "bars_held": 4,
@@ -964,7 +628,7 @@
      "r_multiple": -1.0588,
      "shares": 1400,
      "side": "short",
-     "trade_id": 12
+     "trade_id": 7
     },
     {
      "bars_held": 3,
@@ -980,7 +644,7 @@
      "r_multiple": 3.3333,
      "shares": 1400,
      "side": "short",
-     "trade_id": 13
+     "trade_id": 8
     },
     {
      "bars_held": 47,
@@ -996,7 +660,7 @@
      "r_multiple": -1.2593,
      "shares": 1400,
      "side": "long",
-     "trade_id": 14
+     "trade_id": 9
     },
     {
      "bars_held": 9,
@@ -1012,7 +676,7 @@
      "r_multiple": 1.8667,
      "shares": 1400,
      "side": "long",
-     "trade_id": 15
+     "trade_id": 10
     },
     {
      "bars_held": 6,
@@ -1028,39 +692,23 @@
      "r_multiple": 0.3231,
      "shares": 1400,
      "side": "long",
-     "trade_id": 16
+     "trade_id": 11
     },
     {
-     "bars_held": 5,
-     "bsp_type": "3",
-     "entry_date": "2026-01-05 14:40",
-     "entry_price": 37.5,
-     "exit_date": "2026-01-06 09:35",
-     "exit_price": 37.62,
+     "bars_held": 12,
+     "bsp_type": "0",
+     "entry_date": "2026-01-06 10:50",
+     "entry_price": 37.59,
+     "exit_date": "2026-01-06 13:20",
+     "exit_price": 37.87,
      "exit_reason": "trailing",
-     "net_return": 0.00249808,
+     "net_return": 0.0067443203,
      "open": false,
-     "r_distance": 0.05,
-     "r_multiple": 2.4,
+     "r_distance": 0.086429,
+     "r_multiple": 3.2397,
      "shares": 1400,
      "side": "long",
-     "trade_id": 17
-    },
-    {
-     "bars_held": 32,
-     "bsp_type": "3",
-     "entry_date": "2026-01-06 09:35",
-     "entry_price": 37.62,
-     "exit_date": "2026-01-06 13:45",
-     "exit_price": 37.9,
-     "exit_reason": "trailing",
-     "net_return": 0.0067383838,
-     "open": false,
-     "r_distance": 0.17,
-     "r_multiple": 1.6471,
-     "shares": 1400,
-     "side": "long",
-     "trade_id": 18
+     "trade_id": 12
     },
     {
      "bars_held": 10,
@@ -1076,7 +724,7 @@
      "r_multiple": -1.0548,
      "shares": 1300,
      "side": "long",
-     "trade_id": 19
+     "trade_id": 13
     },
     {
      "bars_held": 29,
@@ -1092,23 +740,7 @@
      "r_multiple": 3.7143,
      "shares": 1400,
      "side": "long",
-     "trade_id": 20
-    },
-    {
-     "bars_held": 3,
-     "bsp_type": "3",
-     "entry_date": "2026-01-20 09:40",
-     "entry_price": 38.61,
-     "exit_date": "2026-01-20 09:55",
-     "exit_price": 38.33,
-     "exit_reason": "sl",
-     "net_return": -0.0079479967,
-     "open": false,
-     "r_distance": 0.2,
-     "r_multiple": -1.4,
-     "shares": 1300,
-     "side": "long",
-     "trade_id": 21
+     "trade_id": 14
     },
     {
      "bars_held": 21,
@@ -1124,7 +756,7 @@
      "r_multiple": -1.5,
      "shares": 1400,
      "side": "long",
-     "trade_id": 22
+     "trade_id": 15
     },
     {
      "bars_held": 27,
@@ -1140,23 +772,7 @@
      "r_multiple": -1.7143,
      "shares": 1400,
      "side": "short",
-     "trade_id": 23
-    },
-    {
-     "bars_held": 23,
-     "bsp_type": "3",
-     "entry_date": "2026-02-12 13:10",
-     "entry_price": 35.92,
-     "exit_date": "2026-02-13 09:35",
-     "exit_price": 35.92,
-     "exit_reason": "trailing",
-     "net_return": -0.0007,
-     "open": false,
-     "r_distance": 0.047857,
-     "r_multiple": -0.0,
-     "shares": 1400,
-     "side": "short",
-     "trade_id": 24
+     "trade_id": 16
     },
     {
      "bars_held": 13,
@@ -1172,7 +788,7 @@
      "r_multiple": -1.2,
      "shares": 1400,
      "side": "long",
-     "trade_id": 25
+     "trade_id": 17
     },
     {
      "bars_held": 2,
@@ -1188,7 +804,7 @@
      "r_multiple": -1.3333,
      "shares": 1400,
      "side": "short",
-     "trade_id": 26
+     "trade_id": 18
     },
     {
      "bars_held": 2,
@@ -1204,71 +820,7 @@
      "r_multiple": -31.5,
      "shares": 1400,
      "side": "long",
-     "trade_id": 27
-    },
-    {
-     "bars_held": 7,
-     "bsp_type": "3",
-     "entry_date": "2026-03-05 13:20",
-     "entry_price": 35.38,
-     "exit_date": "2026-03-05 13:55",
-     "exit_price": 35.31,
-     "exit_reason": "trailing",
-     "net_return": 0.0012787168,
-     "open": false,
-     "r_distance": 0.048571,
-     "r_multiple": 1.4412,
-     "shares": 1500,
-     "side": "short",
-     "trade_id": 28
-    },
-    {
-     "bars_held": 12,
-     "bsp_type": "3",
-     "entry_date": "2026-03-11 14:05",
-     "entry_price": 35.35,
-     "exit_date": "2026-03-12 09:35",
-     "exit_price": 34.75,
-     "exit_reason": "sl",
-     "net_return": -0.017662942,
-     "open": false,
-     "r_distance": 0.14,
-     "r_multiple": -4.2857,
-     "shares": 1500,
-     "side": "long",
-     "trade_id": 29
-    },
-    {
-     "bars_held": 2,
-     "bsp_type": "3",
-     "entry_date": "2026-03-12 14:35",
-     "entry_price": 34.71,
-     "exit_date": "2026-03-12 14:45",
-     "exit_price": 34.8,
-     "exit_reason": "sl",
-     "net_return": -0.003293172,
-     "open": false,
-     "r_distance": 0.05,
-     "r_multiple": -1.8,
-     "shares": 1500,
-     "side": "short",
-     "trade_id": 30
-    },
-    {
-     "bars_held": 4,
-     "bsp_type": "3",
-     "entry_date": "2026-03-13 14:25",
-     "entry_price": 34.83,
-     "exit_date": "2026-03-13 14:45",
-     "exit_price": 34.68,
-     "exit_reason": "sl",
-     "net_return": -0.0050040482,
-     "open": false,
-     "r_distance": 0.14,
-     "r_multiple": -1.0714,
-     "shares": 1500,
-     "side": "long",
-     "trade_id": 31
+     "trade_id": 19
     },
     {
      "bars_held": 5,
@@ -1284,7 +836,7 @@
      "r_multiple": 0.4038,
      "shares": 1700,
      "side": "short",
-     "trade_id": 32
+     "trade_id": 20
     },
     {
      "bars_held": 11,
@@ -1300,23 +852,7 @@
      "r_multiple": -7.3333,
      "shares": 1700,
      "side": "short",
-     "trade_id": 33
-    },
-    {
-     "bars_held": 94,
-     "bsp_type": "3",
-     "entry_date": "2026-04-09 09:55",
-     "entry_price": 31.13,
-     "exit_date": "2026-04-13 09:45",
-     "exit_price": 31.27,
-     "exit_reason": "breakeven",
-     "net_return": 0.0037945712,
-     "open": false,
-     "r_distance": 0.39,
-     "r_multiple": 0.359,
-     "shares": 1700,
-     "side": "long",
-     "trade_id": 34
+     "trade_id": 21
     },
     {
      "bars_held": 20,
@@ -1332,7 +868,7 @@
      "r_multiple": -1.04,
      "shares": 1600,
      "side": "short",
-     "trade_id": 35
+     "trade_id": 22
     },
     {
      "bars_held": 1,
@@ -1348,7 +884,7 @@
      "r_multiple": -1.129,
      "shares": 1600,
      "side": "short",
-     "trade_id": 36
+     "trade_id": 23
     },
     {
      "bars_held": 9,
@@ -1364,39 +900,7 @@
      "r_multiple": 1.5366,
      "shares": 1600,
      "side": "short",
-     "trade_id": 37
-    },
-    {
-     "bars_held": 10,
-     "bsp_type": "3",
-     "entry_date": "2026-04-20 14:15",
-     "entry_price": 31.95,
-     "exit_date": "2026-04-21 09:35",
-     "exit_price": 32.14,
-     "exit_reason": "trailing",
-     "net_return": 0.0052432238,
-     "open": false,
-     "r_distance": 0.04,
-     "r_multiple": 4.75,
-     "shares": 1600,
-     "side": "long",
-     "trade_id": 38
-    },
-    {
-     "bars_held": 21,
-     "bsp_type": "3",
-     "entry_date": "2026-04-22 13:15",
-     "entry_price": 31.48,
-     "exit_date": "2026-04-22 15:00",
-     "exit_price": 31.56,
-     "exit_reason": "sl",
-     "net_return": -0.0032415502,
-     "open": false,
-     "r_distance": 0.06,
-     "r_multiple": -1.3333,
-     "shares": 1600,
-     "side": "short",
-     "trade_id": 39
+     "trade_id": 24
     },
     {
      "bars_held": 4,
@@ -1412,7 +916,7 @@
      "r_multiple": -1.8,
      "shares": 1700,
      "side": "short",
-     "trade_id": 40
+     "trade_id": 25
     },
     {
      "bars_held": 5,
@@ -1428,23 +932,7 @@
      "r_multiple": -1.4483,
      "shares": 1800,
      "side": "short",
-     "trade_id": 41
-    },
-    {
-     "bars_held": 8,
-     "bsp_type": "3",
-     "entry_date": "2026-04-30 13:20",
-     "entry_price": 29.37,
-     "exit_date": "2026-04-30 14:00",
-     "exit_price": 29.47,
-     "exit_reason": "trailing",
-     "net_return": 0.002702792,
-     "open": false,
-     "r_distance": 0.05,
-     "r_multiple": 2.0,
-     "shares": 1800,
-     "side": "long",
-     "trade_id": 42
+     "trade_id": 26
     },
     {
      "bars_held": 11,
@@ -1460,7 +948,7 @@
      "r_multiple": -1.0526,
      "shares": 1500,
      "side": "long",
-     "trade_id": 43
+     "trade_id": 27
     },
     {
      "bars_held": 2,
@@ -1476,7 +964,7 @@
      "r_multiple": -1.4444,
      "shares": 1500,
      "side": "long",
-     "trade_id": 44
+     "trade_id": 28
     },
     {
      "bars_held": 9,
@@ -1492,7 +980,7 @@
      "r_multiple": -3.8889,
      "shares": 1700,
      "side": "short",
-     "trade_id": 45
+     "trade_id": 29
     },
     {
      "bars_held": 8,
@@ -1508,23 +996,7 @@
      "r_multiple": 1.0566,
      "shares": 1700,
      "side": "short",
-     "trade_id": 46
-    },
-    {
-     "bars_held": 15,
-     "bsp_type": "3",
-     "entry_date": "2026-05-26 13:50",
-     "entry_price": 28.32,
-     "exit_date": "2026-05-27 09:35",
-     "exit_price": 28.55,
-     "exit_reason": "trailing",
-     "net_return": -0.0088222811,
-     "open": false,
-     "r_distance": 0.133571,
-     "r_multiple": -1.7219,
-     "shares": 1800,
-     "side": "short",
-     "trade_id": 47
+     "trade_id": 30
     },
     {
      "bars_held": 18,
@@ -1540,23 +1012,7 @@
      "r_multiple": -1.1071,
      "shares": 1800,
      "side": "long",
-     "trade_id": 48
-    },
-    {
-     "bars_held": 2,
-     "bsp_type": "3",
-     "entry_date": "2026-05-28 09:55",
-     "entry_price": 27.96,
-     "exit_date": "2026-05-28 10:05",
-     "exit_price": 28.14,
-     "exit_reason": "sl",
-     "net_return": -0.007138412,
-     "open": false,
-     "r_distance": 0.14,
-     "r_multiple": -1.2857,
-     "shares": 1800,
-     "side": "short",
-     "trade_id": 49
+     "trade_id": 31
     },
     {
      "bars_held": 88,
@@ -1572,23 +1028,7 @@
      "r_multiple": -1.0105,
      "shares": 1800,
      "side": "long",
-     "trade_id": 50
-    },
-    {
-     "bars_held": 20,
-     "bsp_type": "3",
-     "entry_date": "2026-06-02 13:40",
-     "entry_price": 27.18,
-     "exit_date": "2026-06-03 09:50",
-     "exit_price": 26.9,
-     "exit_reason": "trailing",
-     "net_return": 0.0096027226,
-     "open": false,
-     "r_distance": 0.1,
-     "r_multiple": 2.8,
-     "shares": 1900,
-     "side": "short",
-     "trade_id": 51
+     "trade_id": 32
     },
     {
      "bars_held": 26,
@@ -1604,7 +1044,7 @@
      "r_multiple": 0.963,
      "shares": 1900,
      "side": "long",
-     "trade_id": 52
+     "trade_id": 33
     },
     {
      "bars_held": 16,
@@ -1620,39 +1060,7 @@
      "r_multiple": 1.8554,
      "shares": 2000,
      "side": "long",
-     "trade_id": 53
-    },
-    {
-     "bars_held": 3,
-     "bsp_type": "3",
-     "entry_date": "2026-06-10 10:50",
-     "entry_price": 25.27,
-     "exit_date": "2026-06-10 11:05",
-     "exit_price": 25.13,
-     "exit_reason": "sl",
-     "net_return": -0.0062368421,
-     "open": false,
-     "r_distance": 0.117857,
-     "r_multiple": -1.1879,
-     "shares": 2000,
-     "side": "long",
-     "trade_id": 54
-    },
-    {
-     "bars_held": 2,
-     "bsp_type": "3",
-     "entry_date": "2026-06-22 13:45",
-     "entry_price": 25.78,
-     "exit_date": "2026-06-22 13:55",
-     "exit_price": 25.95,
-     "exit_reason": "sl",
-     "net_return": -0.0072949185,
-     "open": false,
-     "r_distance": 0.11,
-     "r_multiple": -1.5455,
-     "shares": 2000,
-     "side": "short",
-     "trade_id": 55
+     "trade_id": 34
     },
     {
      "bars_held": 1,
@@ -1668,7 +1076,7 @@
      "r_multiple": -4.9863,
      "shares": 2000,
      "side": "long",
-     "trade_id": 56
+     "trade_id": 35
     },
     {
      "bars_held": 1,
@@ -1684,7 +1092,7 @@
      "r_multiple": -0.2617,
      "shares": 2000,
      "side": "long",
-     "trade_id": 57
+     "trade_id": 36
     },
     {
      "bars_held": 30,
@@ -1700,23 +1108,23 @@
      "r_multiple": 5.0476,
      "shares": 2000,
      "side": "long",
-     "trade_id": 58
+     "trade_id": 37
     },
     {
-     "bars_held": 29,
-     "bsp_type": "3",
-     "entry_date": "2026-06-29 11:10",
-     "entry_price": 23.32,
-     "exit_date": "2026-06-30 09:35",
-     "exit_price": 23.09,
+     "bars_held": 8,
+     "bsp_type": "0",
+     "entry_date": "2026-06-29 13:55",
+     "entry_price": 23.13,
+     "exit_date": "2026-06-29 14:35",
+     "exit_price": 22.96,
      "exit_reason": "trailing",
-     "net_return": 0.009163765,
+     "net_return": 0.0066504972,
      "open": false,
-     "r_distance": 0.172857,
-     "r_multiple": 1.3306,
+     "r_distance": 0.05,
+     "r_multiple": 3.4,
      "shares": 2200,
      "side": "short",
-     "trade_id": 59
+     "trade_id": 38
     },
     {
      "bars_held": 5,
@@ -1732,7 +1140,7 @@
      "r_multiple": -1.25,
      "shares": 2100,
      "side": "long",
-     "trade_id": 60
+     "trade_id": 39
     },
     {
      "bars_held": 7,
@@ -1748,23 +1156,7 @@
      "r_multiple": -1.2575,
      "shares": 2200,
      "side": "long",
-     "trade_id": 61
-    },
-    {
-     "bars_held": 3,
-     "bsp_type": "3",
-     "entry_date": "2026-07-15 11:20",
-     "entry_price": 21.2,
-     "exit_date": "2026-07-15 13:05",
-     "exit_price": 21.24,
-     "exit_reason": "trailing",
-     "net_return": 0.0011856604,
-     "open": false,
-     "r_distance": 0.069286,
-     "r_multiple": 0.5773,
-     "shares": 2400,
-     "side": "long",
-     "trade_id": 62
+     "trade_id": 40
     },
     {
      "bars_held": 7,
@@ -1780,7 +1172,7 @@
      "r_multiple": -1.3846,
      "shares": 2400,
      "side": "long",
-     "trade_id": 63
+     "trade_id": 41
     },
     {
      "bars_held": 3,
@@ -1796,39 +1188,7 @@
      "r_multiple": -2.8,
      "shares": 2200,
      "side": "long",
-     "trade_id": 64
-    },
-    {
-     "bars_held": 2,
-     "bsp_type": "3",
-     "entry_date": "2026-08-10 13:45",
-     "entry_price": 23.72,
-     "exit_date": "2026-08-10 13:55",
-     "exit_price": 23.93,
-     "exit_reason": "trailing",
-     "net_return": 0.0081479764,
-     "open": false,
-     "r_distance": 0.05,
-     "r_multiple": 4.2,
-     "shares": 2200,
-     "side": "long",
-     "trade_id": 65
-    },
-    {
-     "bars_held": 2,
-     "bsp_type": "3",
-     "entry_date": "2026-08-11 13:30",
-     "entry_price": 23.63,
-     "exit_date": "2026-08-11 13:40",
-     "exit_price": 23.74,
-     "exit_reason": "sl",
-     "net_return": -0.005355565,
-     "open": false,
-     "r_distance": 0.053571,
-     "r_multiple": -2.0533,
-     "shares": 2200,
-     "side": "short",
-     "trade_id": 66
+     "trade_id": 42
     },
     {
      "bars_held": 5,
@@ -1844,23 +1204,7 @@
      "r_multiple": -1.2,
      "shares": 2000,
      "side": "long",
-     "trade_id": 67
-    },
-    {
-     "bars_held": 22,
-     "bsp_type": "3",
-     "entry_date": "2026-08-18 14:05",
-     "entry_price": 24.19,
-     "exit_date": "2026-08-19 10:25",
-     "exit_price": 23.13,
-     "exit_reason": "trailing",
-     "net_return": 0.0431213331,
-     "open": false,
-     "r_distance": 0.1,
-     "r_multiple": 10.6,
-     "shares": 2100,
-     "side": "short",
-     "trade_id": 68
+     "trade_id": 43
     },
     {
      "bars_held": 5,
@@ -1876,39 +1220,7 @@
      "r_multiple": 0.3784,
      "shares": 2000,
      "side": "long",
-     "trade_id": 69
-    },
-    {
-     "bars_held": 3,
-     "bsp_type": "3",
-     "entry_date": "2026-09-01 14:00",
-     "entry_price": 26.38,
-     "exit_date": "2026-09-01 14:15",
-     "exit_price": 26.26,
-     "exit_reason": "sl",
-     "net_return": -0.0052463828,
-     "open": false,
-     "r_distance": 0.08,
-     "r_multiple": -1.5,
-     "shares": 1900,
-     "side": "long",
-     "trade_id": 70
-    },
-    {
-     "bars_held": 12,
-     "bsp_type": "3",
-     "entry_date": "2026-09-04 09:55",
-     "entry_price": 26.06,
-     "exit_date": "2026-09-04 10:55",
-     "exit_price": 26.27,
-     "exit_reason": "sl",
-     "net_return": -0.0087591328,
-     "open": false,
-     "r_distance": 0.12,
-     "r_multiple": -1.75,
-     "shares": 2000,
-     "side": "short",
-     "trade_id": 71
+     "trade_id": 44
     },
     {
      "bars_held": 6,
@@ -1924,23 +1236,7 @@
      "r_multiple": -2.1325,
      "shares": 2000,
      "side": "short",
-     "trade_id": 72
-    },
-    {
-     "bars_held": 16,
-     "bsp_type": "3",
-     "entry_date": "2026-09-09 13:45",
-     "entry_price": 26.36,
-     "exit_date": "2026-09-10 09:35",
-     "exit_price": 26.03,
-     "exit_reason": "breakeven",
-     "net_return": -0.0132125409,
-     "open": false,
-     "r_distance": 0.105714,
-     "r_multiple": -3.1216,
-     "shares": 1900,
-     "side": "long",
-     "trade_id": 73
+     "trade_id": 45
     }
    ]
   }

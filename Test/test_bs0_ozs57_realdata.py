@@ -68,6 +68,9 @@ SAMPLE = "sz002190_d.json"
 # （新增 2025/07/09、2025/07/11，均落在 57th 分支）、57th 宽松 T0 6→8。同轮
 # cal_bs3point 新增「笔N 整笔 DIF 趋势侧闸」（_dif_all_same_side），本样本
 # T3 3→6 全部来自 ㈢ 停用（6 个 T3 在新闸下逐一通过，A/B 实证 delta=0）。
+# 2026-10-20 重冻：cal_bs3point 新增 ⑶「笔N-1 极值相对笔N-3 不推进」判定
+# （避开趋势末段，无条件生效）⇒ 本样本 3 个三买全部被拦（笔N-1 底分型极值
+# 高于笔N-3），T3 6→3（3 买 0 + 3 卖 3；三卖侧只拦高点降低，本样本无一被拦）。
 # 严格口径（BASE_STRICT_*）与 4th 基线实测逐项不变，保持原值。
 BASE_ENTER_57TH = 51
 BASE_LOOSE_T0_DATES = ["2024/04/18", "2024/04/19", "2024/04/22",
@@ -78,7 +81,7 @@ BASE_STRICT_T0_DATES = ["2024/04/18", "2024/04/19", "2024/04/22"]
 BASE_LOOSE_57TH_T0_COUNT = 8
 BASE_STRICT_57TH_T0_COUNT = 0
 BASE_4TH_T0_COUNT = 3
-BASE_T3_COUNT = 6
+BASE_T3_COUNT = 3
 
 BRANCHES = (
     ("_cal_bs0point_3rd", "3rd"),

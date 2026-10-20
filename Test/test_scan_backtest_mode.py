@@ -124,8 +124,10 @@ def part1(kl):
     # 基线 6 笔：2026-10-08 最新内核恢复了 `_has_bsp_for_bi` 拦截，2 类买卖点
     #   不再进入信号流，本切片 6→5 笔（与 test_stock_backtest 同源同值）；
     #   2026-10-12 0 类点突破阈值口径调整后新增 1 笔 0 类，5→6 笔。
-    check("① 笔数与单页回测**逐位相等**（filled=6 基线）",
-          row.get("filled") == direct["run"]["filled"] == 6,
+    # 2026-10-20 重冻：cal_bs3point ⑶ 无条件生效 ⇒ 3 个三买被拦，6→4 笔
+    #   （与 Test/test_stock_backtest.py part1 同源同值）。
+    check("① 笔数与单页回测**逐位相等**（filled=4 基线）",
+          row.get("filled") == direct["run"]["filled"] == 4,
           "scan=%r direct=%r" % (row.get("filled"), direct["run"]["filled"]))
     check("① 期望值(%/笔) 与单页回测**逐位相等**（同一份 klines 同一内核）",
           row.get("avg_net_return_pct") == direct["summary"]["avg_net_return_pct"],
@@ -159,10 +161,10 @@ def part2(kl):
     r_empty = _run_scan_one(kl, bsp_types="")
     r_only1 = _run_scan_one(kl, bsp_types="1")
 
-    check("② None = 未启用过滤（全放行，6 笔）",
-          r_none.get("filled") == 6, r_none.get("filled"))
-    check("② \"0,1,2,3\" ≡ None（四类全放行同样 6 笔）",
-          r_all.get("filled") == 6, r_all.get("filled"))
+    check("② None = 未启用过滤（全放行，4 笔）",
+          r_none.get("filled") == 4, r_none.get("filled"))
+    check("② \"0,1,2,3\" ≡ None（四类全放行同样 4 笔）",
+          r_all.get("filled") == 4, r_all.get("filled"))
     check("② \"\" = 四类全不勾 ⇒ 0 笔（**不是**全放行）",
           r_empty.get("filled") == 0, r_empty.get("filled"))
     check("② 0 笔仍返回正常行、不报错（前端按 filled>=1 过滤，不是靠异常）",
@@ -258,7 +260,7 @@ def part3(kl):
           r_empty.get("error"))
     r_ok = _run_scan_one(kl)
     check("③ 同批次内其它票不受影响（上一票失败不污染下一票）",
-          r_ok.get("filled") == 6, r_ok.get("filled"))
+          r_ok.get("filled") == 4, r_ok.get("filled"))
 
 
 # ══════════════════════════════════════════════════════════════════════

@@ -7,27 +7,23 @@
      "bars_total": 1393,
      "bps": [
       "3",
-      "3",
-      "3",
       "0"
      ],
-     "closed": 4,
+     "closed": 2,
      "e": 0,
      "entries": [
-      "2021-08-23",
-      "2021-12-22",
       "2022-05-20",
       "2024-04-18"
      ],
-     "expectancy_r": -0.1964,
-     "filled": 4,
-     "l": 2,
+     "expectancy_r": 0.30645,
+     "filled": 2,
+     "l": 0,
      "signals_filtered": 0,
-     "signals_seen": 9,
+     "signals_seen": 6,
      "still_open": 0,
-     "sum_r": -0.7856,
+     "sum_r": 0.6129,
      "w": 2,
-     "win_rate": 0.5
+     "win_rate": 1.0
     },
     "only0": {
      "bars_total": 1393,
@@ -42,8 +38,8 @@
      "expectancy_r": 0.4953,
      "filled": 1,
      "l": 0,
-     "signals_filtered": 6,
-     "signals_seen": 9,
+     "signals_filtered": 3,
+     "signals_seen": 6,
      "still_open": 0,
      "sum_r": 0.4953,
      "w": 1,
@@ -52,26 +48,22 @@
     "only3": {
      "bars_total": 1393,
      "bps": [
-      "3",
-      "3",
       "3"
      ],
-     "closed": 3,
+     "closed": 1,
      "e": 0,
      "entries": [
-      "2021-08-23",
-      "2021-12-22",
       "2022-05-20"
      ],
-     "expectancy_r": -0.426967,
-     "filled": 3,
-     "l": 2,
+     "expectancy_r": 0.1176,
+     "filled": 1,
+     "l": 0,
      "signals_filtered": 3,
-     "signals_seen": 9,
+     "signals_seen": 6,
      "still_open": 0,
-     "sum_r": -1.2809,
+     "sum_r": 0.1176,
      "w": 1,
-     "win_rate": 0.333333
+     "win_rate": 1.0
     }
    }
   },
@@ -82,31 +74,27 @@
      "bars_total": 1393,
      "bps": [
       "3",
-      "3",
-      "3",
       "0",
       "0",
       "0"
      ],
-     "closed": 6,
+     "closed": 4,
      "e": 0,
      "entries": [
-      "2021-08-23",
-      "2021-12-22",
       "2022-05-20",
       "2024-04-18",
       "2025-07-09",
       "2025-08-18"
      ],
-     "expectancy_r": 1.76755,
-     "filled": 6,
-     "l": 3,
+     "expectancy_r": 3.00095,
+     "filled": 4,
+     "l": 1,
      "signals_filtered": 0,
-     "signals_seen": 17,
+     "signals_seen": 14,
      "still_open": 0,
-     "sum_r": 10.6053,
+     "sum_r": 12.0038,
      "w": 3,
-     "win_rate": 0.5
+     "win_rate": 0.75
     },
     "only0": {
      "bars_total": 1393,
@@ -125,8 +113,8 @@
      "expectancy_r": 3.962067,
      "filled": 3,
      "l": 1,
-     "signals_filtered": 6,
-     "signals_seen": 17,
+     "signals_filtered": 3,
+     "signals_seen": 14,
      "still_open": 0,
      "sum_r": 11.8862,
      "w": 2,
@@ -135,26 +123,22 @@
     "only3": {
      "bars_total": 1393,
      "bps": [
-      "3",
-      "3",
       "3"
      ],
-     "closed": 3,
+     "closed": 1,
      "e": 0,
      "entries": [
-      "2021-08-23",
-      "2021-12-22",
       "2022-05-20"
      ],
-     "expectancy_r": -0.426967,
-     "filled": 3,
-     "l": 2,
+     "expectancy_r": 0.1176,
+     "filled": 1,
+     "l": 0,
      "signals_filtered": 11,
-     "signals_seen": 17,
+     "signals_seen": 14,
      "still_open": 0,
-     "sum_r": -1.2809,
+     "sum_r": 0.1176,
      "w": 1,
-     "win_rate": 0.333333
+     "win_rate": 1.0
     }
    }
   }
