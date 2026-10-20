@@ -567,6 +567,7 @@ var localStorage = {
 function showToast(m) { TOASTS.push(m); }
 function render() { RENDERS++; }
 var COLORS = { macdUp: "UP", macdDown: "DN", rsi: "WH" };
+var _isMirrorMode = false;   // rsiColorOf 读它（翻转视图换色），桩里按正常视图
 function clearAll() { DOM = {}; LS = {}; TOASTS = []; RENDERS = 0; }
 """
 
@@ -1055,8 +1056,8 @@ def part6():
           "档位过滤 RSI_AXIS_LEVELS、取色比较 RSI_SEG_OVER/UNDER）",
           "RSI_REF_VALUES.forEach(v => {" in appjs
           and "RSI_AXIS_LEVELS.filter(v => v >= range.min && v <= range.max)" in appjs
-          and "if (v >= RSI_SEG_OVER) return COLORS.macdUp;" in appjs
-          and "if (v <= RSI_SEG_UNDER) return COLORS.macdDown;" in appjs, "")
+          and "if (v >= RSI_SEG_OVER) return _isMirrorMode ? COLORS.macdDown : COLORS.macdUp;" in appjs
+          and "if (v <= RSI_SEG_UNDER) return _isMirrorMode ? COLORS.macdUp : COLORS.macdDown;" in appjs, "")
 
     check("⑥ 注释不复述运行值：`drawRsi` 函数头把 80/20 标成**默认**并指向 "
           "RSI_REF_VALUES / _applyRsiThresholds（配置化后写死数字即陈旧文档）",

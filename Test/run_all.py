@@ -387,9 +387,13 @@ COMPONENTS = [
      [sys.executable, os.path.join("Test", "test_bottom_slots.py")]),
     # MACD 金叉/死叉箭头（2026-10-20）：DIF/DEA 交叉处画箭头 —— 金叉红向上、
     #   死叉绿向下（颜色取 COLORS.macdUp/macdDown，与红绿柱同一个常量）。
-    #   判据三层：① 源码契约（`!valOf` 闸拦住类MACD、无颜色字面量、等于不算）；
+    #   翻转视图下**落点、朝向、颜色一起翻**（金叉→绿朝下、死叉→红朝上），
+    #   「红恒朝上 / 绿恒朝下」两态都成立；成交额/量 的「类MACD」走同一个 drawMacd
+    #   （valOf=volMacdOf），也画自己那槽的交叉箭头。
+    #   判据三层：① 源码契约（调用点无条件、无颜色字面量、等于不算、朝向与取色同源翻）；
     #   ② node 抽真实函数跑几何（箭头数==交叉数 / 方向 / 柱心对齐 / 越界夹回 /
-    #   翻转视图只镜像锚点不翻朝向）；③ 真渲染记 fill() 序列反查交叉根
+    #   翻转视图朝向+取色对调）+ ②b drawVolumeMacd 真执行（量能箭头来自 volMacdOf，
+    #   价格等值时价格槽 0 箭头）；③ 真渲染记 fill() 序列反查交叉根
     #   （浏览器不在位时降级 SKIP）。
     ("macd_cross_arrows",
      [sys.executable, os.path.join("Test", "test_macd_cross_arrows.py")]),

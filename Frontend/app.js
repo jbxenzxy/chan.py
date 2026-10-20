@@ -159,7 +159,7 @@
         //   的后两位）上进行 —— 对整个三元组取会把**常量中轴 50** 算进来：
         //   用户把超买配到 50 以下（如 45）时上沿会被顶在 50，与后端按 45 判的扫
         //   描结果两边分叉（反之超卖配到 50 以上同理）。阈值对由 _rsiPairOk / scan_one
-        //   保证「超买 > 超卖」。取色只认**值**，与翻转视图无关（翻转只翻 Y 位置，见 drawRsi）。
+        //   保证「超买 > 超卖」。取色只认**值** + 翻转对调（见 rsiColorOf），不读阈值以外的东西。
         let RSI_SEG_OVER = Math.max.apply(null, RSI_REF_VALUES.slice(1));
         let RSI_SEG_UNDER = Math.min.apply(null, RSI_REF_VALUES.slice(1));
         // 阈值配置生效：重算上列三件派生值（调用点 = 启动载入 + 抽屉保存，勿增第三处）
@@ -2091,10 +2091,10 @@
             ctx.stroke();
             ctx.strokeStyle = "rgba(255,255,255,0.2)"; ctx.lineWidth = 1;
             ctx.beginPath(); ctx.moveTo(macdArea.x, zeroY); ctx.lineTo(macdArea.x + macdArea.w, zeroY); ctx.stroke();
-            // ── 金叉 / 死叉箭头（只画价格MACD）────────────────────────────
-            // 类MACD（drawVolumeMacd）复用本函数但传了 valOf：成交额/量的交叉不是
-            // 价格信号，用 !valOf 拦住，副图里的交叉不会顶进 MACD 槽。
-            if (!valOf) drawMacdCrossArrows(klines, macdArea, macdToY, barStep, subPixelOffset, getVals);
+            // ── 金叉 / 死叉箭头（价格MACD 与 成交额/量 类MACD 各画自己一槽）──
+            // 取值一律走 getVals：价格MACD 拿 K 线自身的 dif/dea，类MACD 拿 volMacdOf，
+            // 判定与落点都跟着本槽的取值走 —— 成交额/量的交叉留在 vol 槽，不会串到 MACD 槽。
+            drawMacdCrossArrows(klines, macdArea, macdToY, barStep, subPixelOffset, getVals);
         }
 
         // ═══════════════════════════════════════════════════════════════
@@ -2108,8 +2108,9 @@
         // 等值后一旦分开仍记一次交叉；否则横盘贴线段会整段漏信号）。首根无前值不判。
         // 颜色取 COLORS.macdUp / COLORS.macdDown —— 与红/绿柱**同一个常量**，
         // 不另写字面量：改柱色时箭头自动跟随，也不会出现"两套红"。
-        // 方向固定为语义方向（金叉恒朝上、死叉恒朝下）：翻转视图只翻 Y 轴，交叉的
-        // 多空含义不随之翻转；落点仍由调用方传进来的 macdToY 算，故自动跟随翻转。
+        // 翻转视图：落点、朝向、颜色**一起翻** —— 与柱 / 线 / 标签行同一套视角口径
+        //   （翻转后正柱落到零线下方、红青对调，见 drawMacd）。所以金叉在翻转视图下
+        //   画成「绿箭头朝下」、死叉画成「红箭头朝上」；落点仍由调用方的 macdToY 算。
         // 几何：尾巴落在交叉点（dif/dea 均值），箭头朝语义方向生长；尖端越出绘图窗
         // 时整体夹回窗内 —— 宁可尖端离交叉点几像素，也不许画到标签行或相邻槽上。
         const MACD_CROSS_H = 10;   // 箭头总高（尾 → 尖，px）
@@ -2126,6 +2127,7 @@
                 return (typeof dif === 'number' && typeof dea === 'number'
                         && isFinite(dif) && isFinite(dea)) ? { dif: dif, dea: dea } : null;
             };
+            const flip = _isMirrorMode;                      // 翻转视图：朝向与颜色一起翻
             const headH = Math.round(MACD_CROSS_H * 0.6);    // 箭头头部高（其余为杆）
             const stemHW = 1;                                // 杆半宽
             const lo = area.y + 1, hi = area.y + area.h - 1; // 可视窗口（留 1px 余量）
@@ -2139,13 +2141,13 @@
                 if (!golden && !death) continue;
                 // 交叉点高度 = 两根线交点：同根已一上一下，取均值即交点的线性近似。
                 let yTail = macdToY((cur.dif + cur.dea) / 2);
-                const dir = golden ? -1 : 1;                   // −1 = 朝上（屏幕），+1 = 朝下
+                const dir = (golden ? -1 : 1) * (flip ? -1 : 1);  // −1 = 朝上（屏幕），+1 = 朝下；翻转取反
                 let yTip = yTail + dir * MACD_CROSS_H;
                 if (dir < 0 && yTip < lo) { yTail += lo - yTip; yTip = lo; }
                 if (dir > 0 && yTip > hi) { yTail -= yTip - hi; yTip = hi; }
                 const x = area.x + barStep * i + barStep / 2 - subPixelOffset;
                 const yOf = function (off) { return yTail + dir * off; };  // off: 0 = 尾 … H = 尖
-                ctx.fillStyle = golden ? COLORS.macdUp : COLORS.macdDown;
+                ctx.fillStyle = (golden !== flip) ? COLORS.macdUp : COLORS.macdDown;
                 ctx.beginPath();
                 ctx.moveTo(x, yOf(MACD_CROSS_H));
                 ctx.lineTo(x - MACD_CROSS_HW, yOf(MACD_CROSS_H - headH));
@@ -2216,10 +2218,11 @@
 
         // 折线**分段取色**：值 → 颜色。三档色全走 COLORS 引用（不写颜色字面量）——
         //   ≥ 超买阈值 → MACD 红柱色、≤ 超卖阈值 → MACD 绿柱色、其余 → 白（COLORS.rsi）。
-        //   纯函数（不碰 area / range / 翻转）：取色只看值 ⇒ 翻转视图下颜色序列不变。
+        // 翻转视图：超买 / 超卖两档**对调**（与 MACD 柱、K 线、成交量柱同一套口径 ——
+        //   翻转后高值画在下方、红青互换），中轴白不变。只在此一处翻，drawRsi 不再翻第二次。
         function rsiColorOf(v) {
-            if (v >= RSI_SEG_OVER) return COLORS.macdUp;
-            if (v <= RSI_SEG_UNDER) return COLORS.macdDown;
+            if (v >= RSI_SEG_OVER) return _isMirrorMode ? COLORS.macdDown : COLORS.macdUp;
+            if (v <= RSI_SEG_UNDER) return _isMirrorMode ? COLORS.macdUp : COLORS.macdDown;
             return COLORS.rsi;
         }
 
@@ -2245,8 +2248,8 @@
         // 折线按超买 / 超卖**分段着色**（见 rsiColorOf）：≥ 上沿 → MACD 红柱色、≤ 下沿 →
         //   MACD 绿柱色、其余 → 白；变色点取在与阈值线的交点上（rsiSegmentCuts 线性插值），
         //   同色连续的子段合并成一条 path，只在变色处断笔。
-        // 翻转视图：三条线与折线整体镜像（超买 ↔ 超卖互换、50 是不动点）；取色只看值
-        //   ⇒ 只翻 Y 位置，不改颜色、不改数值。
+        // 翻转视图：三条线与折线整体镜像（超买 ↔ 超卖互换、50 是不动点）；取色随视角
+        //   对调（只在 rsiColorOf 一处翻），数值不变。
         function drawRsi(klines, area, range, barStep, subPixelOffset) {
             // 三条线**同一套线型**（细点虚线），只靠明度区分中轴与超买超卖：
             // 50 中轴略亮（0.2），两条阈值线略暗（0.15）。

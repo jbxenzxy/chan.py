@@ -7,16 +7,22 @@ MACD 金叉 / 死叉箭头 —— 判定口径 + 几何落点 + 真渲染三层�
   MACD 槽在 DIF/DEA 交叉处画箭头：
     ① 金叉（本根 DIF > DEA，等于不算）→ 红色向上箭头，颜色取 COLORS.macdUp
        —— 与 MACD 红柱**同一个常量**，不另写字面量；
-    ② 死叉（本根 DIF < DEA，等于不算）→ 绿色向下箭头，颜色取 COLORS.macdDown。
+    ② 死叉（本根 DIF < DEA，等于不算）→ 绿色向下箭头，颜色取 COLORS.macdDown；
+    ③ 翻转视图：落点、朝向、颜色**一起翻**（金叉→绿箭头朝下、死叉→红箭头朝上），
+       不变式「红恒朝上 / 绿恒朝下」在两态下都成立，变的只是「交叉 → 颜色」的绑定；
+    ④ 成交额/量 的「类MACD」走同一个 drawMacd（valOf = volMacdOf），也画自己那一槽的
+       交叉箭头 —— 判定与落点跟着取值函数走，不串到价格 MACD 槽。
 
 三层：
 
-  ① 源码契约（静态）：调用点由 `!valOf` 拦住（类MACD 不画）、颜色只走 COLORS、
+  ① 源码契约（静态）：调用点无条件（两槽都画）、颜色只走 COLORS 且随翻转对调、
      判定式就是「本根严格 + 前一根非严格」、几何参数集中成常量、无颜色字面量。
   ② 几何真跑（node + canvas 桩）：把 app.js 里的 `drawMacd` 与
      `drawMacdCrossArrows` **原样抽出来**执行，用桩 ctx 记录每次 `fill()` 的
      fillStyle 与路径点，再对「交叉点集合 / 方向 / 落点 / 越界」做几何断言。
      —— 不是"源码里看起来有"，是"真跑一遍：画了几支、画在哪、是不是真在交叉根上"。
+     ②b 单开一跑量能侧：价格字段全程等值时，价格槽必须 0 箭头、量能槽必须画出
+     volMacdOf 的交叉 —— 两槽各判各的，互不串槽。
   ③ 真渲染（无头 Chrome，浏览器不在位降级 SKIP）：起本地静态服务 + 路由打桩喂
      真实快照，在同一帧里记录主画布的 `fill()` 序列，按 MACD 槽绘图窗筛出箭头，
      再反查"这根K线是否真是交叉根"——证明箭头真的接进了渲染管线，而不是只存在于
@@ -136,17 +142,20 @@ def test_source_contract(failures):
     check(failures, up is not None and down is not None,
           "COLORS 里能取到 macdUp / macdDown", f"got {up!r} / {down!r}")
 
-    calls = re.findall(r"if \(!valOf\) drawMacdCrossArrows\(", macd)
-    check(failures, len(calls) == 1,
-          "drawMacd 内以 `if (!valOf)` 调用一次箭头绘制（类MACD 复用时不画价格信号）",
+    calls = re.findall(r"^\s*drawMacdCrossArrows\(klines, macdArea, macdToY, barStep, subPixelOffset, getVals\);$", macd, re.M)
+    check(failures, len(calls) == 1 and "if (!valOf)" not in macd,
+          "drawMacd 内**无条件**调用一次箭头绘制（价格MACD 与 类MACD 各画自己一槽）",
           f"命中 {len(calls)}")
     check(failures,
           "drawMacd(klines, volArea, macdRange, barStep, barWidth, subPixelOffset, volMacdOf);" in js,
-          "drawVolumeMacd 仍把 volMacdOf 当 valOf 传入（否则这道闸恒真，"
-          "成交额/量的交叉会顶进价格MACD槽）")
+          "drawVolumeMacd 仍把 volMacdOf 当 valOf 传入（类MACD 的箭头按成交额/量的值判，"
+          "不偷价格 dif/dea）")
 
-    check(failures, "ctx.fillStyle = golden ? COLORS.macdUp : COLORS.macdDown;" in arrows,
-          "箭头取色 = COLORS.macdUp / COLORS.macdDown（与红/绿柱同一个常量）")
+    check(failures, "ctx.fillStyle = (golden !== flip) ? COLORS.macdUp : COLORS.macdDown;" in arrows
+          and "const flip = _isMirrorMode;" in arrows,
+          "箭头取色 = COLORS.macdUp / macdDown，且翻转视图下**对调**（(golden !== flip)）")
+    check(failures, "const dir = (golden ? -1 : 1) * (flip ? -1 : 1);" in arrows,
+          "朝向与取色同源翻转：翻转视图下金叉朝下、死叉朝上（不是只翻落点、不翻方向）")
     lits = re.findall(r"#[0-9A-Fa-f]{3,8}\b|rgba?\([^)]*\)", arrows)
     check(failures, not lits,
           "箭头函数体内无颜色字面量（防「另写一个红」与柱色漂移）", f"发现 {lits}")
@@ -185,6 +194,8 @@ const spec = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 // —— app.js 的模块级依赖，按真实值注入 ——
 const COLORS = spec.colors;
 const ZERO_MACD_VALS = { dif: 0, dea: 0, macd: 0 };
+// 类MACD 的取值 Map：与 app.js 的 _volMacdMap 同构（key 为 K 线对象本身）
+const _volMacdMap = new Map((spec.klines || []).filter(k => k.vm).map(k => [k, k.vm]));
 let _isMirrorMode = !!spec.mirror;
 
 // —— 被测代码（上面由 Python 原样拼好：两个 const + 两个函数）——
@@ -226,13 +237,18 @@ ctx = makeCtx();
 drawMacd(spec.klines, area, range, spec.barStep, spec.barWidth, spec.subPixelOffset);
 out.macdNoVal = ctx._rec.length;
 
-// C) 跑整段 drawMacd：传 valOf（类MACD 的真实调用形态）⇒ 一个箭头都不许有
-//    取值函数用「dif / dea 互换」而不是常量：互换后交叉**依然成串**，所以如果闸门
-//    失效，这里会照样画出箭头 —— 常量函数永远不交叉，那种写法会让断言恒真。
+// C) 跑整段 drawMacd：传 valOf（类MACD 的实际调用形态）⇒ 按**取值函数**画箭头
+//    取值用「dif / dea 互换」而不是常量：互换后交叉依然成串（金叉↔死叉互换），
+//    这里断言的是「箭头跟着 valOf 走」，常量写法会让断言退化成恒真。
 ctx = makeCtx();
 drawMacd(spec.klines, area, range, spec.barStep, spec.barWidth, spec.subPixelOffset,
          (k) => ({ dif: k.dea, dea: k.dif, macd: 0 }));
-out.macdWithVal = ctx._rec.length;
+out.valArrows = ctx._rec;
+// C2) valOf 返回常量（永不交叉）⇒ 0 箭头：证明没有偷偷回落到 K 线自身的 dif/dea
+ctx = makeCtx();
+drawMacd(spec.klines, area, range, spec.barStep, spec.barWidth, spec.subPixelOffset,
+         () => ({ dif: 1, dea: 0, macd: 1 }));
+out.valFlat = ctx._rec.length;
 
 // D) 空 / 单根 / 绘图窗太矮 ⇒ 零箭头、且不抛
 ctx = makeCtx();
@@ -241,6 +257,15 @@ drawMacdCrossArrows(spec.klines.slice(0, 1), area, macdToY, spec.barStep, 0, (k)
 drawMacdCrossArrows(spec.klines, { x: area.x, y: area.y, w: area.w, h: 6 },
                     macdToY, spec.barStep, 0, (k) => k);
 out.degenerate = ctx._rec.length;
+
+// E) 类MACD：drawVolumeMacd 内部 = drawMacd + volMacdOf ⇒ 画的是**量能**的交叉
+//    同一批 K 线再单独跑一次价格 paths，用来证明两槽各判各的（互不串槽）。
+ctx = makeCtx();
+drawVolumeMacd(spec.klines, area, range, spec.barStep, spec.barWidth, spec.subPixelOffset);
+out.volArrows = ctx._rec;
+ctx = makeCtx();
+drawMacd(spec.klines, area, range, spec.barStep, spec.barWidth, spec.subPixelOffset);
+out.priceArrows = ctx._rec;
 
 process.stdout.write(JSON.stringify(out));
 """
@@ -318,17 +343,20 @@ def _check_one(failures, name, spec, out, h):
 
     idx = sorted(gold + death)
     bad_dir, bad_style, bad_pts, bad_h, bad_x, bad_box = [], [], [], [], [], []
+    flip = bool(spec.get("mirror"))
     for a, i in zip(arr, idx):
         pts, ys = a["pts"], [p[1] for p in a["pts"]]
         is_gold = i in gold
+        # 金叉默认朝上；翻转视图下金叉朝下。取色与朝向同侧：红 = 朝上、绿 = 朝下。
+        want_up = is_gold != flip
         if len(pts) != 7:
             bad_pts.append(i)
             continue
-        if is_gold and not (ys[0] == min(ys) and ys.count(min(ys)) == 1):
-            bad_dir.append((i, "金叉未朝上"))
-        if (not is_gold) and not (ys[0] == max(ys) and ys.count(max(ys)) == 1):
-            bad_dir.append((i, "死叉未朝下"))
-        want = spec["colors"]["macdUp"] if is_gold else spec["colors"]["macdDown"]
+        if want_up and not (ys[0] == min(ys) and ys.count(min(ys)) == 1):
+            bad_dir.append((i, ("金叉" if is_gold else "死叉") + "未朝上", "flip" if flip else "normal"))
+        if (not want_up) and not (ys[0] == max(ys) and ys.count(max(ys)) == 1):
+            bad_dir.append((i, ("金叉" if is_gold else "死叉") + "未朝下", "flip" if flip else "normal"))
+        want = spec["colors"]["macdUp"] if want_up else spec["colors"]["macdDown"]
         if norm_color(a["style"]) != norm_color(want):
             bad_style.append((i, a["style"], want))
         if abs((max(ys) - min(ys)) - h) > 1e-6:
@@ -339,8 +367,10 @@ def _check_one(failures, name, spec, out, h):
         if min(ys) < area["y"] - 1e-6 or max(ys) > area["y"] + area["h"] + 1e-6:
             bad_box.append((i, round(min(ys), 2), round(max(ys), 2)))
 
-    check(failures, not bad_dir, f"{name}：金叉朝上 / 死叉朝下（按尖端位置判）", f"{bad_dir[:3]}")
-    check(failures, not bad_style, f"{name}：颜色逐支对上 macdUp / macdDown", f"{bad_style[:3]}")
+    check(failures, not bad_dir, f"{name}：箭头方向与颜色同侧（红恒朝上、绿恒朝下；翻转视图对调）",
+          f"{bad_dir[:3]}")
+    check(failures, not bad_style, f"{name}：颜色逐支对上红/青，且与本视角的交叉类型匹配",
+          f"{bad_style[:3]}")
     check(failures, not bad_pts, f"{name}：每支都是 7 点闭合路径", f"{bad_pts[:3]}")
     check(failures, not bad_h, f"{name}：箭头总高恒为 MACD_CROSS_H（夹回不压扁形状）",
           f"{bad_h[:3]}")
@@ -399,6 +429,8 @@ def test_geometry(failures):
     with open(drv, "w", encoding="utf-8") as f:
         f.write(f"const MACD_CROSS_H = {h};\n")
         f.write(f"const MACD_CROSS_HW = {hw};\n")
+        f.write(fn_src(js, "volMacdOf") + "\n")
+        f.write(fn_src(js, "drawVolumeMacd") + "\n")
         f.write(arrows + "\n" + macd + "\n" + NODE_DRIVER)
 
     results = {}
@@ -410,8 +442,9 @@ def test_geometry(failures):
         results[name] = (spec, out)
         _check_one(failures, name, spec, out, h)
 
-    # 翻转视图：**锚点（箭尾）**关于中线镜像，箭头朝向不翻（金叉恒朝上）。
-    #   不是"整支箭头镜像"—— 那会把金叉箭头翻成朝下，等于把多空含义也翻了。
+    # 翻转视图：**锚点（箭尾）**关于中线镜像；朝向与颜色**一起翻**（用户 2026-10-20 定）。
+    #   不变式：两态下都成立「红恒朝上、绿恒朝下」；变的只是「交叉 → 颜色」的绑定
+    #   （正常：金叉红朝上 / 死叉绿朝下；翻转：金叉绿朝下 / 死叉红朝上）。
     #   唯一的合法偏差是「夹回」：镜像后尖端会越出窗沿时，整支被推回窗内，
     #   此时尖端必须**恰好压在窗沿上**（否则就是算错了位置）。
     base_name = "手排序列（3金叉/2死叉/2根等值）"
@@ -433,12 +466,23 @@ def test_geometry(failures):
         check(failures, not bad,
               "翻转视图：锚点（箭尾=交叉点）关于中线镜像"
               f"（{clamped} 支因越界夹回，尖端已压窗沿）", f"{bad[:3]}")
-        tips_ok = all(a["pts"][0][1] < a["pts"][3][1] for a in out_m["arrows"]
-                      if norm_color(a["style"]) == norm_color(up))
-        tails_ok = all(a["pts"][0][1] > a["pts"][3][1] for a in out_m["arrows"]
-                       if norm_color(a["style"]) == norm_color(down))
-        check(failures, tips_ok and tails_ok,
-              "翻转视图：箭头朝向不随 Y 轴翻转（金叉恒朝上、死叉恒朝下）")
+        same_n = len(out_n["arrows"]) == len(out_m["arrows"])
+        up_ok = all(a["pts"][0][1] < a["pts"][3][1] for a in out_m["arrows"]
+                    if norm_color(a["style"]) == norm_color(up))
+        dn_ok = all(a["pts"][0][1] > a["pts"][3][1] for a in out_m["arrows"]
+                    if norm_color(a["style"]) == norm_color(down))
+        check(failures, same_n and up_ok and dn_ok,
+              "翻转视图：朝向与颜色一起翻（金叉绿朝下、死叉红朝上），仍是「红恒朝上/绿恒朝下」")
+        # 逐支对位比较：同一条交叉根上，两态的取色必须**互换**（不是只翻位置）
+        not_swapped = []
+        for i, (a_n, a_m) in enumerate(zip(out_n["arrows"], out_m["arrows"])):
+            c_n, c_m = norm_color(a_n["style"]), norm_color(a_m["style"])
+            if not ((c_n == norm_color(up) and c_m == norm_color(down))
+                    or (c_n == norm_color(down) and c_m == norm_color(up))):
+                not_swapped.append((i, a_n["style"], a_m["style"]))
+        check(failures, not not_swapped,
+              "翻转视图：同一条交叉根的取色与正常视图互换（金叉↔死叉，不是同色照搬）",
+              f"{not_swapped[:3]}")
 
     # 整段 drawMacd 的两态（与 ① 的静态闸互为印证）
     if base_name in results:
@@ -447,13 +491,89 @@ def test_geometry(failures):
         check(failures, out["macdNoVal"] == n_arrow,
               "drawMacd 不传 valOf ⇒ 箭头数与单独调用一致（正例）",
               f"{out['macdNoVal']} vs {n_arrow}")
-        check(failures, out["macdWithVal"] == 0,
-              "drawMacd 传 valOf（类MACD 的真实调用形态）⇒ 零箭头",
-              f"实画 {out['macdWithVal']}")
+        swapped = [{"dif": k.get("dea"), "dea": k.get("dif"),
+                    "macd": k.get("macd")} for k in spec["klines"]]
+        _check_one(failures, "drawMacd + valOf（类MACD 形态）",
+                   dict(spec, klines=swapped), {"arrows": out["valArrows"]}, h)
+        check(failures, out["valFlat"] == 0,
+              "valOf 返回常量（永不交叉）⇒ 0 箭头：没有回落到 K 线自身的 dif/dea",
+              f"实画 {out['valFlat']}")
+        # 同一批 K 线（无 vm 字段）走类MACD：量能侧 0 交叉 ⇒ 0 箭头；
+        # 价格侧照常画 —— 两槽各判各的，成交额/量的分支不会把价格交叉复制一份。
+        check(failures, len(out["priceArrows"]) == n_arrow and len(out["volArrows"]) == 0,
+              "类MACD 与价格MACD 互不串槽（无 vm ⇒ 量能 0 箭头；价格箭头数不变）",
+              f"price={len(out['priceArrows'])} vol={len(out['volArrows'])}")
         check(failures, out["degenerate"] == 0,
               "空数组 / 单根 / 绘图窗过矮 ⇒ 零箭头且不抛异常",
               f"实画 {out['degenerate']}")
 
+
+# ═══════════════════════════════════════════════════════════════════
+# ②b 类MACD（成交额/量）也画箭头 —— 真执行 drawVolumeMacd
+# ═══════════════════════════════════════════════════════════════════
+def test_volume_macd_arrows(failures):
+    print("\n②b 类MACD 箭头（drawVolumeMacd 真执行：判据跟着 volMacdOf 走）")
+    js = read(APP_JS)
+    macd = fn_src(js, "drawMacd")
+    arrows = fn_src(js, "drawMacdCrossArrows")
+    volmacd = fn_src(js, "drawVolumeMacd")
+    volof = fn_src(js, "volMacdOf")
+    if not (macd and arrows and volmacd and volof):
+        check(failures, False, "②b 前置：drawMacd / 箭头 / drawVolumeMacd / volMacdOf 都能抽出",
+              f"{bool(macd)}/{bool(arrows)}/{bool(volmacd)}/{bool(volof)}")
+        return
+    up, down = colors_of(js)
+    _h_lit, h = const_decl(js, "MACD_CROSS_H")
+    _hw_lit, hw = const_decl(js, "MACD_CROSS_HW")
+    colors = {"macdUp": up, "macdDown": down}
+
+    node = find_node()
+    if not node:
+        print("  [SKIP] 未找到 node（② 已覆盖几何）")
+        return
+
+    # 价格侧**全程等值**（dif == dea，永不交叉）；量能侧 3 金叉 / 2 死叉。
+    #   若箭头来自价格字段 ⇒ 一支都画不出；若来自 volMacdOf ⇒ 恰好 5 支。
+    vm = [(-1.0, -0.5), (-0.5, -0.6), (0.0, -0.3), (0.2, 0.1), (0.1, 0.3),
+          (0.0, 0.0), (0.0, 0.0), (0.3, 0.0), (0.5, 0.2), (0.4, 0.6),
+          (0.2, 0.4), (0.6, 0.3)]
+    klines = [{"dif": 0.5, "dea": 0.5, "macd": 0.0,
+               "vm": {"dif": d, "dea": e, "macd": (d - e) * 2}} for d, e in vm]
+    area = _area()
+    rng = {"min": -1.2, "max": 0.8}
+    spec = _spec(klines, area, rng=rng, colors=colors)
+    tmp = tempfile.mkdtemp(prefix="macd_vol_arrows_")
+    drv = os.path.join(tmp, "driver.js")
+    with open(drv, "w", encoding="utf-8") as f:
+        f.write(f"const MACD_CROSS_H = {h};\n")
+        f.write(f"const MACD_CROSS_HW = {hw};\n")
+        f.write(volof + "\n")
+        f.write(volmacd + "\n")
+        f.write(arrows + "\n" + macd + "\n" + NODE_DRIVER)
+    out, err = _run_node(node, drv, spec, tmp)
+    if out is None:
+        check(failures, False, "②b node 执行成功", err)
+        return
+
+    # 量能箭头 = 量能值算出的交叉（用同一套几何断言，spec 换成 vm 序列）
+    vm_series = [{"dif": d, "dea": e} for d, e in vm]
+    _check_one(failures, "类MACD（量能）",
+               dict(spec, klines=vm_series), {"arrows": out["volArrows"]}, h)
+    check(failures, len(out["priceArrows"]) == 0,
+          "价格侧 dif == dea（永不交叉）⇒ 价格槽 0 箭头：箭头确实来自 volMacdOf，"
+          "不是把价格交叉复制了一份", f"实画 {len(out['priceArrows'])}")
+
+    # 翻转视图：量能槽同样「朝向 + 颜色一起翻」
+    sp_m = dict(spec, mirror=True)
+    out_m, err = _run_node(node, drv, sp_m, tmp)
+    if out_m is None:
+        check(failures, False, "②b 翻转视图 node 执行成功", err)
+        return
+    _check_one(failures, "类MACD（量能·翻转）",
+               dict(sp_m, klines=vm_series), {"arrows": out_m["volArrows"]}, h)
+    check(failures, len(out_m["volArrows"]) == len(out["volArrows"]),
+          "类MACD 翻转视图箭头数不变（只翻朝向/颜色，不增不减）",
+          f"{len(out_m['volArrows'])} vs {len(out['volArrows'])}")
 
 # ═══════════════════════════════════════════════════════════════════
 # ③ 真渲染（无头 Chrome）
@@ -690,6 +810,7 @@ def main():
     failures = []
     test_source_contract(failures)
     test_geometry(failures)
+    test_volume_macd_arrows(failures)
     test_real_render(failures)
     print("=" * 64)
     print(f"合计失败 {len(failures)} 项")

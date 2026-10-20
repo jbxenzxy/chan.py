@@ -574,12 +574,12 @@ def test_mirror():
     rec("④", "一档都不在窗内时退化为值域上下沿（纵轴不留白；也无写死的 \"0\" / \"100\"）",
         "range.max.toFixed(2)" in axis and "range.min.toFixed(2)" in axis
         and '"0"' not in axis and '"100"' not in axis, "")
-    rec("④", "RSI 分支不做颜色对调（只翻 Y 位置、不改颜色）：无涨跌色字面量 / COLORS.up|down",
+    rec("④", "RSI 分支不写涨跌色字面量 / COLORS.up|down（两档色只从 COLORS.macdUp/macdDown 取）",
         all(k not in draw + axis for k in ("#FF3C3C", "#00F0F0", "COLORS.up", "COLORS.down")), "")
-    rec("④", "折线取色只看值：drawRsi / rsiColorOf 里都不出现 _isMirrorMode（翻转不改颜色），"
-              "三档色由 rsiColorOf 一处给出",
+    rec("④", "翻转对调只发生在 rsiColorOf **一处**（drawRsi 里不许再翻一次，两处会互相抵消），"
+              "三档色仍由它一处给出",
         "rsiColorOf(" in draw and "_isMirrorMode" not in draw
-        and "_isMirrorMode" not in fn_src(js, "rsiColorOf")
+        and "_isMirrorMode" in fn_src(js, "rsiColorOf")
         and all(k in fn_src(js, "rsiColorOf")
                 for k in ("COLORS.macdUp", "COLORS.macdDown", "COLORS.rsi")), "")
 
@@ -968,10 +968,15 @@ function segStrokes(klines, mirror) {
 
 SEG_TAIL = r"""
 const SERIES = [50, 95, 50, 5, 50];     // 白 → 红 → 白 → 绿 → 白
+// 取色只看值 + 视角：mirror=false 走正常口径，mirror=true 走翻转口径
+function colOf(v, mirror) {
+  _isMirrorMode = !!mirror; const c = rsiColorOf(v); _isMirrorMode = false; return c;
+}
+const VALS = [0, 20, 19.999999999, 20.000000001, 50, 79.999999999, 80, 80.000000001, 100];
 const out = {
   colorsConst: { up: COLORS.macdUp, down: COLORS.macdDown, white: COLORS.rsi },
-  colors: [0, 20, 19.999999999, 20.000000001, 50, 79.999999999, 80, 80.000000001, 100]
-            .map(v => ({ v: v, c: rsiColorOf(v) })),
+  colors: VALS.map(v => ({ v: v, c: colOf(v, false) })),
+  colorsMir: VALS.map(v => ({ v: v, c: colOf(v, true) })),
   cuts: {
     plateau:  rsiSegmentCuts(90, 90),      // 等值：无断点
     inside:   rsiSegmentCuts(60, 70),      // 段内不跨阈值
@@ -1117,10 +1122,16 @@ def test_rsi_segment_colors():
         and abs(x0 - d["step"] / 2.0) < 1e-9,
         "坏接头=%d x=[%.1f, %.1f]" % (len(badj), x0, xN))
 
-    # ④ 翻转：只翻 Y、不改颜色
+    # ④ 翻转：落点镜像 + 取色对调（用户 2026-10-20 定：颜色要跟着翻）
     mir = d["mir"]
-    rec("⑩", "翻转视图颜色序列逐段不变（取色只看值，不随视角换色）",
-        [s["color"] for s in mir] == seq, str([s["color"] for s in mir]))
+    swap = {up: dn, dn: up, wh: wh}
+    rec("⑩", "翻转视图颜色逐段对调（超买→MACD 绿、超卖→MACD 红、中轴白不变）",
+        [s["color"] for s in mir] == [swap[c] for c in seq],
+        str([s["color"] for s in mir]))
+    mir_col = d["colorsMir"]
+    rec("⑩", "翻转视图取色打表：v ≥ 80 → MACD 绿、v ≤ 20 → MACD 红、20 < v < 80 → 白",
+        [r["c"] for r in mir_col] == [up, up, up, wh, wh, wh, dn, dn, dn],
+        "打表 %s" % [(r["v"], r["c"]) for r in mir_col])
     sums = sorted(set(round(a["y"] + b["y"], 9)
                       for sa, sb in zip(e2e, mir) for a, b in zip(sa["pts"], sb["pts"])))
     rec("⑩", "翻转视图 y 逐点镜像（y + y' ≡ 2×area.y + area.h = 400），点数一一对应",
