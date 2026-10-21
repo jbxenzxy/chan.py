@@ -675,7 +675,47 @@ def _classify_futures_replay(src, symbol, freq_sec, end_dt,
     return None
 
 
-def init_chan_symbol(src, symbol, _name, freq_sec, freq_label, start_time=None, end_time=None, num_bars=None):
+def _live_target_blocked(src, symbol, freq_sec, last_dt):
+    """「回最新 / 今天」意图（前端 `live=1`）落在**已停更**的序列上 ⇒ A″ 诊断。
+
+    为什么单独一类（2026-10-21 用户现场）：日历点「今天」走的是 `wantLive` 钳位（§2 规则③），
+    请求**不带 end_time** ⇒ 后端的早/晚向判定全都够不到，已交割合约（CFFEX.IF2410）会被
+    静默重载成「该合约末根 2024/10/18」：图跳到两年前、日历被改写成该日、无任何提示。
+    这与 v1.19 的 A′ 同源（序列已停更），差别只在**用户请求的语义**：A′ 是「复盘到某历史日」，
+    本类是「要今天的行情」——文案不能读成复盘。
+
+    判据与出路完全复用 A′ 的事实源（不新增探查口径）：
+      · 停更 = `_futures_series_stale`（CFFEX 按交割日规则，其它交易所按时限兜底）；
+      · 出路 = 该日主力合约（`_suggest_contract_with_expiry`，最近交割优先 + 换月窗口 vol 仲裁），
+        前端按 code=`contract_range` 渲染成「提示 + 切换」——切过去不带 end_time，即回到实时。
+    """
+    now = datetime.now()
+    life = _futures_contract_life(src, symbol)
+    if life is not None:
+        # 具体合约：30m 10000 根跨度 ≫ 存续期 ⇒ 末根即最后交易日（与 A/A′ 同一事实源）
+        when = f"该合约最后交易日为 {life[1]:%Y/%m/%d}"
+    else:
+        # 主连 / 指数或存续期探针未取到：只报数据实况，不臆断交割日
+        when = f"该合约末根为 {last_dt:%Y/%m/%d}"
+    sug, sug_exp = _suggest_contract_with_expiry(src, symbol, freq_sec, now)
+    if sug:
+        if sug_exp is not None:
+            # CFFEX：交割日在候选生成处随附（推算值，节假日顺延 ±1 交易日近似）
+            exp_hint = f"最后交易日约 {sug_exp:%Y/%m/%d}，"
+        else:
+            _sl = _futures_contract_life(src, sug)
+            exp_hint = (f"最后交易日 {_sl[1]:%Y/%m/%d}，" if _sl else "")
+        tail = f"请切换到当前主力合约 {sug}（{exp_hint}当前周期可取到今天）。"
+    else:
+        tail = "同品种在当前周期暂无可取到今天的合约，请改用 5分钟 / 30分钟。"
+    return FuturesReplayBlocked(
+        "contract_range",
+        f"今天（{now:%Y/%m/%d}）已无 {symbol} 的行情：{when}；{tail}",
+        suggest=sug)
+
+
+def init_chan_symbol(src, symbol, _name, freq_sec, freq_label, start_time=None, end_time=None, num_bars=None,
+                     live=False):
     """拉取历史K线 + 运行 chan.py 分析，返回 (chan, klines, kl_type, records) 或 None。
     由 SSE handler 调用，每个 SSE 连接自包含。
     start_time: 选点起始时间，有值时只拉取该时间之后的K线（B 操作：左边界=T，全量到最新）；
@@ -686,6 +726,9 @@ def init_chan_symbol(src, symbol, _name, freq_sec, freq_label, start_time=None, 
               与 start_time 同传时窗口 = [start, end]（复盘继承选点）；
               update 循环停在此边界，不被实时拉新。None 为实时流。
     num_bars: 显式取数根数（双窗下窗传「上窗区间折算根数」实现对齐；None=按窗口语义计算）。
+    live: **「回最新 / 今天」意图**（前端日历「今天」等带 `live=1` 的连接）。无 end_time 时
+          若序列已停更（合约已交割 / 长期停牌）⇒ 抛 A″（提示 + 切换合约），不再静默停在末根。
+          复盘请求（end_time 非空）不受此参数影响，仍走早/晚向分类。
     首参为数据源对象 src（CTqSdkSession），服务层只消费
     src.fetch_kline / src.get_kline_serial 协议，不触碰 src.api 原始对象。"""
     import time as _time
@@ -702,6 +745,13 @@ def init_chan_symbol(src, symbol, _name, freq_sec, freq_label, start_time=None, 
         _ensure_futures_src_connected(src)
         records = src.fetch_kline(symbol, freq_sec=freq_sec, display_key=display_key,
                                   start_time=start_time, num_bars=fetch_bars)
+        # 「回最新 / 今天」（live=True，无 end_time = 实时语义）：序列已停更 ⇒ A″。
+        # 必须挡在建 chan 之前（省一次全量分析）且**不能**沿用下面的晚向分支：
+        # 晚向要求 `_end_dt < now`，而这里根本没有 end_time —— 已交割合约的「今天」
+        # 从前会一路走到正常返回，图停在该合约末根、日历被改写成该日（2026-10-21 现场）。
+        if live and end_time is None and records:
+            if _futures_series_stale(symbol, records[-1]["dt"], datetime.now()):
+                raise _live_target_blocked(src, symbol, freq_sec, records[-1]["dt"])
         # 复盘终点截断：先滤出 <= end_time 的历史，再取末 N 根（C 操作左边界=从 end 往前推 N 根），
         # 再扣除"最新未完成K线"首根保护
         if end_time:
@@ -866,11 +916,13 @@ def _per_frame_session(gen, src):
 
 
 def sse_futures_stream_single(symbol, freq="15s", start_time=None, end_time=None,
-                              reset_selection=False, source=None):
+                              reset_selection=False, live=False, source=None):
     """期货 SSE 单窗口 · 建会话并返回「逐帧重绑定会话」的生成器。
 
     reset_selection：**切到建议合约**的这次连接不继承选点（详见 `_sse_single_gen`
     同名参数）。默认 False = 原语义（缺失时从 CSV 恢复）。
+    live：本次连接是**「回最新 / 今天」意图**（前端 `live=1`）。无 end_time 时由
+    `init_chan_symbol` 判「序列是否已停更」，停更 ⇒ A″ 诊断帧（提示 + 切换合约）。
 
     注意：本函数是**普通函数**（不是生成器）——会话必须在开始迭代之前就
     建好，`_per_frame_session` 才能在每一帧上重新绑定它。`CTqSdkSession()`
@@ -880,11 +932,11 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, end_time=None
     src = source if source is not None else CTqSdkSession()
     return _per_frame_session(
         _sse_single_gen(symbol, freq, start_time, end_time, src,
-                        reset_selection=reset_selection), src)
+                        reset_selection=reset_selection, live=live), src)
 
 
 def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=None,
-                    reset_selection=False):
+                    reset_selection=False, live=False):
     """期货 SSE 单窗口 · 同步生成器（本体；对外经 _per_frame_session 包装）
 
     事件协议：
@@ -899,6 +951,9 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
     若该合约在 CSV 里存过晚于 D 的选点，复盘窗口 L 会被这个选点钉住，
     随即又报 before_selection（D/G），而 D/G 是**仅提示**、无「切换」按钮，
     用户切过去等于白切一次。切过去的目标是「看那一天」，不该继承选点。
+
+    live：「回最新 / 今天」意图（前端日历「今天」→ `live=1`）。与 `reset_selection`
+    同层透传给 `init_chan_symbol`：停更合约不静默停在末根，改发 A″ 诊断帧。
     """
     # 修复：删除全局日志级别污染（原在此处将 tqsdk 及 root 全部 handler
     # 设 WARNING，永不恢复，导致整个进程 log.info 消失）。tqsdk 抑制已在
@@ -1013,7 +1068,8 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
         # 天然不跨连接污染（原为进程级类变量，并发下会互相串改调试日志）。
         _replay_prev_s = set_replay_mode(bool(end_time))
         try:
-            result = init_chan_symbol(src, symbol, name, freq_sec, freq_label, start_time, end_time)
+            result = init_chan_symbol(src, symbol, name, freq_sec, freq_label, start_time, end_time,
+                                      live=live)
         except FuturesReplayBlocked as _blk:
             # 目标早于本周期 10000 根 / 超出合约存续期：init 内部已判定出类别，
             # 这里必须转成带 code 的诊断帧。不接就会变成「连接异常中断」——
@@ -1332,20 +1388,21 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
         session_clear()
 
 
-def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_start_time=None, end_time=None, reset_selection=False, source=None):
+def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_start_time=None, end_time=None, reset_selection=False, live=False, source=None):
     """期货 SSE 双窗口 · 建会话并返回「逐帧重绑定会话」的生成器。
 
     与 sse_futures_stream_single 同构：普通函数（非生成器），会话提前建好
     后交给 _per_frame_session 逐帧重绑定。
     reset_selection：切到建议合约的这次连接，上下窗都不继承 CSV 选点（同单窗）。
+    live：「回最新 / 今天」意图（同单窗）；停更合约 ⇒ A″ 诊断帧，两窗同因只报一次。
     """
     src = source if source is not None else CTqSdkSession()
     return _per_frame_session(
         _sse_dual_gen(symbol, main_freq, sub_freq, start_time, sub_start_time, end_time, src,
-                      reset_selection=reset_selection), src)
+                      reset_selection=reset_selection, live=live), src)
 
 
-def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_start_time=None, end_time=None, source=None, reset_selection=False):
+def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_start_time=None, end_time=None, source=None, reset_selection=False, live=False):
     """期货 SSE 双窗口 · 同步生成器（本体；对外经 _per_frame_session 包装）
 
     事件协议：
@@ -1494,7 +1551,8 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
         # 复盘软断开：end_time 模式下建 chan 前启用买卖点调试，建后复原
         _replay_prev = set_replay_mode(bool(end_time))
         try:
-            sub_result = init_chan_symbol(src, symbol, name, sub_freq_sec, sub_freq_label, sub_start_time, end_time)
+            sub_result = init_chan_symbol(src, symbol, name, sub_freq_sec, sub_freq_label, sub_start_time, end_time,
+                                          live=live)
         except FuturesReplayBlocked as _blk:
             # 同单窗：诊断必须落成错误帧，否则双窗连接直接断流、前端无从提示
             _msg = f"下窗：{_blk.message}" if _blk.code == "before_selection" else _blk.message
@@ -1528,7 +1586,8 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
             log.info(f"[{display_key}] 拉取上窗({main_freq})历史K线...")
         _replay_prev2 = set_replay_mode(bool(end_time))
         try:
-            main_result = init_chan_symbol(src, symbol, name, main_freq_sec, main_freq_label, main_start_time, end_time)
+            main_result = init_chan_symbol(src, symbol, name, main_freq_sec, main_freq_label, main_start_time, end_time,
+                                           live=live)
         except FuturesReplayBlocked as _blk:
             # 同上/下窗：诊断落成错误帧（上窗被钉住同样要能提示 + 给「切换」）
             _msg = f"上窗：{_blk.message}" if _blk.code == "before_selection" else _blk.message

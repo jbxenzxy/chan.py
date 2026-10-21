@@ -177,7 +177,7 @@ def _patch_business(src, fail_init=False):
     _sse_mod.drain_calls = 0
 
     def stub_init_chan_symbol(api, symbol, name, freq_sec, freq_label, start_time=None, end_time=None,
-                              num_bars=None):
+                              num_bars=None, live=False):
         _sse_mod.init_chan_calls += 1
         if fail_init:
             return None

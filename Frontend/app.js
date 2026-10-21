@@ -367,6 +367,12 @@
 
         let _datePickerInputCount = 0;     // datetime-local picker 打开后真实交互次数
 
+        // 「取消复盘」意图：与日历「今天」走**同一条** wantLive 路径（都是重连不带 end_time），
+        // 但语义不同 —— 要的是「退出复盘、看该合约最新一根」，不是「今天的行情」。
+        // 已交割合约（如 CFFEX.IF2410）上两者必须分开：前者静默回到该合约末根是对的，
+        // 后者必须报 A″（今天无该合约行情 + 切换到当前主力），否则图表被静默挪到两年前。
+        let _cancelReplayIntent = false;
+
         // (期货复盘边界 _futuresRealtimeBorderDate 已随左右箭头删除：复盘统一由 gotoDate/SSE 承载)
 
         const HISTORY_KEY = "chan_stock_history";
@@ -4447,6 +4453,18 @@
             if (ra) ra.title = (currentFreq === "d") ? "后一天" : "后一根";
         }
 
+        // 请求被拒（init 错误帧）时把日历回落到「图上末根」：成功路径恒会把输入框
+        // 改写成末根，失败路径不改 ⇒ 输入框停在用户请求值，与图上（**仍旧数据**）不一致。
+        // 2026-10-21 现场：已交割合约点「今天」→ 日历 2026-10-21、图上仍是旧复盘点，
+        // 用户只看到「日历和合约对不上」，看不出请求其实没生效。
+        function _restoreDateInputToChart() {
+            if (!chartData || !chartData.klines || chartData.klines.length === 0) return;
+            const inp = document.getElementById("goto-date-input");
+            if (!inp) return;
+            inp.value = klineDateToInput(chartData.klines[chartData.klines.length - 1].date, currentFreq);
+            if (typeof updateWeekday === "function") updateWeekday();
+        }
+
         // 周期级别：数值越大级别越高（w=7 > d=6 > 30m=5 > 15m=4 > 5m=3 > 1m=2 > 15s=1）
         // 用于双窗口校验：下窗周期级别必须严格小于上窗周期级别
         function freqLevel(freq) {
@@ -4723,6 +4741,9 @@
         window.gotoDate = function() {
             // 键盘Enter提供了精确日期，应在重置前捕获，用于跳过 isToday 安全网
             const keyEnter = _dateKeyEnter;
+            // 「取消复盘」也在 wantLive 路径上，但它是「回到本合约最新」而非「要今天的行情」
+            const cancelReplay = _cancelReplayIntent;
+            _cancelReplayIntent = false;
             // 重置所有日期输入标志位，避免上次手动输入/键盘操作阻塞后续日历点击
             _dateKeyEnter = false;
             _dateKeyArrow = false;
@@ -4780,14 +4801,18 @@
                 document.getElementById("goto-date-input").disabled = true;
                 document.getElementById("loading").classList.remove("hidden");
                 document.querySelector(".loading-text").textContent = "正在恢复实时行情...";
+                // 「回最新/今天」意图带上 live=1：已交割合约没有「今天」，后端据此发 A″
+                // （最后交易日 + 当前主力合约 → 「切换」），而不是静默停在末根。
+                // 「取消复盘」不带 —— 它要的就是本合约最新一根（已交割合约即末根）。
+                const liveIntent = !cancelReplay;
                 if (isDualWindow && dualSubFreq) {
                     disconnectRealtime();
                     // 双窗口模式：保持用户独立选择的下窗周期
-                    connectRealtimeDual(code, freq, dualSubFreq);
+                    connectRealtimeDual(code, freq, dualSubFreq, null, null, null, false, liveIntent);
                 } else {
                     // 保留选点起始时间（若有），与手选后的SSE重连逻辑一致
                     const savedDate = chartData.meta.saved_selection_date || null;
-                    connectRealtimeInit(code, freq, savedDate);
+                    connectRealtimeInit(code, freq, savedDate, null, false, liveIntent);
                 }
                 // 不在这里隐藏loading，SSE的init事件回调会处理loading隐藏和input恢复
                 return;
@@ -4933,6 +4958,11 @@
 
         window.handleDateBlur = function() {
             const input = document.getElementById("goto-date-input");
+            // gotoDate 会先 disable 输入框再重连 ⇒ 这次 blur 是**程序造成的**，不是用户交互。
+            // 放它进来会让「今天」兜底再发一次 gotoDate：① 同一请求白跑两遍；
+            // ② 意图已在上一轮消费掉 ——「取消复盘」（已交割合约上）会被当成「今天」
+            //    重发一次并弹出 A″，用户再也退不出复盘态（2026-10-21 实测）。
+            if (input.disabled) return;
             var v = input.value;
             // 期货兜底：复盘后点击日历"今天"，Edge的step="15"输入框可能不触发input/change事件
             // 在blur时检测：如果当前处于复盘状态(chartData.meta.is_replay)且日期=今天 → 强制设23:59并触发gotoDate
@@ -8538,7 +8568,8 @@
         }
 
         // ========== SSE 初始化连接（初始快照 + 增量合一） ==========
-        function connectRealtimeInit(symbol, freq, startTime, endTime, resetSelection) {
+        // liveIntent：「回最新/今天」意图（true ⇒ URL 带 live=1，后端判停更合约并回 A″）
+        function connectRealtimeInit(symbol, freq, startTime, endTime, resetSelection, liveIntent) {
             disconnectRealtime();
             realtimeSymbol = symbol;
             realtimeFreq = freq;
@@ -8571,6 +8602,12 @@
                     // 切到建议合约：本次连接不继承 CSV 选点（原因见 connectRealtimeDual 同名分支）
                     sseUrl += '&reset_selection=1';
                 }
+                if (liveIntent) {
+                    // 「回最新/今天」：交给后端判「该合约序列是否已停更」（已交割 / 长期停牌）。
+                    // 停更 ⇒ init 回 A″ 错误帧（最后交易日 + 当前主力合约 → 「切换」），
+                    // 不再静默重载成该合约末根（2026-10-21：IF2410 点「今天」→ 图跳 2024/10/18）。
+                    sseUrl += '&live=1';
+                }
                 realtimeEventSource = new EventSource(sseUrl);
                 realtimeConnected = true;
 
@@ -8592,11 +8629,16 @@
                             disconnectRealtime();
                             document.getElementById("loading").classList.add("hidden");
                             document.getElementById("goto-date-input").disabled = false;
+                            // 图未变（本次请求被拒）⇒ 日历回落到图上末根，别停在用户请求值上
+                            _restoreDateInputToChart();
                             // 绕过天勤 10000 根 / 合约存续期：同品种存在「在当前周期能取到该日期」
                             // 的合约 → 一键切换，并在新合约 init 落地后自动复盘到该日期
                             if (data.suggest && (_code === "contract_range" || _code === "tq_10000")) {
+                                // 带 end_time 的是「复盘到那一天」，不带的是「回最新/今天」：
+                                // A″（停更合约的今天）切过去就该是实时图，不能让文案说「复盘到该日期」
+                                const _switchHint = _target ? "并自动复盘到该日期。" : "并回到实时行情。";
                                 showConfirm(data.error + "\n\n点击「切换」将打开 " + data.suggest
-                                            + " 并自动复盘到该日期。", {okText: "切换"})
+                                            + " " + _switchHint, {okText: "切换"})
                                     .then(function (ok) {
                                         if (!ok) return;
                                         _pendingFuturesReplay = {
@@ -8696,7 +8738,7 @@
         // 期货双窗口SSE连接（独立于 connectRealtimeInit，与股票双窗口解耦）
         // startTime: 上窗选点时间 T（B 操作双窗：上窗 [T, 最新]、下窗自动对齐同一区间）
         // endTime: 复盘终点（软断开；复盘模式下后端忽略 startTime——复盘不加载选点）
-        function connectRealtimeDual(symbol, mainFreq, subFreq, endTime, startTime, subStartTime, resetSelection) {
+        function connectRealtimeDual(symbol, mainFreq, subFreq, endTime, startTime, subStartTime, resetSelection, liveIntent) {
             disconnectRealtime();
             realtimeSymbol = symbol;
             realtimeFreq = mainFreq;
@@ -8731,6 +8773,10 @@
                     // 切过去立刻又报 before_selection——仅提示、没有出路）
                     sseUrl += '&reset_selection=1';
                 }
+                if (liveIntent) {
+                    // 「回最新/今天」：停更合约 ⇒ A″ 诊断帧（同单窗；两窗同因只报一次）
+                    sseUrl += '&live=1';
+                }
                 realtimeEventSource = new EventSource(sseUrl);
                 realtimeConnected = true;
 
@@ -8746,10 +8792,12 @@
                             disconnectRealtime();
                             document.getElementById("loading").classList.add("hidden");
                             document.getElementById("goto-date-input").disabled = false;
+                            _restoreDateInputToChart();   // 同单窗：图未变 ⇒ 日历回到图上末根
                             // 同单窗：同品种存在能取到该日期的合约 → 一键切换 + 自动复盘
                             if (data.suggest && (_code === "contract_range" || _code === "tq_10000")) {
+                                const _switchHint = _target ? "并自动复盘到该日期。" : "并回到实时行情。";
                                 showConfirm(data.error + "\n\n点击「切换」将打开 " + data.suggest
-                                            + " 并自动复盘到该日期。", {okText: "切换"})
+                                            + " " + _switchHint, {okText: "切换"})
                                     .then(function (ok) {
                                         if (!ok) return;
                                         _pendingFuturesReplay = {
@@ -9263,6 +9311,10 @@
                 // datetime-local 补时间：期货 23:59 保证 wantLive（与 handleDateBlur「今天」兜底同款），股票 15:59 为盘中上限
                 inpC.value = isIntradayFreq(currentFreq) ? (todayC + (isFutC ? 'T23:59' : 'T15:59')) : todayC;
                 if (typeof updateWeekday === "function") updateWeekday();
+                // 本条是「退出复盘、回到本合约最新」，不是「要今天的行情」：
+                // 已交割合约上若按「今天」处理会报 A″（今天无该合约行情），
+                // 而用户要的只是取消复盘 ⇒ 显式抑制 live=1。
+                _cancelReplayIntent = true;
                 gotoDate();  // 不设 _dateKeyEnter：让 isToday/wantLive 判定走「回最新」分支
                 return;
             }

@@ -633,6 +633,7 @@ def api_futures_read_stream(
     sub_freq: str = Query(None),
     end_time: str = Query(None),
     reset_selection: bool = Query(False),
+    live: bool = Query(False),
 ):
     """SSE 实时推送（期货单/双窗口）· 同步生成器
     sub_start_time：双窗下窗独立选点起点（dual=1 时消费，四期一致原则）
@@ -651,6 +652,11 @@ def api_futures_read_stream(
 
     end_time: 复盘终点（软断开）。传入时建 chan 截断到该边界，end_time
     之后不再推进（复盘看历史不被实时拉最新）；不传为实时流/选点起点流。
+
+    live: 本次连接是**「回最新 / 今天」意图**（前端日历「今天」/手输今天/未来日期）。
+    无 end_time 时，若该合约序列已停更（已交割 / 长期停牌），后端发 A″ 诊断帧
+    （最后交易日 + 当前主力合约 → 前端「切换」），不再静默给一张停在交割日的图。
+    初载/切合约不带它：那时用户要的是「看这个合约」，停在末根是对的。
     """
     if not symbol:
         raise HTTPException(status_code=400, detail="缺少symbol参数")
@@ -660,10 +666,10 @@ def api_futures_read_stream(
 
     if dual:
         gen = sse_futures_stream_dual(symbol, freq, sub_freq, start_time, sub_start_time,
-                                      end_time, reset_selection=reset_selection)
+                                      end_time, reset_selection=reset_selection, live=live)
     else:
         gen = sse_futures_stream_single(symbol, freq, start_time, end_time,
-                                        reset_selection=reset_selection)
+                                        reset_selection=reset_selection, live=live)
 
     return StreamingResponse(
         gen,

@@ -180,7 +180,7 @@ def _run_gen(start_time, end_time, csv_point, captured):
             _sse_mod.app_data.save_point_time(SYMBOL, "测试品种", FREQ, csv_point)
 
         def stub_init(api, symbol, name, freq_sec, freq_label, start_time=None,
-                      end_time=None, num_bars=None):
+                      end_time=None, num_bars=None, live=False):
             captured["init"].append({"start_time": start_time, "end_time": end_time})
             chan = MockChan()
             return chan, api.klines, ("kl",), None
@@ -326,7 +326,7 @@ def test_dual_gen_independent_starts():
                 _sse_mod.app_data.save_point_time(SYMBOL, "测试品种", "15s", csv_sub)
 
             def stub_init(api, symbol, name, freq_sec, freq_label, start_time=None,
-                          end_time=None, num_bars=None):
+                          end_time=None, num_bars=None, live=False):
                 captured["init"].append({"freq": freq_label, "start": start_time,
                                          "end": end_time, "num_bars": num_bars})
                 chan = MockChan()
@@ -459,7 +459,7 @@ def test_dual_gen_inverted_start_errors():
                 _sse_mod.app_data.save_point_time(SYMBOL, "测试品种", "15s", csv_sub)
 
             def stub_init(api, symbol, name, freq_sec, freq_label, start_time=None,
-                          end_time=None, num_bars=None):
+                          end_time=None, num_bars=None, live=False):
                 captured.append({"freq": freq_label, "start": start_time})
                 return MockChan(), api.klines, ("kl",), None
 
@@ -607,7 +607,7 @@ def _run_select_point(csv_point, end_date, captured, view_start=None):
                 return [dict(r) for r in _records]
 
         def stub_init(src, symbol, name, freq_sec, freq_label,
-                      start_time=None, end_time=None, num_bars=None):
+                      start_time=None, end_time=None, num_bars=None, live=False):
             captured.setdefault("locate", []).append(
                 {"start_time": start_time, "end_time": end_time, "num_bars": num_bars})
             return _FakeChan(), None, ("kl",), [dict(r) for r in _records]

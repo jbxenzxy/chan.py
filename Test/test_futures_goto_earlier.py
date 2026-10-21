@@ -746,8 +746,9 @@ def test_switch_connection_drops_selection():
         """止步哨兵：跑到取数就够，后面的快照/推送逻辑本测试不关心。"""
 
     def _stub_init(api, symbol, name, freq_sec, freq_label, start_time=None,
-                   end_time=None, num_bars=None):
+                   end_time=None, num_bars=None, live=False):
         captured["args"] = (symbol, start_time, end_time)
+        captured["live"] = live
         raise _Stop("stop at init_chan_symbol")
 
     _orig = _sse_mod.init_chan_symbol
@@ -817,14 +818,14 @@ def _bars_5m(end_day, n_days=20):
     return klines
 
 
-def _payload(end_day):
+def _payload(end_day, is_replay=False):
     kl = _bars_5m(end_day)
     return {
         "meta": {"symbol": SYMBOL, "name": SYMBOL, "freq": "5分钟",
                  "kline_count": len(kl), "bi_count": 0, "fx_count": 0,
                  "zs_count": 0, "seg_count": 0, "bsp_count": 0,
                  "generated_at": kl[-1]["date"], "is_realtime": True,
-                 "is_replay": False, "market": "futures",
+                 "is_replay": bool(is_replay), "market": "futures",
                  "saved_selection_date": ""},
         "klines": kl, "bis": [], "fxs": [], "segs": [], "zs": [],
         "zs_stars": [], "bsps": [], "white_hline": None,
@@ -847,7 +848,9 @@ window.EventSource = function (url) {
   setTimeout(function () {
     if (self.readyState === 2) return;
     var payload = window.__autoPayload.initial;
-    if (window.__failNext) { payload = window.__failNext; window.__failNext = null; }
+    // 「回最新/今天」（live=1）：模拟后端 A″（已交割合约没有今天的行情）
+    if (window.__liveFail && /live=1/.test(url)) { payload = window.__liveFail; }
+    else if (window.__failNext) { payload = window.__failNext; window.__failNext = null; }
     else if (/end_time=/.test(url)) payload = window.__autoPayload.replay;
     var m = /symbol=([^&]+)/.exec(url);
     if (m && payload && payload.meta) {
@@ -963,7 +966,11 @@ def test_browser():
                     " last: window.ChanApp.state.chartData.klines.slice(-1)[0].date,"
                     " value: document.getElementById('goto-date-input').value,"
                     " dialog: (() => { const d = document.getElementById('alert-dialog');"
-                    "   return d ? d.innerText : ''; })()})")
+                    "   return d ? d.innerText : ''; })(),"
+                    # 关闭的弹层**不销毁**（只摘 show 类）⇒ 判「有没有弹窗」必须看类，
+                    # 只看 innerText 会把上一场景关掉的弹窗当成还在（2026-10-21 踩过）
+                    " dialog_shown: (() => { const d = document.getElementById('alert-dialog');"
+                    "   return !!(d && d.classList.contains('show')); })()})")
 
             def enter_with(date_input):
                 page.evaluate(
@@ -1018,12 +1025,97 @@ def test_browser():
             assert len(sD["es"]) == _es_before + 1, \
                 f"B 方式C 不得发起额外连接（初始 + 1 次尝试）：{sD['es']}"
 
+            # ── C：已交割合约点日历「今天」（live=1）→ A″ 提示 + 「切换」到今日主力 ──
+            # 现场（2026-10-21 用户报障）：IF2410 复盘到 2024-09-24 → 点「今天」→ 图被静默
+            # 重载成该合约末根 2024/10/18、日历同样被反写，无任何提示。
+            from App.AppSSE import _contract_candidates
+            _today_main = _contract_candidates("CFFEX.IF2410", datetime.now())[0]
+            reset_to_if2409()
+            page.evaluate(
+                "(p) => { window.__autoPayload = p.payload; window.__liveFail = p.liveFail;"
+                " window.__failNext = null; window.__esUrls.length = 0;"
+                " document.getElementById('stock-code-input').value = 'CFFEX.IF2410';"
+                " window.loadStock(); }",
+                {"payload": {"initial": _payload(datetime(2024, 10, 18)),
+                             "replay": _payload(datetime(2024, 9, 24), is_replay=True)},
+                 "liveFail": {"error": "今天（%s）已无 CFFEX.IF2410 的行情：该合约最后交易日为 "
+                                       "2024/10/18；请切换到当前主力合约 %s"
+                                       "（当前周期可取到今天）。"
+                                       % (datetime.now().strftime("%Y/%m/%d"), _today_main),
+                              "code": "contract_range", "suggest": _today_main,
+                              "symbol": "CFFEX.IF2410"}})
+            page.wait_for_function(
+                "() => window.ChanApp.state.chartData"
+                " && window.ChanApp.state.chartData.meta.symbol === 'CFFEX.IF2410'", timeout=20000)
+            page.wait_for_timeout(300)
+            enter_with("2024-09-24T14:55")          # 复盘（带 end_time）
+            assert state()["last"] == "2024/09/24 14:55", f"C 未进入复盘：{state()}"
+            # Edge 的「今天」按钮：**只改日期段、时间保持原值**，picker 关闭时再发 change
+            # （input 阶段判不出「今天」，由 handleDateChange 的期货兜底改 23:59 并 gotoDate）
+            page.evaluate(
+                "() => { const i = document.getElementById('goto-date-input');"
+                " const n = new Date();"
+                " const t = n.getFullYear() + '-' + String(n.getMonth()+1).padStart(2,'0')"
+                "   + '-' + String(n.getDate()).padStart(2,'0');"
+                " i.focus(); i.value = t + 'T14:55';"
+                " i.dispatchEvent(new Event('input', {bubbles: true}));"
+                " i.dispatchEvent(new Event('change', {bubbles: true})); }")
+            page.wait_for_timeout(700)
+            sC1 = state()
+            assert any("live=1" in u for u in sC1["es"]), \
+                f"C「今天」必须带 live=1（否则后端无从判停更）：{sC1['es']}"
+            assert "已无 CFFEX.IF2410 的行情" in sC1["dialog"] and "切换" in sC1["dialog"], \
+                f"C 未弹 A″（今天无该合约行情 + 切换）：{sC1['dialog']!r}"
+            assert "并回到实时行情" in sC1["dialog"], \
+                f"C A″ 的切换文案必须是「回到实时行情」（不是「复盘到该日期」）：{sC1['dialog']!r}"
+            assert sC1["dialog_shown"], "C A″ 弹窗必须是**可见**状态"
+            assert sC1["last"] == "2024/09/24 14:55", \
+                f"C 被拒时图不得变动（旧实现会跳到 2024/10/18）：{sC1['last']}"
+            assert sC1["value"] == "2024-09-24T14:55", \
+                f"C 被拒后日历必须回落到图上末根：{sC1['value']}"
+            page.click('#alert-dialog button[data-act="ok"]')
+            page.wait_for_timeout(1400)
+            sC2 = state()
+            assert sC2["symbol"] == _today_main, f"C 未切到今日主力 {_today_main}：{sC2['symbol']}"
+            assert any(("symbol=" + _today_main) in u and "end_time=" not in u
+                       for u in sC2["es"]), \
+                f"C 切过去必须是**实时**加载（不带 end_time）：{sC2['es']}"
+
+            # ── D：「取消复盘」走同一条 wantLive 路径，但**不得**被判成 A″ ──
+            # 已交割合约上「取消复盘」= 退出复盘、回到该合约最新一根（=末根），这与
+            # 「点今天」是两回事：若也带 live=1，用户就再也退不出这张合约的复盘态。
+            page.evaluate(
+                "(p) => { window.__autoPayload = p; window.__liveFail = null;"
+                " window.__esUrls.length = 0;"
+                " document.getElementById('stock-code-input').value = 'CFFEX.IF2410';"
+                " window.loadStock(); }",
+                {"initial": _payload(datetime(2024, 10, 18)),
+                 "replay": _payload(datetime(2024, 9, 24), is_replay=True)})
+            page.wait_for_function(
+                "() => window.ChanApp.state.chartData"
+                " && window.ChanApp.state.chartData.meta.symbol === 'CFFEX.IF2410'"
+                " && window.ChanApp.state.chartData.meta.is_replay === false", timeout=20000)
+            page.wait_for_timeout(250)
+            enter_with("2024-09-24T14:55")
+            assert state()["last"] == "2024/09/24 14:55"
+            page.evaluate("() => window.annotationReplayToHere()")   # 菜单项「取消复盘」
+            page.wait_for_timeout(900)
+            sD = state()
+            assert not sD["dialog_shown"], \
+                f"D「取消复盘」不得弹 A″（当前仍是上一场景的弹层文本：{sD['dialog']!r}）"
+            assert sD["last"] == "2024/10/18 14:55", \
+                f"D「取消复盘」应回到该合约最新一根：{sD['last']}"
+            assert all("live=1" not in u for u in sD["es"]), \
+                f"D「取消复盘」不得带 live=1：{sD['es']}"
+
             assert not errors, f"页面报错：{errors[:2]}"
             browser.close()
     finally:
         httpd.shutdown()
     print("[PASS] [4] 真浏览器：10000 根 → 「切换」到 IF2405 并以 04-22 为右端加载；"
-          "方式C → 仅提示「请加载更多数据」，不动窗口、不重连")
+          "方式C → 仅提示「请加载更多数据」，不动窗口、不重连；"
+          "已交割合约点「今天」→ live=1 + A″ 提示 + 切到今日主力（实时）；"
+          "「取消复盘」→ 不带 live=1、无 A″、回到该合约末根")
 
 
 # ═══════════════ [6] 晚向守卫：休市 vs 停更（v1.19） ═══════════════
@@ -1142,6 +1234,116 @@ def test_late_direction_stale_guard():
           "边界落数据源末根后 ⇒ 按实时服务；P1 回归钉（截断自比=实时）已封")
 
 
+# ══════════ [7] 「回最新/今天」落在停更合约上（A″，2026-10-21） ══════════
+
+def test_live_target_on_stale_contract():
+    """日历「今天」（前端 `live=1`）撞上已交割合约 ⇒ A″，不得静默停在末根。
+
+    现场（2026-10-21 用户报障）：`CFFEX.IF2410`（最后交易日 2024/10/18）复盘到 2024-09-24
+    后点日历「今天」——wantLive 钳位让这次重连**不带 end_time**，于是早向（10000 根）与
+    晚向（`_end_dt < now`）两个诊断分支都够不到，图被静默重载成该合约末根 2024/10/18、
+    日历同样被反写成该日，全程无提示（用户看到「日历 2026-10-21、图停在两年前」）。
+
+    修法两半：
+      · 前端：wantLive 带 `live=1`（「取消复盘」显式抑制——它要的是本合约最新一根）；
+      · 后端：init 在**建 chan 之前**按 `_futures_series_stale` 判停更 ⇒ A″（事实源与 A′
+        同一个守卫，出路与 A/A′ 同一条建议合约链 ⇒ 前端复用「切换」渲染）。
+    """
+    import contextlib
+    import io
+    from App.AppSSE import (init_chan_symbol, FuturesReplayBlocked,
+                            _contract_candidates, _live_target_blocked)
+
+    now = datetime.now()
+    today_main = _contract_candidates("CFFEX.IF2410", now)[0]   # 按同一套候选规则取，抗日期漂移
+    bars = {
+        # IF2410：2024/09/20 挂牌 ~ 10/18 交割（末根 = 最后交易日）
+        ("CFFEX.IF2410", 1800): _span(datetime(2024, 9, 20, 9, 30), datetime(2024, 10, 18, 14, 30)),
+        ("CFFEX.IF2410", 300): _span(datetime(2024, 9, 20, 9, 30), datetime(2024, 10, 18, 14, 55)),
+        # 今日主力：数据覆盖到今天（建议合约探针）
+        (today_main, 1800): _span(now - timedelta(days=120), now - timedelta(days=1)),
+        (today_main, 300): _span(now - timedelta(days=20), now - timedelta(minutes=10)),
+    }
+
+    # ① 诊断本体：文案说「今天」+ 最后交易日，出路 = 今日主力（suggest 恒 str）
+    blk = _live_target_blocked(_LazySrc(dict(bars)), "CFFEX.IF2410", 300,
+                               datetime(2024, 10, 18, 14, 55))
+    assert blk.code == "contract_range", blk.code
+    assert blk.suggest == today_main and isinstance(blk.suggest, str), blk.suggest
+    assert "已无 CFFEX.IF2410 的行情" in blk.message, blk.message
+    assert "最后交易日为 2024/10/18" in blk.message, blk.message
+    assert "今天（%s）" % now.strftime("%Y/%m/%d") in blk.message, blk.message
+
+    def _drive(src, symbol, live):
+        """跑 init；只认 FuturesReplayBlocked（其余异常 = 桩缺 set_data，与本用例无关）。"""
+        sink = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
+                init_chan_symbol(src, symbol, "IF", 300, "5m", live=live)
+        except FuturesReplayBlocked as b:
+            return b
+        except Exception:
+            return None
+        return None
+
+    # ② live=True（日历「今天」）⇒ 必须 A″，且挡在建 chan 之前（桩没有 set_data，能到
+    #    chan 构建就说明没拦住）
+    got = _drive(_LazySrc(dict(bars)), "CFFEX.IF2410", True)
+    assert got is not None and got.code == "contract_range", \
+        f"live=1 撞已交割合约必须报 A″（旧实现静默停在末根）：{got}"
+    assert got.suggest == today_main, got.suggest
+
+    # ③ live=False（初载 / 切换合约 / **取消复盘**）⇒ 不得报 A″：那三处要的就是
+    #    「这个合约的数据」，停在末根是正确行为
+    assert _drive(_LazySrc(dict(bars)), "CFFEX.IF2410", False) is None, \
+        "初载/取消复盘不得报 A″（已交割合约仍应能正常查看其历史）"
+
+    # ④ 仍在市的合约（末根 = 最近一根）⇒ live=1 也不得误报
+    live_bars = {
+        (today_main, 1800): _span(now - timedelta(days=120), now - timedelta(days=1)),
+        (today_main, 300): _span(now - timedelta(days=20), now - timedelta(minutes=10)),
+    }
+    assert _drive(_LazySrc(live_bars), today_main, True) is None, \
+        "仍在市的合约点「今天」不得报 A″"
+
+    # ⑤ 源码契约：live 全链路透传 + 「取消复盘」独占抑制位
+    js = _read(APP_JS)
+    sse = _read(SSE_PY)
+    route = _read(os.path.join(REPO_ROOT, "FrontAPI.py"))
+    assert js.count("'&live=1'") == 2, "单/双窗都必须能拼 live=1"
+    assert "let _cancelReplayIntent = false;" in js, "缺「取消复盘」抑制位"
+    assert js.count("_cancelReplayIntent = true") == 1 and \
+        "显式抑制 live=1" in js, "只有「取消复盘」置位（日历「今天」不得被抑制）"
+    assert "const liveIntent = !cancelReplay;" in js, "wantLive 分支未按意图算 liveIntent"
+    assert "connectRealtimeInit(code, freq, savedDate, null, false, liveIntent)" in js, \
+        "单窗 wantLive 未透传 liveIntent"
+    assert "connectRealtimeDual(code, freq, dualSubFreq, null, null, null, false, liveIntent)" in js, \
+        "双窗 wantLive 未透传 liveIntent"
+    assert "function connectRealtimeInit(symbol, freq, startTime, endTime, resetSelection, liveIntent)" in js
+    assert "function connectRealtimeDual(symbol, mainFreq, subFreq, endTime, startTime, subStartTime, resetSelection, liveIntent)" in js
+    assert "_restoreDateInputToChart();" in js, "init 失败未把日历回落到图上末根"
+    assert "live: bool = Query(False)" in route and route.count("live=live") == 2, \
+        "路由未接收/未透传 live"
+    assert "live=False):" in sse and sse.count("live=live") >= 3, \
+        "生成器未把 live 透传给 init（单窗 + 双窗上下两处）"
+    assert "if live and end_time is None and records:" in sse, \
+        "live 判定位置丢失（必须只在无 end_time 的实时语义下判）"
+
+    # ⑥ 端到端接线：init 抛出的 A″ 必须落成**带 code/suggest 的 init 错误帧**
+    #    （漏传 live=live ⇒ 这一帧不出现，前端只会看到图被静默重载 —— 正是本次现场）
+    import FrontAPI
+    frames = list(FrontAPI.sse_futures_stream_single(
+        "CFFEX.IF2410", "5m", None, None, live=True, source=_SseSrc(dict(bars))))
+    assert len(frames) == 1, f"A″ 必须中止本次连接（实为 {len(frames)} 帧）"
+    _raw = frames[0].decode("utf-8") if isinstance(frames[0], bytes) else frames[0]
+    _pay = json.loads(_raw.split("data: ", 1)[1].split("\n")[0])
+    assert _pay.get("code") == "contract_range", _pay
+    assert _pay.get("suggest") == today_main, _pay
+    assert "已无 CFFEX.IF2410 的行情" in _pay.get("error", ""), _pay
+    print("[PASS] [7] A″：live=1 + 已交割合约 ⇒ 今天无行情 + 今日主力「切换」；"
+          "初载 / 取消复盘不报；在市委约不误报；生成器转成带 code/suggest 的错误帧")
+
+
 def main():
     restore_iso = isolate_side_effects()
     try:
@@ -1152,10 +1354,11 @@ def main():
         test_init_out_late()
         test_late_direction_stale_guard()
         test_switch_connection_drops_selection()
+        test_live_target_on_stale_contract()
         test_browser()
     finally:
         restore_iso()
-    print("\n全部通过：期货复盘四类诊断（v1.18 最近优先 + 换月窗口仲裁）")
+    print("\n全部通过：期货复盘四类诊断（v1.18 最近优先 + 换月窗口仲裁 + v1.20 A″ 回最新）")
 
 
 if __name__ == "__main__":
