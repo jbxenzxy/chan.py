@@ -408,6 +408,56 @@ def read_tdx_day_file(filepath, max_records=None, market=None):
     return records
 
 
+def read_last_bar_date(filepath, is_minute=False):
+    """只读「最后一根 K 线」的日期，不解析整文件。
+
+    用途：扫描候选的新鲜度判定。全A股约 5000 只，逐只调 read_tdx_day_file
+    会把整个文件解析成 records（合计数 GB），耗时不可接受；本函数 seek 到
+    文件尾只解一条 32 字节记录，单文件开销与文件大小无关。
+
+    日期编码与既有解析器保持同一口径（不另立一套）：
+      - 日线 .day：与 read_tdx_day_file 一致，前 4 字节 <I 为 YYYYMMDD。
+      - 分钟线 .lc5：与 _parse_tdx_min_binary 一致，前 2 字节 <H 为
+        year = num // 2048 + 2004、month = (num % 2048) // 100、day = (num % 2048) % 100。
+
+    Returns:
+        datetime；文件不存在 / 不足一条完整记录 / 日期越界 → None。
+        **调用方须把 None 当「无法判定」，而不是「陈旧」** —— 读不出日期本身
+        不构成剔除理由（合成/损坏文件、新格式都不该被静默丢出候选）。
+    """
+    try:
+        size = os.path.getsize(filepath)
+    except OSError:
+        return None
+    n_records = size // 32
+    if n_records <= 0:
+        return None
+    try:
+        with open(filepath, "rb") as f:
+            f.seek((n_records - 1) * 32)
+            raw = f.read(32)
+    except OSError:
+        return None
+    if len(raw) < 4:
+        return None
+    try:
+        if is_minute:
+            num = struct.unpack("<H", raw[:2])[0]
+            year = num // 2048 + 2004
+            month = (num % 2048) // 100
+            day = (num % 2048) % 100
+        else:
+            date_int = struct.unpack("<I", raw[:4])[0]
+            year = date_int // 10000
+            month = (date_int % 10000) // 100
+            day = date_int % 100
+        if year < 1990 or year > 2030 or month < 1 or month > 12 or day < 1 or day > 31:
+            return None
+        return datetime(year, month, day)
+    except (ValueError, OverflowError, struct.error):
+        return None
+
+
 def _parse_tdx_min_binary(filepath, market):
     """
     解析通达信分钟线二进制文件(.lc5/.lc1) -- numpy批量读取优化版。

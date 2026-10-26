@@ -787,6 +787,10 @@ COMPONENTS = [
     # vipdoc 个股段过滤 / 阈值 0 关闭取数 / 自选股纳入过滤，全程打桩不联网。
     ("scan_all_a_source",
      [sys.executable, os.path.join("Test", "test_scan_all_a_source.py")]),
+    # eltdx 统计取数的坏代码隔离（2026-10-26）：协议解析失败走二分（80 只含 1 颗
+    # 毒丸 14 次请求，原逐只 80 次），传输类异常整批跳过不拆分。全程打桩不联网。
+    ("eltdx_stats_bisect",
+     [sys.executable, os.path.join("Test", "test_eltdx_stats_bisect.py")]),
     # 成交统计「买卖点类型过滤联动」契约（2026-09-26 需求③）：纯单元/集成，
     # 无凭据无网络，此前漏登记（discover 能扫到、门禁没跑）——补登，消除孤儿。
     ("trade_stats_bsp_filter",

@@ -381,12 +381,58 @@ ELTDX_MARKETS = ("sh", "sz", "bj")
 STATS_BATCH = 80
 
 
+def _is_protocol_error(err):
+    """异常是否属于「协议解析失败」——即批次里含坏代码的信号。
+
+    eltdx 分层：ProtocolError（编码 / 解码失败，数据层面 ⇒ 值得二分定位是哪只）
+    vs TransportError（超时 / 断连 / 池忙，网络层面 ⇒ 拆分与重试都无意义，
+    逐只重试只会把 1 次超时放大成 80 次）。
+    eltdx 未安装或异常层次变动时按类名兜底，避免把网络故障误判成毒丸。
+    """
+    try:
+        from eltdx.exceptions import ProtocolError
+        return isinstance(err, ProtocolError)
+    except Exception:
+        return "ProtocolError" in type(err).__name__
+
+
+def _bisect_fetch(codes, batch_fn):
+    """二分定位「毒丸」代码，返回 (rows, bad)。
+
+    成功的那一段**直接复用本次响应**，不重复请求 —— 数据在定位过程中就已拿全。
+    请求次数：k 颗毒丸约 2k·log2(n/k)；80 只含 1 颗约 14 次（原逐只重试 80 次）。
+
+    非协议类异常（超时 / 断连）不细分：整段记入 bad 立即返回，防止 1 次网络
+    故障被拆成 159 次超时等待。
+    """
+    rows, bad = [], []
+    stack = [list(codes)]
+    while stack:
+        seg = stack.pop()
+        try:
+            rows.extend(batch_fn(seg))
+        except Exception as _e:
+            if not _is_protocol_error(_e):
+                bad.extend((_c, "传输失败，未细分") for _c in seg)
+            elif len(seg) == 1:
+                bad.append((seg[0], f"{type(_e).__name__}: {_e}"))
+            else:
+                mid = len(seg) // 2
+                stack.append(seg[:mid])
+                stack.append(seg[mid:])
+    return rows, bad
+
+
 def _chunked_stats_fetch(full_codes, batch_fn, extract):
     """按 STATS_BATCH 分批取数，返回 {full_code: 值}。
 
-    单批异常时**逐只重试**以隔离坏代码，避免一颗「毒丸」拖掉整批 80 只：
-    实测 0x054c 快照遇到个别代码（如北交所 bj920025）会抛 ProtocolError
-    （"snapshot record marker not found"），且是**整批失败**而非跳过单条。
+    单批异常时按异常性质分流，不再一律逐只重试 80 次：
+      - ProtocolError（协议解析失败）⇒ **二分隔离**坏代码，其余照常取到数据。
+        实测 0x054c 快照遇到个别代码（如已退市的 sh601059、北交所 bj920025）会抛
+        "snapshot record marker not found" / "invalid ASCII response code"，且是
+        **整批失败**而非跳过单条 —— 一颗毒丸拖掉整批 80 只。
+      - 其他异常（超时 / 断连 / 池忙）⇒ 整批跳过。这类错误逐只重试只会把
+        1 次超时放大成 80 次，且上层已有「本地缓存兜底」。
     """
     out = {}
     for start in range(0, len(full_codes), STATS_BATCH):
@@ -394,16 +440,31 @@ def _chunked_stats_fetch(full_codes, batch_fn, extract):
         try:
             rows = batch_fn(chunk)
         except Exception as _e:
-            log.warning("[eltdx 统计] 批次 %d-%d 取数失败，逐只隔离重试：%s: %s",
+            if not _is_protocol_error(_e):
+                log.warning("[eltdx 统计] 批次 %d-%d 传输失败，整批跳过：%s: %s",
+                            start, start + len(chunk), type(_e).__name__, _e)
+                continue
+            log.warning("[eltdx 统计] 批次 %d-%d 取数失败，二分隔离坏代码：%s: %s",
                         start, start + len(chunk), type(_e).__name__, _e)
-            rows = []
-            for _code in chunk:
-                try:
-                    rows.extend(batch_fn([_code]))
-                except Exception:
-                    continue
+            rows, bad = _bisect_fetch(chunk, batch_fn)
+            if bad:
+                preview = "、".join(f"{c}（{why}）" for c, why in bad[:5])
+                tail = " …" if len(bad) > 5 else ""
+                log.warning("[eltdx 统计] 批次 %d-%d 隔离出 %d 只无数据代码：%s%s",
+                            start, start + len(chunk), len(bad), preview, tail)
         out.update(extract(rows))
     return out
+
+
+def _is_code6(value):
+    """是否 6 位数字代码。
+
+    服务端在批次里含无行情代码时会返回错位载荷：实测有些批次**不报错**，
+    而是把 HTML / CSS 片段当成 code 解出来（如 'tyle["'、'n()">'、'olor: '）。
+    这类脏记录必须挡在映射键之外 —— 否则它以随机键写进结果，还会顶掉同批
+    真实票的位置（整批 80 只的数据随之丢失，且不产生任何异常）。
+    """
+    return isinstance(value, str) and len(value) == 6 and value.isdigit()
 
 
 def _finance_shares_map(records):
@@ -417,7 +478,7 @@ def _finance_shares_map(records):
         exchange = getattr(r, "exchange", None) or ""
         code = getattr(r, "code", None)
         shares = getattr(r, "circulating_shares", None)
-        if exchange and code and shares:
+        if exchange and _is_code6(code) and shares:
             out[f"{exchange}{code}"] = float(shares)
     return out
 
@@ -428,7 +489,8 @@ def _snapshot_price_map(rows):
     for r in rows:
         full_code = getattr(r, "full_code", None)
         price = getattr(r, "last_price", None)
-        if full_code and price:
+        if (isinstance(full_code, str) and len(full_code) == 8
+                and _is_code6(full_code[2:]) and price):
             out[full_code] = float(price)
     return out
 

@@ -24,6 +24,7 @@ import os
 import threading
 import time
 import traceback
+from datetime import timedelta
 
 # 分析引擎层（App/AppEngine.py）
 from App import AppEngine as _m
@@ -405,6 +406,54 @@ def read_tdxhy_l3_indices():
     return app_data.tdxhy_l3_indices()
 
 
+# 全A股候选的新鲜度闸门（单位：自然日）。
+# 本地 vipdoc 只按文件名枚举，已退市 / 长期停牌票的 .day 会一直留在目录里，
+# 混进候选有两个后果：① 它们的 K 线停在停牌前，扫出来的「信号」是过期信号；
+# ② eltdx 批量取数遇到这类代码会整批失败（0x054c 快照根本不返回该票记录 →
+#    snapshot record marker not found；0x0010 财务批次的记录随之错位 →
+#    invalid ASCII response code），把 80 只一批的请求打成 80 次串行重试。
+# 基准取「本批候选里最新的那一根」而不是「今天」：节假日后或整机 vipdoc 都
+# 未更新时都不会误杀；票复牌后新 K 线一到就自动回到候选，无需人工清理文件。
+# <=0 = 关闭闸门（退回纯文件名枚举）。
+STALE_KLINE_DAYS = 20
+
+
+def _drop_stale_candidates(stocks, last_dates, max_stale_days=None):
+    """按「最后一根 K 线早于基准日 STALE_KLINE_DAYS 天」剔除僵尸票。
+
+    Args:
+        stocks: [{"prefix": "1", "code": "600519"}, ...]
+        last_dates: 与 stocks 等长的 list[datetime|None]
+        max_stale_days: 覆盖模块常量；<=0 = 不剔除。
+
+    Returns:
+        过滤后的 stocks（保持原顺序）。
+
+    读不出日期（None）的票**一律保留**：合成文件 / 损坏文件 / 未知格式都不该
+    因为「判不出来」被静默丢出候选 —— 闸门的目标是明确的僵尸票，不是猜。
+    """
+    days = STALE_KLINE_DAYS if max_stale_days is None else max_stale_days
+    if days <= 0 or not stocks:
+        return stocks
+    known = [d for d in last_dates if d is not None]
+    if not known:
+        return stocks
+    newest = max(known)
+    cutoff = newest - timedelta(days=days)
+    kept, dropped = [], []
+    for stock, last in zip(stocks, last_dates):
+        if last is not None and last < cutoff:
+            dropped.append((stock["code"], last))
+        else:
+            kept.append(stock)
+    if dropped:
+        preview = "、".join(f"{code}@{last.date().isoformat()}" for code, last in dropped[:10])
+        tail = " …" if len(dropped) > 10 else ""
+        log.info("[全A股] 新鲜度闸门剔除 %d 只（基准 %s，阈值 %d 天）：%s%s",
+                 len(dropped), newest.date().isoformat(), days, preview, tail)
+    return kept
+
+
 def read_all_a_stocks(freq="d"):
     """全A股候选（沪市+深市，不含北交所）：本地 vipdoc 已有 K 线的 A 股个股。
 
@@ -418,14 +467,21 @@ def read_all_a_stocks(freq="d"):
     sz: 00/30 主板+创业，剔除 399 指数段，判定与 is_shareholder_reduction_target
     的「仅个股」同构），bj 目录不收 = 天然不含北交所。前缀编码对齐 zxg.blk
     （0=深 / 1=沪，见 _read_zxg_blk_file）。
+
+    **新鲜度闸门**（2026-10-26 新增，见 STALE_KLINE_DAYS）：文件名枚举会把已退市
+    票的历史文件一直算作候选，故对入选个股再读一次「最后一根 K 线日期」，早于
+    「本批最新日期 - STALE_KLINE_DAYS 天」的剔除。仅在已通过前缀过滤的个股上
+    取日期，指数 / ETF / B 股不额外读盘。
     """
     from DataAPI.TdxAPI import (
         SH_INCLUDE_PREFIXES, SH_INDEX_PREFIXES,
         SZ_INCLUDE_PREFIXES, SZ_INDEX_PREFIXES,
+        read_last_bar_date,
     )
     use_minute = freq in ("5m", "15m", "30m")
     sub, ext = ("fzline", ".lc5") if use_minute else ("lday", ".day")
     stocks = []
+    last_dates = []
     for mkt, prefix_num in (("sh", "1"), ("sz", "0")):
         line_dir = os.path.join(app_config.vipdoc_dir, mkt, sub)
         if not os.path.isdir(line_dir):
@@ -435,11 +491,17 @@ def read_all_a_stocks(freq="d"):
                 continue
             code = fname[len(mkt):-len(ext)]
             if mkt == "sh":
-                if code.startswith(SH_INCLUDE_PREFIXES) and not code.startswith(SH_INDEX_PREFIXES):
-                    stocks.append({"prefix": prefix_num, "code": code})
-            elif code.startswith(SZ_INCLUDE_PREFIXES) and not code.startswith(SZ_INDEX_PREFIXES):
-                stocks.append({"prefix": prefix_num, "code": code})
-    return stocks
+                hit = (code.startswith(SH_INCLUDE_PREFIXES)
+                       and not code.startswith(SH_INDEX_PREFIXES))
+            else:
+                hit = (code.startswith(SZ_INCLUDE_PREFIXES)
+                       and not code.startswith(SZ_INDEX_PREFIXES))
+            if not hit:
+                continue
+            stocks.append({"prefix": prefix_num, "code": code})
+            last_dates.append(read_last_bar_date(os.path.join(line_dir, fname), use_minute))
+    return _drop_stale_candidates(stocks, last_dates)
+
 
 
 

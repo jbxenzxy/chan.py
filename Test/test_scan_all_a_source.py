@@ -28,12 +28,17 @@
   [7] 阈值单一事实源在后端：前端 _scanMinFloatMc 初值为 null（不写死数字），
       且仅在非 null 时才拼 &scan_min_float_mc=。
   [8] 后端经 /api/health 下发 config.scan_min_float_mc（as_dict 含该键）。
+  [9] 新鲜度闸门（2026-10-26）：候选票最后一根 K 线早于「本批最新日期 -
+      STALE_KLINE_DAYS 天」→ 剔除。判据：① 停牌/退市票被剔除；② 整机数据
+      都旧时不误杀（基准是相对最新、不是今天）；③ 读不出日期（None）保留；
+      ④ STALE_KLINE_DAYS<=0 关闭闸门。
 
 全程打桩，不联网、不触碰 App/ 生产数据（app_data 以 stub 替换）。
 运行：python Test/test_scan_all_a_source.py
 """
 import os
 import shutil
+import struct
 import sys
 import tempfile
 import types
@@ -135,6 +140,66 @@ def test_minute_period_uses_fzline(failures):
             print(f"[FAIL] [1b] 分钟周期: {sorted(actual)}")
         else:
             print("[PASS] [1b] 分钟周期: fzline/*.lc5 个股段（lday 独有票不进、指数剔除、30m 同 5m）")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _write_day_record(path, ymd):
+    """写一条 32 字节日线记录，日期 = uint32 YYYYMMDD（与真实 .day 同格式）。"""
+    with open(path, "wb") as f:
+        f.write(struct.pack("<IIIIIfII", ymd, 1000, 1000, 1000, 1000, 0.0, 0, 0))
+
+
+def test_stale_gate(failures):
+    """[9] 新鲜度闸门：停牌/退市票剔除，整机数据都旧时不误杀，读不出日期保留。"""
+    tmp = tempfile.mkdtemp(prefix="scan_all_a_stale_")
+    try:
+        sh = os.path.join(tmp, "sh", "lday")
+        os.makedirs(sh, exist_ok=True)
+        # 本批最新 = 20261023，闸门阈值 20 天 ⇒ 早于 20261003 的剔除
+        _write_day_record(os.path.join(sh, "sh600519.day"), 20261023)  # 当天 → 留
+        _write_day_record(os.path.join(sh, "sh601066.day"), 20261022)  # 1 天前 → 留
+        _write_day_record(os.path.join(sh, "sh601059.day"), 20260914)  # 停牌 39 天 → 剔
+        _write_day_record(os.path.join(sh, "sh600000.day"), 20260901)  # 52 天前 → 剔
+        with open(os.path.join(sh, "sh600036.day"), "wb") as f:
+            f.write(b"\x00" * 16)                                      # 判不出日期 → 留
+
+        stub_cfg = types.SimpleNamespace(vipdoc_dir=tmp)
+        with mock.patch.object(_scan_mod, "app_config", stub_cfg):
+            got = _scan_mod.read_all_a_stocks("d")
+        actual = {s["code"] for s in got}
+        expected = {"600519", "601066", "600036"}
+        if actual != expected:
+            failures.append(f"[9] 闸门结果不符: {sorted(actual)} != {sorted(expected)}")
+            print(f"[FAIL] [9a] 新鲜度闸门: {sorted(actual)}")
+        else:
+            print("[PASS] [9a] 停牌/退市票被剔除，读不出日期的票保留")
+
+        tmp2 = tempfile.mkdtemp(prefix="scan_all_a_stale2_")
+        try:
+            sh2 = os.path.join(tmp2, "sh", "lday")
+            os.makedirs(sh2, exist_ok=True)
+            _write_day_record(os.path.join(sh2, "sh600519.day"), 20260901)
+            _write_day_record(os.path.join(sh2, "sh601066.day"), 20260820)
+            with mock.patch.object(_scan_mod, "app_config",
+                                   types.SimpleNamespace(vipdoc_dir=tmp2)):
+                got2 = _scan_mod.read_all_a_stocks("d")
+            if len(got2) != 2:
+                failures.append(f"[9] 整机数据都旧时误杀: 期望 2 只，实得 {len(got2)}")
+                print(f"[FAIL] [9b] 整机数据都旧: {len(got2)} 只")
+            else:
+                print("[PASS] [9b] 整机数据都旧时不误杀（基准取本批最新，不是今天）")
+        finally:
+            shutil.rmtree(tmp2, ignore_errors=True)
+
+        with mock.patch.object(_scan_mod, "app_config", stub_cfg), \
+             mock.patch.object(_scan_mod, "STALE_KLINE_DAYS", 0):
+            got3 = _scan_mod.read_all_a_stocks("d")
+        if len(got3) != 5:
+            failures.append(f"[9] STALE_KLINE_DAYS=0 未关闭闸门: 期望 5 只，实得 {len(got3)}")
+            print(f"[FAIL] [9c] 闸门关闭: {len(got3)} 只")
+        else:
+            print("[PASS] [9c] STALE_KLINE_DAYS<=0 关闭闸门（退回纯文件名枚举）")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -265,6 +330,7 @@ def main():
     failures = []
     test_all_a_prefix_filter(failures)
     test_minute_period_uses_fzline(failures)
+    test_stale_gate(failures)
     test_threshold_zero_disables(failures)
     test_zxg_filtered_by_threshold(failures)
     test_st_filter_applies_to_zxg(failures)
