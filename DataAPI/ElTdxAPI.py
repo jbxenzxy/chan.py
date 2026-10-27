@@ -380,11 +380,14 @@ ELTDX_MARKETS = ("sh", "sz", "bj")
 # 故取 80（与 eltdx helpers 内部同值）。
 STATS_BATCH = 80
 
-# 帧级故障止损阈值：二分过程中**协议失败累计达此数且一次成功都没有** ⇒ 判定
-# 协议失败与具体代码无关（整批错位等帧级故障），剩余段整体记 bad 止损。
-# 正常毒丸场景好票段必然穿插成功请求，不会触发；实测 80 只 1 颗毒丸 13 次、
-# 3 颗 31 次、散布 20 颗 ≈104 次全部零误丢（毒丸密集到打满旧预算 64 次时会
-# 误丢 7~22 只好票，故 2026-10-27 由固定请求预算改为本判据）。
+# 帧级故障止损阈值：二分过程中**「单只仍失败」的叶子累计达此数且一次成功
+# 都没有** ⇒ 判定协议失败与具体代码无关（整批错位等帧级故障），剩余段整体
+# 记 bad 止损。按叶子（而非失败段）计数是 2026-10-27 修正：二分 DFS 先探
+# 右半，毒丸**成簇在尾部**时前 32 次失败全落在毒丸区、好票段还没轮到，按段
+# 计数会把「好票未探索」误判成帧级故障（实测尾部连续 16 只 ⇒ 整批 80 只
+# 全丢）；叶子计数要求 32 只逐只确认失败，成簇 ≤31 只不再触发。正常毒丸
+# 场景（散布 / 小簇）好票段必然穿插成功请求，同样不触发；实测 80 只 1 颗
+# 13 次、散布 20 颗 ≈104 次、尾部成簇 28 只 62 次，全部零误丢。
 _BISECT_ABORT_FAILURES = 32
 
 
@@ -409,10 +412,15 @@ def _bisect_fetch(codes, batch_fn):
     成功的那一段**直接复用本次响应**，不重复请求 —— 数据在定位过程中就已拿全。
     请求次数：k 颗毒丸约 2k·log2(n/k)；80 只含 1 颗约 13 次（原逐只重试 80 次）。
 
-    止损判据 _BISECT_ABORT_FAILURES：协议失败累计达 32 次**且一次成功都没有**
-    ⇒ 判定失败与具体代码无关（整批错位等帧级故障），剩余段整体记 bad。
-    毒丸密集时好票段必然穿插成功、判据不触发（零误丢，代价是最坏仍可到
-    2n−1=160 次——那种批次本来就必须逐段取回）；帧级故障则 32 次即止。
+    止损判据 _BISECT_ABORT_FAILURES：**失败叶子**（单只仍失败）累计达 32 只
+    **且一次成功都没有** ⇒ 判定失败与具体代码无关（整批错位等帧级故障），
+    剩余段整体记 bad。按叶子而非失败段计数：DFS 先探右半，毒丸成簇在尾部时
+    失败段会在好票段被请求前堆满阈值，把「好票未探索」误判成帧级故障（实测
+    尾部连续 16 只 ⇒ 整批全丢）；叶子计数要求逐只确认，成簇 ≤31 只不触发。
+    正常毒丸场景好票段必然穿插成功、判据不触发（零误丢，代价是最坏仍可到
+    2n−1=160 次——那种批次本来就必须逐段取回）；帧级故障约 68 次请求即止。
+    残余边界：毒丸成簇 ≥32 只连续在尾部时，未探索的好票段仍会被记 bad
+    （与旧固定预算行为一致，损失不超过旧版）。
 
     非协议类异常（超时 / 断连）不细分：整段记入 bad 立即返回，防止 1 次网络
     故障被拆成 159 次超时等待。
@@ -420,7 +428,7 @@ def _bisect_fetch(codes, batch_fn):
     rows, bad = [], []
     stack = [list(codes)]
     successes = 0
-    protocol_failures = 0
+    leaf_failures = 0
     while stack:
         seg = stack.pop()
         try:
@@ -430,15 +438,16 @@ def _bisect_fetch(codes, batch_fn):
             if not _is_protocol_error(_e):
                 bad.extend((_c, "传输失败，未细分") for _c in seg)
                 continue
-            protocol_failures += 1
             if len(seg) == 1:
+                leaf_failures += 1
                 bad.append((seg[0], f"{type(_e).__name__}: {_e}"))
             else:
                 mid = len(seg) // 2
                 stack.append(seg[:mid])
                 stack.append(seg[mid:])
-            if protocol_failures >= _BISECT_ABORT_FAILURES and successes == 0:
-                bad.extend((_c, "帧级故障止损（32 次协议失败且无成功），未细分")
+            if leaf_failures >= _BISECT_ABORT_FAILURES and successes == 0:
+                bad.extend((_c, f"帧级故障止损（{_BISECT_ABORT_FAILURES} 只叶子协议失败"
+                                "且无成功），未细分")
                            for _s in stack for _c in _s)
                 stack.clear()
     return rows, bad

@@ -462,9 +462,10 @@ def _drop_stale_candidates(stocks: list, last_dates: list[datetime | None]) -> l
         top_mkt, top_n = Counter(code[0] for code, _ in dropped).most_common(1)[0]
         if ratio >= 0.2 or (len(dropped) >= 10 and top_n >= 0.9 * len(dropped)):
             log.warning("[全A股] 新鲜度闸门剔除 %d/%d 只（%.0f%%，基准 %s，阈值 %d 天），"
-                        "疑似本地 K 线未更新，请检查通达信盘后下载：%s%s",
+                        "集中在首位数字 %s（%d/%d），疑似本地 K 线未更新，请检查通达信盘后下载：%s%s",
                         len(dropped), len(stocks), ratio * 100,
-                        newest.date().isoformat(), days, preview, tail)
+                        newest.date().isoformat(), days, top_mkt, top_n, len(dropped),
+                        preview, tail)
         else:
             log.info("[全A股] 新鲜度闸门剔除 %d 只（基准 %s，阈值 %d 天）：%s%s",
                      len(dropped), newest.date().isoformat(), days, preview, tail)
