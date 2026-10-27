@@ -45,6 +45,7 @@ import sys
 import tempfile
 import types
 import unittest.mock as mock
+from datetime import datetime, timedelta
 
 TEST_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(TEST_DIR)
@@ -256,6 +257,72 @@ def test_stale_gate(failures):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_stale_gate_bulk_warning(failures):
+    """[9e] 闸门剔除告警分级（2026-10-27 ddb0883 D5）：大面积/整段缺失升级 warning。
+
+    判据（与实现同口径）：
+      - 占比 ≥20% ⇒ warning（正常剔除本机 4/5227≈0.08%，不会误报）；
+      - 集中单一市场 ≥90% 且 ≥10 只 ⇒ warning（疑似只下载了部分市场）；
+      - 零星剔除（正常停牌/退市）⇒ 保持 INFO。
+    """
+    base = datetime(2026, 10, 23, 15, 0, 0)
+    stale = base - timedelta(days=30)
+
+    def run(stocks, last_dates):
+        with mock.patch.object(_scan_mod.log, "warning") as mw, \
+             mock.patch.object(_scan_mod.log, "info") as mi:
+            _scan_mod._drop_stale_candidates(stocks, last_dates)
+        return mw.called, mi.called
+
+    # A. 大面积（50%）：200 只剔 100，被剔代码首位 0/6 混布（集中度 50%）
+    #    ⇒ 只能由占比分支触发（隔离验证占比判据本身）
+    stocks = [{"prefix": "1", "code": f"{600100 + i:06d}" if i % 2 else f"{i:06d}"}
+              for i in range(200)]
+    dates = [stale if i % 4 in (0, 1) else base for i in range(200)]
+    warned, infoed = run(stocks, dates)
+    if not warned or infoed:
+        failures.append(f"[9e] 50% 剔除应 warning（实际 warning={warned} info={infoed}）")
+        print(f"[FAIL] [9e-A] 50% 剔除: warning={warned} info={infoed}")
+    else:
+        print("[PASS] [9e-A] 大面积剔除（50%）升级 warning")
+
+    # B. 零星剔除：1000 只剔 4，混布 ⇒ 保持 INFO
+    stocks = [{"prefix": "1", "code": f"{600000 + i:06d}"} for i in range(1000)]
+    dates = [base] * 1000
+    for i, first in enumerate(("6", "0", "3", "6")):
+        stocks[i]["code"] = f"{first}00000{i}"
+        dates[i] = stale
+    warned, infoed = run(stocks, dates)
+    if warned or not infoed:
+        failures.append(f"[9e] 零星剔除应保持 INFO（实际 warning={warned} info={infoed}）")
+        print(f"[FAIL] [9e-B] 零星剔除: warning={warned} info={infoed}")
+    else:
+        print("[PASS] [9e-B] 零星剔除（4/1000 混布）保持 INFO")
+
+    # C. 集中单一市场但占比低：100 只剔 10、全是 6 开头 ⇒ warning（≥90% 且 ≥10 只）
+    stocks = [{"prefix": "1", "code": f"{600000 + i:06d}"} for i in range(100)]
+    dates = [base] * 100
+    for i in range(10):
+        dates[i] = stale
+    warned, infoed = run(stocks, dates)
+    if not warned:
+        failures.append("[9e] 单市场整段缺失（10 只全 6 开头）应 warning")
+        print("[FAIL] [9e-C] 集中剔除未升级 warning")
+    else:
+        print("[PASS] [9e-C] 单一市场整段缺失（10/100，集中度 100%）升级 warning")
+
+    # D. 集中但不足 10 只：100 只剔 9、全 6 开头 ⇒ INFO（单只剔除本就 100% 集中）
+    dates = [base] * 100
+    for i in range(9):
+        dates[i] = stale
+    warned, infoed = run(stocks, dates)
+    if warned or not infoed:
+        failures.append(f"[9e] 9 只集中剔除应保持 INFO（实际 warning={warned} info={infoed}）")
+        print(f"[FAIL] [9e-D] 9 只集中剔除: warning={warned} info={infoed}")
+    else:
+        print("[PASS] [9e-D] 集中但 <10 只不误报（防单只剔除 100% 集中误触发）")
+
+
 def test_threshold_zero_disables(failures):
     """[2] 阈值 0：不取市值、候选全保留。"""
     result, n = _run_stock_list(min_float_mc=0)
@@ -383,6 +450,7 @@ def main():
     test_all_a_prefix_filter(failures)
     test_minute_period_uses_fzline(failures)
     test_stale_gate(failures)
+    test_stale_gate_bulk_warning(failures)
     test_minute_gate_overlays_day(failures)
     test_threshold_zero_disables(failures)
     test_zxg_filtered_by_threshold(failures)

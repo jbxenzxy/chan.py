@@ -380,11 +380,12 @@ ELTDX_MARKETS = ("sh", "sz", "bj")
 # 故取 80（与 eltdx helpers 内部同值）。
 STATS_BATCH = 80
 
-# 单次 _bisect_fetch 调用的请求上限。实测 80 只含 1 颗毒丸 13 次、3 颗 31 次、
-# 5000 只 6 颗折算单批 ≈44 次，均远低于此；仅当「协议失败与具体代码无关」
-# （整批错位等帧级故障）时会打满——此时二分必失败到叶子，原实现最坏 2n−1=160
-# 次，预算到顶即把剩余段整体记 bad 止损（下游缓存合并写、缺失放行，不会误杀）。
-_BISECT_MAX_REQUESTS = 64
+# 帧级故障止损阈值：二分过程中**协议失败累计达此数且一次成功都没有** ⇒ 判定
+# 协议失败与具体代码无关（整批错位等帧级故障），剩余段整体记 bad 止损。
+# 正常毒丸场景好票段必然穿插成功请求，不会触发；实测 80 只 1 颗毒丸 13 次、
+# 3 颗 31 次、散布 20 颗 ≈104 次全部零误丢（毒丸密集到打满旧预算 64 次时会
+# 误丢 7~22 只好票，故 2026-10-27 由固定请求预算改为本判据）。
+_BISECT_ABORT_FAILURES = 32
 
 
 def _is_protocol_error(err):
@@ -406,35 +407,58 @@ def _bisect_fetch(codes, batch_fn):
     """二分定位「毒丸」代码，返回 (rows, bad)。
 
     成功的那一段**直接复用本次响应**，不重复请求 —— 数据在定位过程中就已拿全。
-    请求次数：k 颗毒丸约 2k·log2(n/k)；80 只含 1 颗约 14 次（原逐只重试 80 次）。
-    请求预算 _BISECT_MAX_REQUESTS：打满即把剩余段整体记 bad——正常毒丸场景
-    远用不到，只在「协议失败与具体代码无关」（整批错位等帧级故障）时止损，
-    最坏请求次数从 2n−1=160 降到预算值。
+    请求次数：k 颗毒丸约 2k·log2(n/k)；80 只含 1 颗约 13 次（原逐只重试 80 次）。
+
+    止损判据 _BISECT_ABORT_FAILURES：协议失败累计达 32 次**且一次成功都没有**
+    ⇒ 判定失败与具体代码无关（整批错位等帧级故障），剩余段整体记 bad。
+    毒丸密集时好票段必然穿插成功、判据不触发（零误丢，代价是最坏仍可到
+    2n−1=160 次——那种批次本来就必须逐段取回）；帧级故障则 32 次即止。
 
     非协议类异常（超时 / 断连）不细分：整段记入 bad 立即返回，防止 1 次网络
     故障被拆成 159 次超时等待。
     """
     rows, bad = [], []
     stack = [list(codes)]
-    requests = 0
+    successes = 0
+    protocol_failures = 0
     while stack:
         seg = stack.pop()
-        if requests >= _BISECT_MAX_REQUESTS:
-            bad.extend((_c, "二分请求预算耗尽，未细分") for _c in seg)
-            continue
         try:
-            requests += 1
             rows.extend(batch_fn(seg))
+            successes += 1
         except Exception as _e:
             if not _is_protocol_error(_e):
                 bad.extend((_c, "传输失败，未细分") for _c in seg)
-            elif len(seg) == 1:
+                continue
+            protocol_failures += 1
+            if len(seg) == 1:
                 bad.append((seg[0], f"{type(_e).__name__}: {_e}"))
             else:
                 mid = len(seg) // 2
                 stack.append(seg[:mid])
                 stack.append(seg[mid:])
+            if protocol_failures >= _BISECT_ABORT_FAILURES and successes == 0:
+                bad.extend((_c, "帧级故障止损（32 次协议失败且无成功），未细分")
+                           for _s in stack for _c in _s)
+                stack.clear()
     return rows, bad
+
+
+def _bisect_or_drop(start, chunk, batch_fn, reason):
+    """对整段失败批次做二分隔离，隔离结果打日志后返回可用 rows。
+
+    首轮协议失败与「重试后转为协议失败」（首轮超时 + 重试读到错位帧，是同一
+    故障链的相邻两跳，见 eltdx 帧层注释）共用此入口，保证两条路径的分类与
+    日志口径一致。
+    """
+    rows, bad = _bisect_fetch(chunk, batch_fn)
+    if bad:
+        preview = "、".join(f"{c}（{why}）" for c, why in bad[:5])
+        tail = " …" if len(bad) > 5 else ""
+        log.warning("[eltdx 统计] 批次 %d-%d %s，隔离出 %d 只取数失败代码"
+                    "（无数据 / 传输失败 / 帧级故障止损，原因附后）：%s%s",
+                    start, start + len(chunk), reason, len(bad), preview, tail)
+    return rows
 
 
 def _chunked_stats_fetch(full_codes, batch_fn, extract):
@@ -445,9 +469,10 @@ def _chunked_stats_fetch(full_codes, batch_fn, extract):
         实测 0x054c 快照遇到个别代码（如已退市的 sh601059、北交所 bj920025）会抛
         "snapshot record marker not found" / "invalid ASCII response code"，且是
         **整批失败**而非跳过单条 —— 一颗毒丸拖掉整批 80 只。
-      - 其他异常（超时 / 断连 / 池忙）⇒ 整批重试 1 次再放弃。这类错误逐只重试
-        只会把 1 次超时放大成 80 次；瞬时抖动重试即可成功，仍失败才整批跳过
-        （上层已有「本地缓存兜底」，且缓存是合并写、缺失即放行，不会误杀）。
+      - 其他异常（超时 / 断连 / 池忙）⇒ 整批重试 1 次：仍抛协议错（错位帧）
+        则转入二分，仍是传输错才整批跳过。这类错误逐只重试只会把 1 次超时
+        放大成 80 次；瞬时抖动重试即可成功（上层已有「本地缓存兜底」，且缓存
+        是合并写、缺失即放行，不会误杀）。
     """
     out = {}
     for start in range(0, len(full_codes), STATS_BATCH):
@@ -459,20 +484,20 @@ def _chunked_stats_fetch(full_codes, batch_fn, extract):
                 try:
                     rows = batch_fn(chunk)
                 except Exception as _retry_err:
-                    log.warning("[eltdx 统计] 批次 %d-%d 传输失败（重试 1 次仍失败），整批跳过：%s: %s",
-                                start, start + len(chunk), type(_retry_err).__name__, _retry_err)
-                    continue
-                log.info("[eltdx 统计] 批次 %d-%d 传输抖动，重试 1 次成功", start, start + len(chunk))
+                    if not _is_protocol_error(_retry_err):
+                        log.warning("[eltdx 统计] 批次 %d-%d 传输失败（重试 1 次仍失败），整批跳过：%s: %s",
+                                    start, start + len(chunk), type(_retry_err).__name__, _retry_err)
+                        continue
+                    log.warning("[eltdx 统计] 批次 %d-%d 重试后转为协议失败（首轮 %s），转入二分",
+                                start, start + len(chunk), type(_e).__name__)
+                    rows = _bisect_or_drop(start, chunk, batch_fn,
+                                           f"重试后转为协议失败（首轮 {type(_e).__name__}）")
+                else:
+                    log.info("[eltdx 统计] 批次 %d-%d 传输抖动，重试 1 次成功", start, start + len(chunk))
             else:
                 log.warning("[eltdx 统计] 批次 %d-%d 取数失败，二分隔离坏代码：%s: %s",
                             start, start + len(chunk), type(_e).__name__, _e)
-                rows, bad = _bisect_fetch(chunk, batch_fn)
-                if bad:
-                    preview = "、".join(f"{c}（{why}）" for c, why in bad[:5])
-                    tail = " …" if len(bad) > 5 else ""
-                    log.warning("[eltdx 统计] 批次 %d-%d 隔离出 %d 只取数失败代码"
-                                "（无数据 / 传输失败 / 预算耗尽，原因附后）：%s%s",
-                                start, start + len(chunk), len(bad), preview, tail)
+                rows = _bisect_or_drop(start, chunk, batch_fn, "取数失败")
         out.update(extract(rows))
     return out
 

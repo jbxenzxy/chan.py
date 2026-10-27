@@ -19,9 +19,13 @@ eltdx 统计取数的「坏代码二分隔离」守护
       （2 次请求），避免 1 次网络故障被拆成 159 次超时，也不因瞬时抖动丢一批；
   [5] 空输入：0 次请求；
   [8] 错位载荷里的脏 code（实测见过 HTML/CSS 片段被当成 code）不得进结果键；
-  [9] 协议失败与代码无关（整批错位等帧级故障）：请求预算止损
+  [9] 协议失败与代码无关（整批错位等帧级故障）：失败 ≥32 且无成功即止损
       （≤80 次，不再打满 2n−1=160），且不产出任何脏数据；
   [10] 传输类抖动重试 1 次成功：整批数据完整取回（2 次请求）。
+  [11] 首轮传输错 + 重试抛协议错（同一故障链：超时后读到错位帧）：必须转入
+      二分隔离，不得按「传输失败」整批丢弃（2026-10-27 修复 ddb0883 D1）；
+  [12] 毒丸密集（80 只散布 12 颗）：帧级止损判据**不得触发**，全部好票零误丢
+      （2026-10-27 修复 ddb0883 D2：旧固定请求预算 64 在此误丢 7 只好票）。
 
 全程打桩，不联网、不依赖 eltdx 服务器。跑法：
     python Test/test_eltdx_stats_bisect.py
@@ -158,11 +162,12 @@ def test_transport_retry_once_succeeds(failures):
 
 
 def test_protocol_all_fail_budget(failures):
-    """[9] 协议失败与代码无关（整批错位）：请求预算止损，不比逐只重试更差。
+    """[9] 协议失败与代码无关（整批错位）：失败 ≥32 且无成功即止损，不比逐只重试更差。
 
     原实现二分必失败到叶子：80 只全失败打满 2n−1=160 次请求。
+    止损判据生效时应为 32 次失败（+1 次外层首批请求）= 33 次。
     """
-    from DataAPI.ElTdxAPI import _BISECT_MAX_REQUESTS
+    from DataAPI.ElTdxAPI import _BISECT_ABORT_FAILURES
     codes = _codes(80)
     calls = []
 
@@ -171,13 +176,13 @@ def test_protocol_all_fail_budget(failures):
         raise ProtocolError("invalid ASCII response code")
 
     got = _chunked_stats_fetch(codes, always_protocol_error, _extract)
-    # 上限 80 = 「不比逐只重试 80 次更差」；预算生效时应为 _BISECT_MAX_REQUESTS 次
+    # 上限 80 = 「不比逐只重试 80 次更差」；判据生效时应为 _BISECT_ABORT_FAILURES+1 次
     if len(calls) > 80 or got:
-        failures.append(f"[9] 全批协议失败应预算止损（≤80 次请求、无脏数据），"
-                        f"实际 {len(calls)} 次 / {len(got)} 只（预算常量 {_BISECT_MAX_REQUESTS}）")
+        failures.append(f"[9] 全批协议失败应帧级止损（≤80 次请求、无脏数据），"
+                        f"实际 {len(calls)} 次 / {len(got)} 只（止损阈值 {_BISECT_ABORT_FAILURES}）")
         print(f"[FAIL] [9] 全批协议失败: {len(calls)} 次 / {len(got)} 只")
     else:
-        print(f"[PASS] [9] 协议失败与代码无关：预算止损 {len(calls)} 次"
+        print(f"[PASS] [9] 协议失败与代码无关：帧级止损 {len(calls)} 次"
               f"（原 2n−1=160 次），80 只全部记 bad、无脏数据")
 
 
@@ -248,6 +253,66 @@ def test_dirty_code_filtered(failures):
         print("[PASS] [8] 脏 code（HTML/CSS 片段、NUL 占位、非 6 位）全部挡在结果键之外")
 
 
+def test_retry_turns_protocol_bisects(failures):
+    """[11] 首轮传输错 + 重试抛协议错：必须转入二分，不得整批丢弃。
+
+    机制（eltdx 帧层注释自述）：前一个请求失败会让紧随其后的请求读到错位响应，
+    一次错位即可触发 ProtocolError —— 「首轮超时 + 重试错位帧」是同一故障链的
+    相邻两跳，不是两个独立偶发事件。ddb0883 修复前此场景取回 0 只。
+    """
+    codes = _codes(80)
+    bad_code = codes[37]
+    calls = []
+    state = {"n": 0}
+
+    def timeout_then_protocol(codes_):
+        calls.append(len(codes_))
+        state["n"] += 1
+        if state["n"] == 1:
+            raise TimeoutError("read timed out")
+        for c in codes_:
+            if c == bad_code:
+                raise ProtocolError(f"snapshot record marker not found: {c}")
+        return [_record(c) for c in codes_]
+
+    got = _chunked_stats_fetch(codes, timeout_then_protocol, _extract)
+    good = [c for c in codes if c != bad_code]
+    missing = [c for c in good if c not in got]
+    if missing:
+        failures.append(f"[11] 重试抛协议错应转入二分（取回 {len(got)}/79），"
+                        f"实际丢 {len(missing)} 只: {missing[:5]}")
+        print(f"[FAIL] [11] 重试转协议错: 取回 {len(got)} 只 / 请求 {len(calls)} 次")
+    elif bad_code in got:
+        failures.append("[11] 毒丸代码不应出现在结果里")
+        print("[FAIL] [11] 毒丸未剔除")
+    elif len(calls) > 20:
+        failures.append(f"[11] 请求次数 {len(calls)} 超过 20（二分未生效？）")
+        print(f"[FAIL] [11] 请求次数 {len(calls)}")
+    else:
+        print(f"[PASS] [11] 重试抛协议错：转入二分隔离，79 只好票全部取回，请求 {len(calls)} 次")
+
+
+def test_dense_poison_no_good_loss(failures):
+    """[12] 毒丸密集（80 只散布 12 颗）：零误丢好票，帧级止损判据不得触发。
+
+    旧固定请求预算 64 在此场景打满 → 误丢 7 只好票（实测）；改为「失败 ≥32
+    且 0 成功」判据后，好票段穿插成功请求、判据不触发。
+    """
+    codes = _codes(80)
+    poison = {codes[i] for i in range(2, 80, 7)}  # 12 颗，确定性散布
+    calls = []
+    got = _chunked_stats_fetch(codes, _make_batch_fn(poison, calls), _extract)
+    lost_good = [c for c in codes if c not in poison and c not in got]
+    leaked = [c for c in poison if c in got]
+    if lost_good or leaked:
+        failures.append(f"[12] 密集毒丸应零误丢（80-12=68 只全取回），"
+                        f"实际丢好票 {len(lost_good)} 只 / 毒丸漏剔 {len(leaked)} 只: {lost_good[:5]}")
+        print(f"[FAIL] [12] 密集毒丸: 丢好票 {len(lost_good)} / 漏剔 {len(leaked)} / 请求 {len(calls)} 次")
+    else:
+        print(f"[PASS] [12] 密集毒丸（12 颗散布）：68 只好票零误丢，请求 {len(calls)} 次"
+              f"（旧预算 64 会误丢 7 只）")
+
+
 def main():
     failures = []
     test_clean_batch(failures)
@@ -260,6 +325,8 @@ def main():
     test_dirty_code_filtered(failures)
     test_transport_retry_once_succeeds(failures)
     test_protocol_all_fail_budget(failures)
+    test_retry_turns_protocol_bisects(failures)
+    test_dense_poison_no_good_loss(failures)
     print("=" * 60)
     if failures:
         print(f"结果: {len(failures)} 处 FAIL")

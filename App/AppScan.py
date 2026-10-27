@@ -24,7 +24,8 @@ import os
 import threading
 import time
 import traceback
-from datetime import timedelta
+from collections import Counter
+from datetime import datetime, timedelta
 
 # 分析引擎层（App/AppEngine.py）
 from App import AppEngine as _m
@@ -418,12 +419,14 @@ def read_tdxhy_l3_indices():
 STALE_KLINE_DAYS = 20
 
 
-def _drop_stale_candidates(stocks, last_dates):
+def _drop_stale_candidates(stocks: list, last_dates: list[datetime | None]) -> list:
     """按「最后一根 K 线早于基准日 STALE_KLINE_DAYS 天」剔除僵尸票。
 
     Args:
         stocks: [{"prefix": "1", "code": "600519"}, ...]
-        last_dates: 与 stocks 等长的 list[datetime|None]
+        last_dates: 与 stocks 等长的 list[datetime|None]。**元素必须是 datetime**
+            （内部日志要调 last.date()，传 date 会 AttributeError）；当前唯一
+            调用方 read_all_a_stocks 经 read_last_bar_date 拿到的就是 datetime。
 
     Returns:
         过滤后的 stocks（保持原顺序）。
@@ -450,8 +453,21 @@ def _drop_stale_candidates(stocks, last_dates):
     if dropped:
         preview = "、".join(f"{code}@{last.date().isoformat()}" for code, last in dropped[:10])
         tail = " …" if len(dropped) > 10 else ""
-        log.info("[全A股] 新鲜度闸门剔除 %d 只（基准 %s，阈值 %d 天）：%s%s",
-                 len(dropped), newest.date().isoformat(), days, preview, tail)
+        # 大面积剔除 = 本地 K 线没跟上（盘后只下载了部分市场 / 股票池不完整），
+        # 静默 INFO 会让用户只看到「扫描结果少了一半」而无从排查，升级 warning：
+        #   - 占比 ≥20%（正常停牌/退市剔除本机实测 4/5227 ≈ 0.08%，不会误报）；或
+        #   - 被剔票集中在单一市场板块（首位数字 6=沪 / 0=深主板 / 3=创业板，≥90%
+        #     且 ≥10 只——单只剔除本就 100% 集中，不构成「整段缺失」信号）。
+        ratio = len(dropped) / len(stocks)
+        top_mkt, top_n = Counter(code[0] for code, _ in dropped).most_common(1)[0]
+        if ratio >= 0.2 or (len(dropped) >= 10 and top_n >= 0.9 * len(dropped)):
+            log.warning("[全A股] 新鲜度闸门剔除 %d/%d 只（%.0f%%，基准 %s，阈值 %d 天），"
+                        "疑似本地 K 线未更新，请检查通达信盘后下载：%s%s",
+                        len(dropped), len(stocks), ratio * 100,
+                        newest.date().isoformat(), days, preview, tail)
+        else:
+            log.info("[全A股] 新鲜度闸门剔除 %d 只（基准 %s，阈值 %d 天）：%s%s",
+                     len(dropped), newest.date().isoformat(), days, preview, tail)
     return kept
 
 
