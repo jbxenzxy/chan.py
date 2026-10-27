@@ -457,15 +457,23 @@ def _drop_stale_candidates(stocks: list, last_dates: list[datetime | None]) -> l
         # 静默 INFO 会让用户只看到「扫描结果少了一半」而无从排查，升级 warning：
         #   - 占比 ≥20%（正常停牌/退市剔除本机实测 4/5227 ≈ 0.08%，不会误报）；或
         #   - 被剔票集中在单一市场板块（首位数字 6=沪 / 0=深主板 / 3=创业板，≥90%
-        #     且 ≥10 只——单只剔除本就 100% 集中，不构成「整段缺失」信号）。
+        #     且 ≥10 只 **且占比 ≥2%**——单只剔除本就 100% 集中，不构成「整段缺失」
+        #     信号；2% ≈ 本机 104 只，远低于任一子市场体量（科创板 ≈11%、创业板
+        #     ≈25%），20 天窗口内零星同市场停牌不会误报）。
         ratio = len(dropped) / len(stocks)
         top_mkt, top_n = Counter(code[0] for code, _ in dropped).most_common(1)[0]
-        if ratio >= 0.2 or (len(dropped) >= 10 and top_n >= 0.9 * len(dropped)):
-            log.warning("[全A股] 新鲜度闸门剔除 %d/%d 只（%.0f%%，基准 %s，阈值 %d 天），"
-                        "集中在首位数字 %s（%d/%d），疑似本地 K 线未更新，请检查通达信盘后下载：%s%s",
+        concentrated = (ratio >= 0.02 and len(dropped) >= 10
+                        and top_n >= 0.9 * len(dropped))
+        if ratio >= 0.2 or concentrated:
+            # 集中度只在「整段缺失但量不大」时有诊断价值：占比分支触发时分布本就
+            # 分散，若照样写「集中在首位数字 X（50/100）」会把排查方向带偏，
+            # 故按触发原因二选一措辞。
+            where = (f"，被剔票集中在首位数字 {top_mkt}（{top_n}/{len(dropped)}）"
+                     if concentrated else "")
+            log.warning("[全A股] 新鲜度闸门剔除 %d/%d 只（%.0f%%，基准 %s，阈值 %d 天）%s，"
+                        "疑似本地 K 线未更新，请检查通达信盘后下载：%s%s",
                         len(dropped), len(stocks), ratio * 100,
-                        newest.date().isoformat(), days, top_mkt, top_n, len(dropped),
-                        preview, tail)
+                        newest.date().isoformat(), days, where, preview, tail)
         else:
             log.info("[全A股] 新鲜度闸门剔除 %d 只（基准 %s，阈值 %d 天）：%s%s",
                      len(dropped), newest.date().isoformat(), days, preview, tail)

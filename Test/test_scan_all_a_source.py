@@ -262,29 +262,48 @@ def test_stale_gate_bulk_warning(failures):
 
     判据（与实现同口径）：
       - 占比 ≥20% ⇒ warning（正常剔除本机 4/5227≈0.08%，不会误报）；
-      - 集中单一市场 ≥90% 且 ≥10 只 ⇒ warning（疑似只下载了部分市场）；
+      - 集中单一市场 ≥90% 且 ≥10 只 **且占比 ≥2%** ⇒ warning（疑似只下载了
+        部分市场；2% 下限是为了把「20 天内同市场零星停牌」压回 INFO）；
       - 零星剔除（正常停牌/退市）⇒ 保持 INFO。
+
+    文案也要验：`log.warning` 被 mock 掉时 `%` 格式化不会执行，占位符与实参
+    不匹配的 bug 会潜伏到线上 —— 这里把 (fmt, *args) 真渲染一遍再断言措辞
+    （2026-10-27 51c2fef N1/N2：占比分支曾误写「集中在首位数字 X（50/100）」）。
     """
     base = datetime(2026, 10, 23, 15, 0, 0)
     stale = base - timedelta(days=30)
+
+    def _render(m):
+        """把 mock 到的 (fmt, *args) 真渲染 —— 占位符/实参不匹配在这里就会暴露。"""
+        if not m.called:
+            return ""
+        fmt, args = m.call_args[0][0], m.call_args[0][1:]
+        try:
+            return fmt % args
+        except TypeError as exc:
+            failures.append(f"[9e] 日志文案占位符与实参不匹配：{exc}（fmt={fmt!r}）")
+            return ""
 
     def run(stocks, last_dates):
         with mock.patch.object(_scan_mod.log, "warning") as mw, \
              mock.patch.object(_scan_mod.log, "info") as mi:
             _scan_mod._drop_stale_candidates(stocks, last_dates)
-        return mw.called, mi.called
+        return mw.called, mi.called, _render(mw), _render(mi)
 
     # A. 大面积（50%）：200 只剔 100，被剔代码首位 0/6 混布（集中度 50%）
     #    ⇒ 只能由占比分支触发（隔离验证占比判据本身）
     stocks = [{"prefix": "1", "code": f"{600100 + i:06d}" if i % 2 else f"{i:06d}"}
               for i in range(200)]
     dates = [stale if i % 4 in (0, 1) else base for i in range(200)]
-    warned, infoed = run(stocks, dates)
+    warned, infoed, wmsg, _ = run(stocks, dates)
     if not warned or infoed:
         failures.append(f"[9e] 50% 剔除应 warning（实际 warning={warned} info={infoed}）")
         print(f"[FAIL] [9e-A] 50% 剔除: warning={warned} info={infoed}")
+    elif "集中在首位数字" in wmsg:
+        failures.append(f"[9e] 占比触发的文案不该写「集中在」（市场混布 50/50）：{wmsg}")
+        print("[FAIL] [9e-A] 占比触发却写了「集中在首位数字」")
     else:
-        print("[PASS] [9e-A] 大面积剔除（50%）升级 warning")
+        print("[PASS] [9e-A] 大面积剔除（50%，市场混布）升级 warning，且文案不称「集中」")
 
     # B. 零星剔除：1000 只剔 4，混布 ⇒ 保持 INFO
     stocks = [{"prefix": "1", "code": f"{600000 + i:06d}"} for i in range(1000)]
@@ -292,35 +311,51 @@ def test_stale_gate_bulk_warning(failures):
     for i, first in enumerate(("6", "0", "3", "6")):
         stocks[i]["code"] = f"{first}00000{i}"
         dates[i] = stale
-    warned, infoed = run(stocks, dates)
+    warned, infoed, _, _ = run(stocks, dates)
     if warned or not infoed:
         failures.append(f"[9e] 零星剔除应保持 INFO（实际 warning={warned} info={infoed}）")
         print(f"[FAIL] [9e-B] 零星剔除: warning={warned} info={infoed}")
     else:
         print("[PASS] [9e-B] 零星剔除（4/1000 混布）保持 INFO")
 
-    # C. 集中单一市场但占比低：100 只剔 10、全是 6 开头 ⇒ warning（≥90% 且 ≥10 只）
+    # C. 集中单一市场但占比低：100 只剔 10、全是 6 开头 ⇒ warning（≥90%、≥10 只、≥2%）
     stocks = [{"prefix": "1", "code": f"{600000 + i:06d}"} for i in range(100)]
     dates = [base] * 100
     for i in range(10):
         dates[i] = stale
-    warned, infoed = run(stocks, dates)
+    warned, infoed, wmsg, _ = run(stocks, dates)
     if not warned:
         failures.append("[9e] 单市场整段缺失（10 只全 6 开头）应 warning")
         print("[FAIL] [9e-C] 集中剔除未升级 warning")
+    elif "集中在首位数字 6（10/10）" not in wmsg:
+        failures.append(f"[9e] 集中触发的文案应写明集中度：{wmsg}")
+        print("[FAIL] [9e-C] 文案缺「集中在首位数字 6（10/10）」")
     else:
-        print("[PASS] [9e-C] 单一市场整段缺失（10/100，集中度 100%）升级 warning")
+        print("[PASS] [9e-C] 单一市场整段缺失（10/100）升级 warning，文案含集中度")
 
     # D. 集中但不足 10 只：100 只剔 9、全 6 开头 ⇒ INFO（单只剔除本就 100% 集中）
     dates = [base] * 100
     for i in range(9):
         dates[i] = stale
-    warned, infoed = run(stocks, dates)
+    warned, infoed, _, _ = run(stocks, dates)
     if warned or not infoed:
         failures.append(f"[9e] 9 只集中剔除应保持 INFO（实际 warning={warned} info={infoed}）")
         print(f"[FAIL] [9e-D] 9 只集中剔除: warning={warned} info={infoed}")
     else:
         print("[PASS] [9e-D] 集中但 <10 只不误报（防单只剔除 100% 集中误触发）")
+
+    # E. 集中但占比 <2%：1000 只剔 11、全 6 开头 ⇒ INFO
+    #    20 天窗口内同一市场零星停牌累计到 11 只是常态，不该报「K 线未更新」
+    stocks = [{"prefix": "1", "code": f"{600000 + i:06d}"} for i in range(1000)]
+    dates = [base] * 1000
+    for i in range(11):
+        dates[i] = stale
+    warned, infoed, _, _ = run(stocks, dates)
+    if warned or not infoed:
+        failures.append(f"[9e] 集中但占比 1.1% 应保持 INFO（实际 warning={warned} info={infoed}）")
+        print(f"[FAIL] [9e-E] 11/1000 集中: warning={warned} info={infoed}")
+    else:
+        print("[PASS] [9e-E] 集中但占比 <2%（11/1000）保持 INFO（防零星同市场停牌误报）")
 
 
 def test_threshold_zero_disables(failures):
