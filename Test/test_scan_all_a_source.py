@@ -31,7 +31,9 @@
   [9] 新鲜度闸门（2026-10-26）：候选票最后一根 K 线早于「本批最新日期 -
       STALE_KLINE_DAYS 天」→ 剔除。判据：① 停牌/退市票被剔除；② 整机数据
       都旧时不误杀（基准是相对最新、不是今天）；③ 读不出日期（None）保留；
-      ④ STALE_KLINE_DAYS<=0 关闭闸门。
+      ④ STALE_KLINE_DAYS<=0 关闭闸门；⑤ 分钟周期（2026-10-27）判据叠加
+      .day 日期取较旧者——停牌票的 .lc5 是零量占位 bar（恒新鲜），
+      单看分钟文件闸门形同虚设。
 
 全程打桩，不联网、不触碰 App/ 生产数据（app_data 以 stub 替换）。
 运行：python Test/test_scan_all_a_source.py
@@ -148,6 +150,56 @@ def _write_day_record(path, ymd):
     """写一条 32 字节日线记录，日期 = uint32 YYYYMMDD（与真实 .day 同格式）。"""
     with open(path, "wb") as f:
         f.write(struct.pack("<IIIIIfII", ymd, 1000, 1000, 1000, 1000, 0.0, 0, 0))
+
+
+def _write_lc5_bars(path, bars):
+    """写若干条 32 字节 .lc5 记录（与真实分钟线同格式），bars = [(y, m, d, vol)]。
+
+    vol=0 即复现停牌票的「零成交量占位 bar」：日期新、价格冻结、无成交——
+    [9d] 的关键夹具（此前的 16 字节空夹具 n_records=0 → None → 放行，
+    分钟日期解码分支零覆盖）。
+    """
+    with open(path, "wb") as f:
+        for (y, m, d, vol) in bars:
+            num = (y - 2004) * 2048 + m * 100 + d
+            f.write(struct.pack("<HHfffffII", num, 900, 10.0, 11.0, 9.0, 10.0, 0.0, vol, 0))
+
+
+def test_minute_gate_overlays_day(failures):
+    """[9d] 分钟周期闸门叠加 .day 判据：占位 .lc5 + 旧 .day ⇒ 剔除；
+    真实 .lc5 + 新 .day ⇒ 保留；仅分钟线（无 .day）⇒ 保留。"""
+    tmp = tempfile.mkdtemp(prefix="scan_all_a_stale3_")
+    try:
+        fz = os.path.join(tmp, "sz", "fzline")
+        ld = os.path.join(tmp, "sz", "lday")
+        os.makedirs(fz, exist_ok=True)
+        os.makedirs(ld, exist_ok=True)
+        # 本批最新 = 2026-10-23，阈值 20 天 ⇒ 早于 2026-10-03 的剔除
+        # 停牌票（复现本机 sz000016 形态）：.lc5 续写占位 bar 到 10-23（恒新鲜），
+        # .day 停在 09-14 ⇒ 叠加后按日线日期剔除
+        _write_lc5_bars(os.path.join(fz, "sz000016.lc5"),
+                        [(2026, 9, 14, 100), (2026, 10, 23, 0)])
+        _write_day_record(os.path.join(ld, "sz000016.day"), 20260914)
+        # 正常票：.lc5 有量到 10-23，.day 同步 ⇒ 留
+        _write_lc5_bars(os.path.join(fz, "sz000002.lc5"),
+                        [(2026, 9, 14, 100), (2026, 10, 23, 100)])
+        _write_day_record(os.path.join(ld, "sz000002.day"), 20261023)
+        # 仅分钟线（.day 缺失）：None 不参与比较 ⇒ 留（不因「判不出」误杀）
+        _write_lc5_bars(os.path.join(fz, "sz000003.lc5"),
+                        [(2026, 10, 23, 100)])
+        with mock.patch.object(_scan_mod, "app_config",
+                               types.SimpleNamespace(vipdoc_dir=tmp)):
+            got = _scan_mod.read_all_a_stocks("5m")
+        actual = {s["code"] for s in got}
+        expected = {"000002", "000003"}
+        if actual != expected:
+            failures.append(f"[9d] 分钟闸门叠加 .day 结果不符: {sorted(actual)} != {sorted(expected)}")
+            print(f"[FAIL] [9d] 分钟闸门叠加 .day: {sorted(actual)}")
+        else:
+            print("[PASS] [9d] 分钟周期叠加 .day：占位 .lc5 + 旧 .day 被剔除，"
+                  "正常票与仅分钟票保留")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def test_stale_gate(failures):
@@ -331,6 +383,7 @@ def main():
     test_all_a_prefix_filter(failures)
     test_minute_period_uses_fzline(failures)
     test_stale_gate(failures)
+    test_minute_gate_overlays_day(failures)
     test_threshold_zero_disables(failures)
     test_zxg_filtered_by_threshold(failures)
     test_st_filter_applies_to_zxg(failures)

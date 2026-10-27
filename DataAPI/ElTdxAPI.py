@@ -380,6 +380,12 @@ ELTDX_MARKETS = ("sh", "sz", "bj")
 # 故取 80（与 eltdx helpers 内部同值）。
 STATS_BATCH = 80
 
+# 单次 _bisect_fetch 调用的请求上限。实测 80 只含 1 颗毒丸 13 次、3 颗 31 次、
+# 5000 只 6 颗折算单批 ≈44 次，均远低于此；仅当「协议失败与具体代码无关」
+# （整批错位等帧级故障）时会打满——此时二分必失败到叶子，原实现最坏 2n−1=160
+# 次，预算到顶即把剩余段整体记 bad 止损（下游缓存合并写、缺失放行，不会误杀）。
+_BISECT_MAX_REQUESTS = 64
+
 
 def _is_protocol_error(err):
     """异常是否属于「协议解析失败」——即批次里含坏代码的信号。
@@ -401,15 +407,23 @@ def _bisect_fetch(codes, batch_fn):
 
     成功的那一段**直接复用本次响应**，不重复请求 —— 数据在定位过程中就已拿全。
     请求次数：k 颗毒丸约 2k·log2(n/k)；80 只含 1 颗约 14 次（原逐只重试 80 次）。
+    请求预算 _BISECT_MAX_REQUESTS：打满即把剩余段整体记 bad——正常毒丸场景
+    远用不到，只在「协议失败与具体代码无关」（整批错位等帧级故障）时止损，
+    最坏请求次数从 2n−1=160 降到预算值。
 
     非协议类异常（超时 / 断连）不细分：整段记入 bad 立即返回，防止 1 次网络
     故障被拆成 159 次超时等待。
     """
     rows, bad = [], []
     stack = [list(codes)]
+    requests = 0
     while stack:
         seg = stack.pop()
+        if requests >= _BISECT_MAX_REQUESTS:
+            bad.extend((_c, "二分请求预算耗尽，未细分") for _c in seg)
+            continue
         try:
+            requests += 1
             rows.extend(batch_fn(seg))
         except Exception as _e:
             if not _is_protocol_error(_e):
@@ -431,8 +445,9 @@ def _chunked_stats_fetch(full_codes, batch_fn, extract):
         实测 0x054c 快照遇到个别代码（如已退市的 sh601059、北交所 bj920025）会抛
         "snapshot record marker not found" / "invalid ASCII response code"，且是
         **整批失败**而非跳过单条 —— 一颗毒丸拖掉整批 80 只。
-      - 其他异常（超时 / 断连 / 池忙）⇒ 整批跳过。这类错误逐只重试只会把
-        1 次超时放大成 80 次，且上层已有「本地缓存兜底」。
+      - 其他异常（超时 / 断连 / 池忙）⇒ 整批重试 1 次再放弃。这类错误逐只重试
+        只会把 1 次超时放大成 80 次；瞬时抖动重试即可成功，仍失败才整批跳过
+        （上层已有「本地缓存兜底」，且缓存是合并写、缺失即放行，不会误杀）。
     """
     out = {}
     for start in range(0, len(full_codes), STATS_BATCH):
@@ -441,17 +456,23 @@ def _chunked_stats_fetch(full_codes, batch_fn, extract):
             rows = batch_fn(chunk)
         except Exception as _e:
             if not _is_protocol_error(_e):
-                log.warning("[eltdx 统计] 批次 %d-%d 传输失败，整批跳过：%s: %s",
+                try:
+                    rows = batch_fn(chunk)
+                except Exception as _retry_err:
+                    log.warning("[eltdx 统计] 批次 %d-%d 传输失败（重试 1 次仍失败），整批跳过：%s: %s",
+                                start, start + len(chunk), type(_retry_err).__name__, _retry_err)
+                    continue
+                log.info("[eltdx 统计] 批次 %d-%d 传输抖动，重试 1 次成功", start, start + len(chunk))
+            else:
+                log.warning("[eltdx 统计] 批次 %d-%d 取数失败，二分隔离坏代码：%s: %s",
                             start, start + len(chunk), type(_e).__name__, _e)
-                continue
-            log.warning("[eltdx 统计] 批次 %d-%d 取数失败，二分隔离坏代码：%s: %s",
-                        start, start + len(chunk), type(_e).__name__, _e)
-            rows, bad = _bisect_fetch(chunk, batch_fn)
-            if bad:
-                preview = "、".join(f"{c}（{why}）" for c, why in bad[:5])
-                tail = " …" if len(bad) > 5 else ""
-                log.warning("[eltdx 统计] 批次 %d-%d 隔离出 %d 只无数据代码：%s%s",
-                            start, start + len(chunk), len(bad), preview, tail)
+                rows, bad = _bisect_fetch(chunk, batch_fn)
+                if bad:
+                    preview = "、".join(f"{c}（{why}）" for c, why in bad[:5])
+                    tail = " …" if len(bad) > 5 else ""
+                    log.warning("[eltdx 统计] 批次 %d-%d 隔离出 %d 只取数失败代码"
+                                "（无数据 / 传输失败 / 预算耗尽，原因附后）：%s%s",
+                                start, start + len(chunk), len(bad), preview, tail)
         out.update(extract(rows))
     return out
 

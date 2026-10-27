@@ -15,10 +15,13 @@ eltdx 统计取数的「坏代码二分隔离」守护
   [1] 干净批：1 次请求取完，不做任何拆分；
   [2] 单颗毒丸：坏代码被准确识别、其余票数据完整，请求次数远小于逐只 80 次；
   [3] 多颗毒丸：仍能全部识别且数据不丢；
-  [4] 传输类异常（超时 / 断连）：**不做二分**，整批跳过（1 次请求），
-      避免 1 次网络故障被拆成 159 次超时；
+  [4] 传输类异常（超时 / 断连）：**不做二分**，整批重试 1 次、仍失败才跳过
+      （2 次请求），避免 1 次网络故障被拆成 159 次超时，也不因瞬时抖动丢一批；
   [5] 空输入：0 次请求；
-  [8] 错位载荷里的脏 code（实测见过 HTML/CSS 片段被当成 code）不得进结果键。
+  [8] 错位载荷里的脏 code（实测见过 HTML/CSS 片段被当成 code）不得进结果键；
+  [9] 协议失败与代码无关（整批错位等帧级故障）：请求预算止损
+      （≤80 次，不再打满 2n−1=160），且不产出任何脏数据；
+  [10] 传输类抖动重试 1 次成功：整批数据完整取回（2 次请求）。
 
 全程打桩，不联网、不依赖 eltdx 服务器。跑法：
     python Test/test_eltdx_stats_bisect.py
@@ -116,7 +119,7 @@ def test_multi_poison(failures):
 
 
 def test_transport_error_not_split(failures):
-    """[4] 传输类异常：整批跳过，不做二分（1 次请求）。"""
+    """[4] 传输类异常：整批重试 1 次、仍失败才跳过（2 次请求，不做二分）。"""
     codes = _codes(80)
     calls = []
 
@@ -125,11 +128,57 @@ def test_transport_error_not_split(failures):
         raise TimeoutError("read timed out")
 
     got = _chunked_stats_fetch(codes, always_timeout, _extract)
-    if len(calls) != 1 or got:
-        failures.append(f"[4] 传输失败应 1 次请求且无数据，实际 {len(calls)} 次 / {len(got)} 只")
+    if len(calls) != 2 or got:
+        failures.append(f"[4] 传输失败应重试 1 次后跳过（2 次请求无数据），实际 {len(calls)} 次 / {len(got)} 只")
         print(f"[FAIL] [4] 传输失败: {len(calls)} 次 / {len(got)} 只")
     else:
-        print("[PASS] [4] 传输类异常：1 次请求即放弃，不拆成 159 次超时")
+        print("[PASS] [4] 传输类异常：重试 1 次仍失败即整批跳过（2 次请求，不拆成 159 次超时）")
+
+
+def test_transport_retry_once_succeeds(failures):
+    """[10] 传输类抖动重试 1 次成功：整批数据完整取回。"""
+    codes = _codes(80)
+    calls = []
+    state = {"n": 0}
+
+    def flaky(_codes_):
+        calls.append(len(_codes_))
+        state["n"] += 1
+        if state["n"] == 1:
+            raise TimeoutError("read timed out")
+        return [_record(c) for c in _codes_]
+
+    got = _chunked_stats_fetch(codes, flaky, _extract)
+    missing = [c for c in codes if c not in got]
+    if len(calls) != 2 or missing:
+        failures.append(f"[10] 传输抖动重试后应取回 80 只（2 次请求），实际 {len(calls)} 次 / 缺 {len(missing)} 只")
+        print(f"[FAIL] [10] 传输抖动: {len(calls)} 次 / 缺 {len(missing)} 只")
+    else:
+        print("[PASS] [10] 传输类抖动：重试 1 次成功，80 只完整取回（瞬时抖动不丢批）")
+
+
+def test_protocol_all_fail_budget(failures):
+    """[9] 协议失败与代码无关（整批错位）：请求预算止损，不比逐只重试更差。
+
+    原实现二分必失败到叶子：80 只全失败打满 2n−1=160 次请求。
+    """
+    from DataAPI.ElTdxAPI import _BISECT_MAX_REQUESTS
+    codes = _codes(80)
+    calls = []
+
+    def always_protocol_error(codes_):
+        calls.append(len(codes_))
+        raise ProtocolError("invalid ASCII response code")
+
+    got = _chunked_stats_fetch(codes, always_protocol_error, _extract)
+    # 上限 80 = 「不比逐只重试 80 次更差」；预算生效时应为 _BISECT_MAX_REQUESTS 次
+    if len(calls) > 80 or got:
+        failures.append(f"[9] 全批协议失败应预算止损（≤80 次请求、无脏数据），"
+                        f"实际 {len(calls)} 次 / {len(got)} 只（预算常量 {_BISECT_MAX_REQUESTS}）")
+        print(f"[FAIL] [9] 全批协议失败: {len(calls)} 次 / {len(got)} 只")
+    else:
+        print(f"[PASS] [9] 协议失败与代码无关：预算止损 {len(calls)} 次"
+              f"（原 2n−1=160 次），80 只全部记 bad、无脏数据")
 
 
 def test_empty(failures):
@@ -209,6 +258,8 @@ def main():
     test_bisect_returns_poison_detail(failures)
     test_stats_batch_constant(failures)
     test_dirty_code_filtered(failures)
+    test_transport_retry_once_succeeds(failures)
+    test_protocol_all_fail_budget(failures)
     print("=" * 60)
     if failures:
         print(f"结果: {len(failures)} 处 FAIL")

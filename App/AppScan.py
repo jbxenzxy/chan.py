@@ -418,21 +418,22 @@ def read_tdxhy_l3_indices():
 STALE_KLINE_DAYS = 20
 
 
-def _drop_stale_candidates(stocks, last_dates, max_stale_days=None):
+def _drop_stale_candidates(stocks, last_dates):
     """按「最后一根 K 线早于基准日 STALE_KLINE_DAYS 天」剔除僵尸票。
 
     Args:
         stocks: [{"prefix": "1", "code": "600519"}, ...]
         last_dates: 与 stocks 等长的 list[datetime|None]
-        max_stale_days: 覆盖模块常量；<=0 = 不剔除。
 
     Returns:
         过滤后的 stocks（保持原顺序）。
 
-    读不出日期（None）的票**一律保留**：合成文件 / 损坏文件 / 未知格式都不该
-    因为「判不出来」被静默丢出候选 —— 闸门的目标是明确的僵尸票，不是猜。
+    阈值只来自模块常量 STALE_KLINE_DAYS（单一事实源；测试经 mock 该常量改写，
+    不另设可调入口）。读不出日期（None）的票**一律保留**：合成文件 / 损坏文件 /
+    未知格式都不该因为「判不出来」被静默丢出候选 —— 闸门的目标是明确的僵尸票，
+    不是猜。
     """
-    days = STALE_KLINE_DAYS if max_stale_days is None else max_stale_days
+    days = STALE_KLINE_DAYS
     if days <= 0 or not stocks:
         return stocks
     known = [d for d in last_dates if d is not None]
@@ -471,7 +472,9 @@ def read_all_a_stocks(freq="d"):
     **新鲜度闸门**（2026-10-26 新增，见 STALE_KLINE_DAYS）：文件名枚举会把已退市
     票的历史文件一直算作候选，故对入选个股再读一次「最后一根 K 线日期」，早于
     「本批最新日期 - STALE_KLINE_DAYS 天」的剔除。仅在已通过前缀过滤的个股上
-    取日期，指数 / ETF / B 股不额外读盘。
+    取日期，指数 / ETF / B 股不额外读盘。分钟周期（fzline/*.lc5）判据**叠加
+    .day 日期取较旧者**：停牌票的 .lc5 会被通达信续写零成交量占位 bar 而恒
+    「新鲜」，单看分钟文件闸门失效；.day 缺失不参与比较（不误杀仅分钟候选）。
     """
     from DataAPI.TdxAPI import (
         SH_INCLUDE_PREFIXES, SH_INDEX_PREFIXES,
@@ -499,7 +502,20 @@ def read_all_a_stocks(freq="d"):
             if not hit:
                 continue
             stocks.append({"prefix": prefix_num, "code": code})
-            last_dates.append(read_last_bar_date(os.path.join(line_dir, fname), use_minute))
+            last = read_last_bar_date(os.path.join(line_dir, fname), use_minute)
+            if use_minute:
+                # 分钟周期判据叠加 .day 日期（取较旧者）：通达信给停牌票的 .lc5
+                # 按交易日整段续写零成交量占位 bar（价格冻结在停牌前收盘），分钟
+                # 文件恒「新鲜」——单看分钟文件闸门形同虚设（实测 5m 候选 5228 只
+                # 剔除 0 只，停牌票照旧进池喂毒丸给 eltdx）。日线没有占位问题
+                # （停牌日不写 .day 记录），与闸门语义一致。.day 缺失（None）不
+                # 参与比较，「有 .lc5 无 .day」的票不因「判不出」被误杀。
+                day_last = read_last_bar_date(
+                    os.path.join(app_config.vipdoc_dir, mkt, "lday", mkt + code + ".day"),
+                    False)
+                if day_last is not None and (last is None or day_last < last):
+                    last = day_last
+            last_dates.append(last)
     return _drop_stale_candidates(stocks, last_dates)
 
 
