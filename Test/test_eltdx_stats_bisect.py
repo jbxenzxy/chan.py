@@ -29,8 +29,14 @@ eltdx 统计取数的「坏代码二分隔离」守护
   [13] 毒丸成簇（尾部连续 16 只，批量退市/停牌的真实形态）：不得误判帧级
       故障、好票零误丢（2026-10-27 修复 752d29f D8：按「失败段数」计数时
       DFS 先探右半 ⇒ 整批 80 只全丢；改为叶子计数后通过）。
-  [14] 尾部成簇 ≥32 只（已知残余边界）：允许整段记 bad，但必须账目不丢代码、
-      不漏毒丸、请求不超过逐只重试的 80 次（防判据退化）。
+  [14] 毒丸成簇（连续 16/32/48/64 只 × 头/中/尾三位置）：好票**零误丢**。
+      2026-10-27 二次修复前，「叶子 ≥32 且零成功」在毒丸成簇于 DFS 探索序首位
+      时把「好票还没轮到」误判成帧级故障、整段记 bad（尾部 32/48/64 只分别丢
+      48/32/16 只）。现改为阈值命中后先**等距取样探测**（连续成簇覆盖不了全部
+      8 个采样点，命中一只好票即恢复完整二分）。本条锁死零误丢，判据一旦退化
+      回「命中即放弃」立刻失败。
+  [15] 真帧级故障（整批全失败）：取样探测全落空后仍须止损，账目上 80 只全部
+      记 bad、无重复计数，请求 ≤80 次（防探测把止损变成 2n−1=160）。
 
 全程打桩，不联网、不依赖 eltdx 服务器。跑法：
     python Test/test_eltdx_stats_bisect.py
@@ -170,8 +176,8 @@ def test_protocol_all_fail_budget(failures):
     """[9] 协议失败与代码无关（整批错位）：失败 ≥32 且无成功即止损，不比逐只重试更差。
 
     原实现二分必失败到叶子：80 只全失败打满 2n−1=160 次请求。
-    叶子计数判据生效时：32 只叶子失败 + 其间 34 个内部节点 = 二分内 66 次，
-    加上外层首轮与重试 2 次，共实测 68 次。
+    叶子计数判据生效后：32 只叶子失败 + 其间内部节点 = 二分内 66 次，加外层
+    1 次 = 67 次；再叠加 8 点等距取样探测（全落空）后共实测 76 次。
     """
     from DataAPI.ElTdxAPI import _BISECT_ABORT_FAILURES
     codes = _codes(80)
@@ -341,32 +347,55 @@ def test_poison_cluster_no_good_loss(failures):
               f"（段计数判据在此整批全丢）")
 
 
-def test_poison_cluster_over_threshold_bounded(failures):
-    """[14] 尾部成簇 ≥32 只：已知残余边界，允许整段记 bad，但账目必须对得上。
+def test_poison_cluster_any_position(failures):
+    """[14] 毒丸成簇（连续 16/32/48/64 只 × 头/中/尾）：好票零误丢。
 
-    32 只叶子失败时好票段还没被 DFS 探到（先探右半），`successes == 0` 无法
-    区分「从没成功」与「还没轮到」，故整段记 bad（实测丢 48 只，与旧固定预算
-    版同量，见 `_bisect_fetch` docstring）。本用例不锁「丢弃数量」（将来若加
-    探测消除它应该通过），只锁三件事：
-      1) rows + bad 覆盖全部 80 只，不静默吞代码；
-      2) 毒丸不被当成功数据返回；
-      3) 请求数不超过逐只重试的 80 次（防判据退化到 2n−1=160）。
+    修复前（51c2fef）：阈值「叶子失败 ≥32 且一次成功都没有」在毒丸成簇于 DFS
+    探索序首位时，好票段仍完整躺在栈里、`successes` 自然为 0，两者分不开 ⇒
+    整段记 bad（实测尾部 32/48/64 只分别丢 48/32/16 只）。
+    修复（等距取样探测）后：连续成簇覆盖不了全部 8 个采样点，命中一只好票即
+    恢复完整二分，任何位置/规模都零误丢。
     """
     codes = _codes(80)
-    poison = set(codes[-32:])
-    calls = []
-    rows, bad = _bisect_fetch(codes, _make_batch_fn(poison, calls))
-    got = {r.full_code for r in rows}
-    covered = got | {c for c, _ in bad}
-    leaked = sorted(poison & got)
-    lost = len(set(codes) - poison - got)
-    if covered != set(codes) or leaked or len(calls) > 80:
-        failures.append(f"[14] 尾部成簇 32 只：账目/毒丸/请求数异常"
-                        f"（覆盖 {len(covered)}/80、漏剔 {len(leaked)}、请求 {len(calls)}）")
-        print(f"[FAIL] [14] 尾部成簇 32 只: 覆盖 {len(covered)}/80 漏剔 {len(leaked)} 请求 {len(calls)}")
+    bad_cases = []
+    for k in (16, 32, 48, 64):
+        for label, base in (("头部", 0), ("中部", (80 - k) // 2), ("尾部", 80 - k)):
+            poison = set(codes[base:base + k])
+            calls = []
+            rows, bad = _bisect_fetch(codes, _make_batch_fn(poison, calls))
+            got = {r.full_code for r in rows}
+            covered = got | {c for c, _ in bad}
+            leaked = poison & got
+            lost = set(codes) - poison - got
+            if lost or covered != set(codes) or leaked or len(calls) > 160:
+                bad_cases.append(f"{label}{k}（丢 {len(lost)}、覆盖 {len(covered)}/80、"
+                                 f"漏剔 {len(leaked)}、请求 {len(calls)}）")
+    if bad_cases:
+        failures.append(f"[14] 成簇毒丸应零误丢：{'；'.join(bad_cases)}")
+        print(f"[FAIL] [14] 成簇毒丸误丢好票: {bad_cases[:3]}")
     else:
-        print(f"[PASS] [14] 尾部成簇 32 只（残余边界）：账目 80/80、毒丸零漏剔，"
-              f"请求 {len(calls)} 次；本次丢弃好票 {lost} 只（与旧预算版同量，见 docstring）")
+        print("[PASS] [14] 毒丸成簇 16/32/48/64 只 × 头/中/尾：好票全部零误丢、"
+              "账目 80/80、毒丸零漏剔")
+
+
+def test_frame_fault_still_aborts(failures):
+    """[15] 真帧级故障：取样探测全落空后仍须止损，账目 80/80、无重复计数。"""
+    codes = _codes(80)
+    calls = []
+
+    def always_protocol_error(codes_):
+        calls.append(len(codes_))
+        raise ProtocolError("frame broken")
+
+    rows, bad = _bisect_fetch(codes, always_protocol_error)
+    bad_codes = [c for c, _ in bad]
+    if rows or len(bad) != 80 or len(set(bad_codes)) != 80 or len(calls) > 80:
+        failures.append(f"[15] 帧级故障应止损且账目干净（实际 rows={len(rows)}、"
+                        f"bad={len(bad)}、去重 {len(set(bad_codes))}、请求 {len(calls)}）")
+        print(f"[FAIL] [15] 帧级故障: rows={len(rows)} bad={len(bad)} 请求={len(calls)}")
+    else:
+        print(f"[PASS] [15] 帧级故障：取样探测全落空后止损，bad 80 只无重复，"
+              f"请求 {len(calls)} 次（≤80）")
 
 
 def main():
@@ -384,7 +413,8 @@ def main():
     test_retry_turns_protocol_bisects(failures)
     test_dense_poison_no_good_loss(failures)
     test_poison_cluster_no_good_loss(failures)
-    test_poison_cluster_over_threshold_bounded(failures)
+    test_poison_cluster_any_position(failures)
+    test_frame_fault_still_aborts(failures)
     print("=" * 60)
     if failures:
         print(f"结果: {len(failures)} 处 FAIL")
