@@ -37,6 +37,15 @@ eltdx 统计取数的「坏代码二分隔离」守护
       回「命中即放弃」立刻失败。
   [15] 真帧级故障（整批全失败）：取样探测全落空后仍须止损，账目上 80 只全部
       记 bad、无重复计数，请求 ≤80 次（防探测把止损变成 2n−1=160）。
+  [16] 取样下标必须覆盖**整批首尾**：n=80/k=8 → 0,11,23,34,45,56,68,79。原实现
+      range(0, n, n//k)[:k] 只到 70，末段 71~79 一个采样点都没有（2026-10-28
+      修复：与「整个批上等距取样」的语义不符；现在 DFS 右先、末段已被探索，
+      故属隐患，探索顺序一改（左先/广度优先）即成盲区）。
+  [17] 好票孤岛落在**中段**（DFS 尚未探索、旧采样点 0/10/20/30 之间）：取样必须
+      探到并恢复完整二分、零误丢（旧采样全落空 ⇒ 误判帧级、3 只全丢）。这条同时
+      锁死 _BISECT_PROBE_POINTS 的下界：改成 1 只探批首 ⇒ 立刻失败。
+  [18] 判帧级故障前必须**逐只确认** ≥32 只失败，不许「探几只就判整批」：32→8
+      这类「更省请求但更易误丢」的调整会立刻失败（阈值写死，不 import 常量）。
 
 全程打桩，不联网、不依赖 eltdx 服务器。跑法：
     python Test/test_eltdx_stats_bisect.py
@@ -398,6 +407,86 @@ def test_frame_fault_still_aborts(failures):
               f"请求 {len(calls)} 次（≤80）")
 
 
+def test_probe_covers_whole_batch(failures):
+    """[16] 取样下标覆盖整批首尾：批尾不得成为盲区。"""
+    from DataAPI.ElTdxAPI import _BISECT_ABORT_FAILURES, _BISECT_PROBE_POINTS
+
+    codes = _codes(80)
+    seq = []
+
+    def always_protocol_error(codes_):
+        seq.append(list(codes_))
+        raise ProtocolError("frame broken")
+
+    _bisect_fetch(codes, always_protocol_error)
+    # 全失败时：前 _BISECT_ABORT_FAILURES 次「单只请求」是二分叶子，其后是本轮取样
+    single = [cs[0] for cs in seq if len(cs) == 1]
+    probe = single[_BISECT_ABORT_FAILURES:_BISECT_ABORT_FAILURES + _BISECT_PROBE_POINTS]
+    bad = []
+    if len(probe) != _BISECT_PROBE_POINTS:
+        bad.append(f"取样请求 {len(probe)} 次，应为 {_BISECT_PROBE_POINTS} 次")
+    if probe[:1] != [codes[0]]:
+        bad.append(f"首个取样点 {probe[:1]} 不是批首")
+    if probe[-1:] != [codes[-1]]:
+        bad.append(f"末个取样点 {probe[-1:]} 不是批尾（原实现只到 {codes[70]}）")
+    if probe != sorted(set(probe)):
+        bad.append(f"取样下标应升序且不重复: {probe}")
+    if bad:
+        failures.append(f"[16] 取样未覆盖整批：{'；'.join(bad)}")
+        print(f"[FAIL] [16] 取样覆盖: {bad}")
+    else:
+        print(f"[PASS] [16] 取样覆盖整批首尾（{len(probe)} 点，"
+              f"{codes[0]} … {codes[-1]}，升序去重）")
+
+
+def test_mid_island_no_good_loss(failures):
+    """[17] 中段好票孤岛（旧采样点之间）：必须探到并恢复二分，零误丢。"""
+    codes = _codes(80)
+    good = set(codes[21:24])          # 3 只连续孤岛，落在旧采样点 20 与 30 之间
+    poison = set(codes) - good
+    calls = []
+    rows, bad = _bisect_fetch(codes, _make_batch_fn(poison, calls))
+    got = {r.full_code for r in rows}
+    lost = good - got
+    covered = got | {c for c, _ in bad}
+    leaked = poison & got
+    if lost or covered != set(codes) or leaked:
+        failures.append(f"[17] 中段孤岛应被取样探到：丢好票 {len(lost)} 只 {sorted(lost)[:3]}、"
+                        f"覆盖 {len(covered)}/80、漏剔 {len(leaked)}（请求 {len(calls)} 次）")
+        print(f"[FAIL] [17] 中段孤岛: 丢 {len(lost)}/3，请求 {len(calls)} 次")
+    else:
+        print(f"[PASS] [17] 中段孤岛（3 只连续）：取样探到即恢复二分，零误丢，"
+              f"请求 {len(calls)} 次")
+
+
+def test_abort_requires_confirmed_leaves(failures):
+    """[18] 判帧级故障前必须逐只确认 ≥32 只失败（不许探几只就判整批）。
+
+    阈值写死 32（契约值，见 ElTdxAPI._BISECT_ABORT_FAILURES 注释：实测尾部成簇
+    ≤31 只时不得触发）。**故意不 import 该常量**：import 会跟着一起变，32→8 仍
+    绿（实测过），护栏等于没有；写死才能强制「改阈值必须同步改这里并给出理由」。
+    """
+    codes = _codes(80)
+    seq = []
+
+    def always_protocol_error(codes_):
+        seq.append(list(codes_))
+        raise ProtocolError("invalid ASCII response code")
+
+    rows, bad = _bisect_fetch(codes, always_protocol_error)
+    single = sum(1 for cs in seq if len(cs) == 1)
+    if rows or len(bad) != 80:
+        failures.append(f"[18] 全批协议失败应止损且账目 80/80，实际 rows={len(rows)}、bad={len(bad)}")
+        print(f"[FAIL] [18] rows={len(rows)} bad={len(bad)}")
+        return
+    if single < 32:
+        failures.append(f"[18] 止损前只逐只确认了 {single} 只，低于契约 32 只"
+                        f"（过早判整批故障 ⇒ 更易误丢好票）")
+        print(f"[FAIL] [18] 逐只确认 {single} 只 < 32")
+    else:
+        print(f"[PASS] [18] 止损前逐只确认 {single} 只失败（≥ 契约 32 只），账目 80/80")
+
+
 def main():
     failures = []
     test_clean_batch(failures)
@@ -415,6 +504,9 @@ def main():
     test_poison_cluster_no_good_loss(failures)
     test_poison_cluster_any_position(failures)
     test_frame_fault_still_aborts(failures)
+    test_probe_covers_whole_batch(failures)
+    test_mid_island_no_good_loss(failures)
+    test_abort_requires_confirmed_leaves(failures)
     print("=" * 60)
     if failures:
         print(f"结果: {len(failures)} 处 FAIL")

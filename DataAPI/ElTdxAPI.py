@@ -396,6 +396,10 @@ _BISECT_ABORT_FAILURES = 32
 # 的毒丸最多覆盖其中一段，只要有一个采样点落在好票区就能证伪「帧级故障」，随即
 # 恢复完整二分；真帧级故障则每个采样点都失败，白付这几次请求（68→75 次）。
 # 采样点在各次命中间不复用（probe_done），故探测总量上限 = 本常量。
+# 下标由 _probe_indices 生成：把 [0, n-1] 均分且**必含批首批尾**（2026-10-28 修，
+# 原 range(0, n, n//k)[:k] 漏掉末段）。仍属**抽样不是穷举**：好票孤岛窄于步长
+# （n=80/k=8 约 11 只）时可能整段漏采 ⇒ 判帧级故障、最多 48 只记 bad（缺失即
+# 放行，不误杀）；要消除这条只有退回逐只 80 次，代价与收益不成比例，故明确保留。
 _BISECT_PROBE_POINTS = 8
 
 
@@ -414,6 +418,25 @@ def _is_protocol_error(err):
         return "ProtocolError" in type(err).__name__
 
 
+def _probe_indices(n, points=None):
+    """取样探测用的下标集合：把 [0, n-1] 均分覆盖，**必含首尾**。
+
+    存活探测（见 _BISECT_PROBE_POINTS）要回答的是「整批里还有没有好票」，取样
+    范围就必须是整批。原实现 range(0, n, n//k)[:k] 在 n=80/k=8 时给出
+    0,10,…,70 —— 末段 71~79 一个点都没有，「整批取样」名不副实：一旦 DFS 探索
+    顺序改动（现在右先，末段先被探索，故不表现为误丢），末段即成盲区。
+    本函数改为按 (n-1)/(k-1) 取整均分，n=80/k=8 → 0,11,23,34,45,56,68,79。
+
+    n <= 1 或 points <= 1 时退化为 [0]：单点取样在 n>1 时永远只覆盖批首，等价于
+    关掉探测，故显式收敛到「探批首一只」而不是散成 1 个随机点。
+    下标去重且升序：n < k 时自然收敛为全量，不会重复请求同一只。
+    """
+    k = _BISECT_PROBE_POINTS if points is None else points
+    if n <= 1 or k <= 1:
+        return [0]
+    return sorted({round(_i * (n - 1) / (k - 1)) for _i in range(k)})
+
+
 def _bisect_fetch(codes, batch_fn):
     """二分定位「毒丸」代码，返回 (rows, bad)。
 
@@ -427,7 +450,8 @@ def _bisect_fetch(codes, batch_fn):
     成簇 ≤31 只不触发。
     命中后**不立刻**放弃，先做**等距取样探测**（_BISECT_PROBE_POINTS）：沿 DFS
     继续探没用 —— DFS 一路走右半，成簇毒丸恰在右端时探测会全耗在毒丸区（实测
-    再给 8 次 DFS 机会仍救不回尾部 40 只）。改为在整批上按等距下标逐只请求，
+    再给 8 次 DFS 机会仍救不回尾部 40 只）。改为在整批上按等距下标逐只请求
+    （下标含批首批尾，见 _probe_indices），
     命中任一只好票即证「只是还没轮到」⇒ `successes>0` 让阈值永久失效、恢复
     完整二分（实测头/中/尾成簇 16~79 只全部零误丢）；采样点全落空才判帧级故障、
     整段记 bad。
@@ -463,9 +487,13 @@ def _bisect_fetch(codes, batch_fn):
                 # 存活探测（见 _BISECT_PROBE_POINTS 注释）：等距取样逐只请求。
                 # 命中任意一只 ⇒ 好票存在、判据是「还没轮到」而非「帧级故障」，
                 # 加一次 successes 让阈值永久失效，继续正常二分。
+                # 下标把 [0, len-1] 均分覆盖（**含最后一个**）：原实现
+                # range(0, len, len//k)[:k] 在 n=80/k=8 时只到 70，末段 71~79
+                # 永不采样——与「整批取样」的语义不符，且 DFS 改为左先/广度优先
+                # 时末段就成了不可见的盲区（现右先顺序下末段已被 DFS 覆盖，
+                # 故这是隐患而非当前误丢来源）。
                 alive = False
-                span = max(1, len(codes) // _BISECT_PROBE_POINTS)
-                for _i in list(range(0, len(codes), span))[:_BISECT_PROBE_POINTS]:
+                for _i in _probe_indices(len(codes)):
                     if _i in probe_done:
                         continue
                     probe_done.add(_i)
