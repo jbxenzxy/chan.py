@@ -415,7 +415,7 @@ def read_tdxhy_l3_indices():
 #    invalid ASCII response code），把 80 只一批的请求打成 80 次串行重试。
 # 基准取「本批候选里最新的那一根」而不是「今天」：节假日后或整机 vipdoc 都
 # 未更新时都不会误杀；票复牌后新 K 线一到就自动回到候选，无需人工清理文件。
-# <=0 = 关闭闸门（退回纯文件名枚举）。
+# <=0 = 关闭闸门（退回纯文件名枚举：read_all_a_stocks 连末根日期都不读）。
 STALE_KLINE_DAYS = 20
 
 
@@ -500,6 +500,8 @@ def read_all_a_stocks(freq="d"):
     取日期，指数 / ETF / B 股不额外读盘。分钟周期（fzline/*.lc5）判据**叠加
     .day 日期取较旧者**：停牌票的 .lc5 会被通达信续写零成交量占位 bar 而恒
     「新鲜」，单看分钟文件闸门失效；.day 缺失不参与比较（不误杀仅分钟候选）。
+    **STALE_KLINE_DAYS <= 0 时不读盘**：整段跳过（直接返回文件名枚举结果），
+    不先付 5000+ 次 getsize/open 再在 _drop_stale_candidates 里短路。
     """
     from DataAPI.TdxAPI import (
         SH_INCLUDE_PREFIXES, SH_INDEX_PREFIXES,
@@ -508,6 +510,9 @@ def read_all_a_stocks(freq="d"):
     )
     use_minute = freq in ("5m", "15m", "30m")
     sub, ext = ("fzline", ".lc5") if use_minute else ("lday", ".day")
+    # 关闸判定提到循环外：STALE_KLINE_DAYS<=0 的语义是「退回纯文件名枚举」，
+    # 读盘必须一起跳过（2026-10-28 修：此前读盘在过滤之前无条件执行，关闸白付 I/O）。
+    gate_on = STALE_KLINE_DAYS > 0
     stocks = []
     last_dates = []
     for mkt, prefix_num in (("sh", "1"), ("sz", "0")):
@@ -527,6 +532,8 @@ def read_all_a_stocks(freq="d"):
             if not hit:
                 continue
             stocks.append({"prefix": prefix_num, "code": code})
+            if not gate_on:
+                continue
             last = read_last_bar_date(os.path.join(line_dir, fname), use_minute)
             if use_minute:
                 # 分钟周期判据叠加 .day 日期（取较旧者）：通达信给停牌票的 .lc5
@@ -541,6 +548,8 @@ def read_all_a_stocks(freq="d"):
                 if day_last is not None and (last is None or day_last < last):
                     last = day_last
             last_dates.append(last)
+    if not gate_on:
+        return stocks
     return _drop_stale_candidates(stocks, last_dates)
 
 

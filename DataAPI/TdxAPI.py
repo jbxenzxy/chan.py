@@ -421,7 +421,7 @@ def read_last_bar_date(filepath, is_minute=False):
         year = num // 2048 + 2004、month = (num % 2048) // 100、day = (num % 2048) % 100。
 
     Returns:
-        datetime；文件不存在 / 不足一条完整记录 / 日期越界 → None。
+        datetime；文件不存在 / 不足一条完整记录 / 日期越界 / **日期在未来** → None。
         **调用方须把 None 当「无法判定」，而不是「陈旧」** —— 读不出日期本身
         不构成剔除理由（合成/损坏文件、新格式都不该被静默丢出候选）。
     """
@@ -453,7 +453,16 @@ def read_last_bar_date(filepath, is_minute=False):
             day = date_int % 100
         if year < 1990 or year > 2030 or month < 1 or month > 12 or day < 1 or day > 31:
             return None
-        return datetime(year, month, day)
+        dt = datetime(year, month, day)
+        # 未来日期同属「无法判定」⇒ None（2026-10-28）。末条记录字节损坏 / 错位时
+        # 可能解出合法但**晚于今天**的日期（上面的边界只卡到 2030）。放行它会让
+        # 新鲜度闸门的基准 newest = max(...) 被顶到未来（App/AppScan.py
+        # _drop_stale_candidates），cutoff 随之前移到未来之前，整批正常票被误剔。
+        # 这里不夹紧到 today 而返回 None，是为了保住「基准取本批最新而非今天」的
+        # 设计（整机 vipdoc 都旧时不误杀）：None 的既有语义 = 保留。
+        if dt > datetime.now():
+            return None
+        return dt
     except (ValueError, OverflowError, struct.error):
         return None
 

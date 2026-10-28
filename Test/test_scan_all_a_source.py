@@ -33,7 +33,9 @@
       都旧时不误杀（基准是相对最新、不是今天）；③ 读不出日期（None）保留；
       ④ STALE_KLINE_DAYS<=0 关闭闸门；⑤ 分钟周期（2026-10-27）判据叠加
       .day 日期取较旧者——停牌票的 .lc5 是零量占位 bar（恒新鲜），
-      单看分钟文件闸门形同虚设。
+      单看分钟文件闸门形同虚设；⑥ 末条记录解出**未来日期**（2026-10-28）按
+      「判不出」返回 None ⇒ 保留，且不得顶高基准把整批误杀；⑦ 关闸时
+      **连末根日期都不读**（零次 read_last_bar_date 调用），不是读完再短路。
 
 全程打桩，不联网、不触碰 App/ 生产数据（app_data 以 stub 替换）。
 运行：python Test/test_scan_all_a_source.py
@@ -358,6 +360,74 @@ def test_stale_gate_bulk_warning(failures):
         print("[PASS] [9e-E] 集中但占比 <2%（11/1000）保持 INFO（防零星同市场停牌误报）")
 
 
+def test_gate_future_date_not_poison(failures):
+    """[9f] 末条记录解出未来日期 ⇒ 按「无法判定」处理，不得顶高基准把整批误杀。
+
+    2026-10-28：`read_last_bar_date` 原先只卡 `1990~2030` 上界，一条 2030-01-01 的
+    损坏记录会把 `_drop_stale_candidates` 的 `newest` 顶到未来，`cutoff` 随之前移，
+    其余正常票全被判陈旧（红线：4 只正常 + 1 只脏 → 只剩脏票 1 只）。
+    修法 = 未来日期返回 None（既有语义「判不出 ⇒ 保留」），基准仍取正常票的最新日。
+    """
+    tmp = tempfile.mkdtemp(prefix="scan_all_a_future_")
+    try:
+        sh = os.path.join(tmp, "sh", "lday")
+        os.makedirs(sh, exist_ok=True)
+        _write_day_record(os.path.join(sh, "sh600519.day"), 20261023)
+        _write_day_record(os.path.join(sh, "sh601066.day"), 20261022)
+        _write_day_record(os.path.join(sh, "sh600000.day"), 20261020)
+        _write_day_record(os.path.join(sh, "sh601059.day"), 20260901)  # 真陈旧 → 剔
+        _write_day_record(os.path.join(sh, "sh688001.day"), 20300101)  # 未来 → 保留
+        with mock.patch.object(_scan_mod, "app_config",
+                               types.SimpleNamespace(vipdoc_dir=tmp)):
+            got = _scan_mod.read_all_a_stocks("d")
+        actual = {s["code"] for s in got}
+        expected = {"600519", "601066", "600000", "688001"}
+        if actual != expected:
+            failures.append(f"[9f] 未来日期污点票顶高基准: {sorted(actual)} != {sorted(expected)}")
+            print(f"[FAIL] [9f] 未来日期: {sorted(actual)}")
+        else:
+            print("[PASS] [9f] 未来日期按「判不出」保留，基准仍取本批最新（真陈旧票照剔）")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_gate_off_skips_disk_read(failures):
+    """[9g] STALE_KLINE_DAYS<=0：连末根日期都不读（关闸不白付 5000+ 次 I/O）。
+
+    2026-10-28：此前读盘写在循环里无条件执行，关闸只在 `_drop_stale_candidates`
+    里短路 —— 注释说「退回纯文件名枚举」，实际盘照读。判据取**调用次数 = 0**，
+    比「结果对不对」更贴语义（结果对但白读盘，正是这条要防的）。
+    """
+    tmp = tempfile.mkdtemp(prefix="scan_all_a_gateoff_")
+    try:
+        _make_vipdoc(tmp, [
+            ("sh/lday", "sh600519.day"),
+            ("sh/lday", "sh601059.day"),
+            ("sh/fzline", "sh600519.lc5"),
+        ])
+        stub_cfg = types.SimpleNamespace(vipdoc_dir=tmp)
+        for freq, want in (("d", 2), ("5m", 1)):
+            # 返回 None 而不是 MagicMock：若实现回退成「先读盘再短路」，这里得到的是
+            # 干净的计数失败，而不是 '<' 比较抛 TypeError 掩盖掉失败原因。
+            calls = []
+
+            def _spy_read(path, is_minute=False):
+                calls.append(path)
+                return None
+
+            with mock.patch.object(_scan_mod, "app_config", stub_cfg), \
+                 mock.patch.object(_scan_mod, "STALE_KLINE_DAYS", 0), \
+                 mock.patch("DataAPI.TdxAPI.read_last_bar_date", _spy_read):
+                got = _scan_mod.read_all_a_stocks(freq)
+            if calls or len(got) != want:
+                failures.append(f"[9g] {freq}: 关闸仍读盘 {len(calls)} 次 / 候选 {len(got)} != {want}")
+                print(f"[FAIL] [9g] {freq}: 读盘 {len(calls)} 次，候选 {len(got)}")
+            else:
+                print(f"[PASS] [9g] {freq}: 关闸零读盘，候选 {len(got)} 只（纯文件名枚举）")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_threshold_zero_disables(failures):
     """[2] 阈值 0：不取市值、候选全保留。"""
     result, n = _run_stock_list(min_float_mc=0)
@@ -487,6 +557,8 @@ def main():
     test_stale_gate(failures)
     test_stale_gate_bulk_warning(failures)
     test_minute_gate_overlays_day(failures)
+    test_gate_future_date_not_poison(failures)
+    test_gate_off_skips_disk_read(failures)
     test_threshold_zero_disables(failures)
     test_zxg_filtered_by_threshold(failures)
     test_st_filter_applies_to_zxg(failures)

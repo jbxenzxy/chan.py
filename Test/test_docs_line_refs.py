@@ -14,6 +14,11 @@
   ② 已改造完的 `Trading/README.md` 严格 = 0：它是这次的样板，回潮即红。
   ③ 临时豁免不许长期化：豁免生效的前提是文档里**留着那句临时声明**；声明一旦不在，
      基线必须已经是 0（否则豁免靠删一句话就能无限期续命）。
+  ④ 行号引用的**写法**也要钉全（2026-10-28）：`AppScan:422` 这种无扩展名的
+     `模块:行号` 同样是行号引用，一律计入棘轮。上一版正则只认带 `.py/.js` 的
+     完整形式，于是 `Docs/数据源.md` 附 A 的 11 处完全不计入，该文档基线写着 0
+     还列在 ZERO_FILES 里却照旧漂 —— 与 2026-10-10「只认 .py ⇒ 51 处 app.js
+     行号不计入」同类，是「口径漏一整类写法」的第二次出现。
 
 不纳入：`Docs/WorkBuddy/` —— 那是 ~/.workbuddy 记忆文件在仓库里的一份副本，属个人
   记忆资产而非项目交付文档，不受铁律 17（约束"交付/长期文档"）管辖。
@@ -37,6 +42,53 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 # 排除 `Docs/`：那是「文档引文档」（如 `Docs/xxx.html:249`），不是引用代码。
 PAT_FULL = re.compile(r"(?<![/\w])((?!Docs/)[A-Za-z_][\w/]*\.(?:py|js|html|css)):(\d+)(?:-(\d+))?")
 PAT_BARE = re.compile(r"`:\d+(?:-\d+)?`")
+# 无扩展名的 `模块:行号`（2026-10-28 补）：`AppScan:422` / `TdxAPI:674` / `App/AppUtils:35`
+#
+# 上一版 PAT_FULL 要求**带扩展名**（.py/.js/.html/.css），于是 `Docs/数据源.md` 附 A
+# 那 11 处 `模块:行号` **完全不计入棘轮**：该文档基线写着 0、还列在 ZERO_FILES
+# 「不许回潮」里，护栏却看不见它们（20 passed / 0 failed 全绿，实测 11 处仍在漂）。
+# 与 2026-10-10「只认 .py ⇒ 51 处 app.js:NNNN 不计入」是同一类洞的第二次出现 ——
+# 护栏口径漏掉一整类写法 = 护栏对它们不存在。
+#
+# 口径：反引号内 `名字:数字`，且「名字」能**解析到仓库里真实存在的源文件**
+# （路径 / 路径+扩展名 / basename 三种试）才算。这样 `min:0`、`max:100`、
+# `test_p24:201`（函数名而非文件）不会被误计。
+PAT_BARE_MODULE = re.compile(r"`([A-Za-z_][\w/]*):(\d+)(?:-\d+)?`")
+_SRC_EXT = (".py", ".js", ".html", ".css")
+_src_stems = None
+
+
+def _src_stem_index():
+    """源文件 basename（去扩展名）集合，供无扩展名引用解析。只建一次。"""
+    global _src_stems
+    if _src_stems is None:
+        stems = set()
+        for dp, dn, fns in os.walk(ROOT):
+            rd = os.path.relpath(dp, ROOT).replace("\\", "/")
+            if any(x in rd.split("/") for x in EXCLUDE_DIRS):
+                continue
+            for f in fns:
+                stem, ext = os.path.splitext(f)
+                if ext in _SRC_EXT:
+                    stems.add(stem)
+        _src_stems = stems
+    return _src_stems
+
+
+def _resolves_to_src(name):
+    """`AppScan` / `App/AppUtils` 是否指向仓库里真实存在的源文件。"""
+    if name.endswith(_SRC_EXT):
+        return False            # 带扩展名的已由 PAT_FULL 计过，避免双重计数
+    base = name.rsplit("/", 1)[-1]
+    if "." in base:
+        return False            # `xxx.md` / `xxx.json`：文档引文档或配置，不属本口径
+    if os.path.isfile(os.path.join(ROOT, name)):
+        return True
+    if any(os.path.isfile(os.path.join(ROOT, name + e)) for e in _SRC_EXT):
+        return True
+    return base in _src_stem_index()
+
+
 # 稳定锚点：`app.js::isFuturesMode` / `app.html::annotation-menu-mirror`
 PAT_ANCHOR = re.compile(r"([A-Za-z_][\w/]*\.(?:py|js|html|css))::([A-Za-z_][\w-]*)")
 
@@ -133,9 +185,14 @@ def iter_docs():
                 yield os.path.relpath(os.path.join(dp, f), ROOT).replace("\\", "/")
 
 
+def _n_bare_module(t):
+    """文本里「无扩展名、且能解析到真实源文件」的 `模块:行号` 处数。"""
+    return sum(1 for m in PAT_BARE_MODULE.finditer(t) if _resolves_to_src(m.group(1)))
+
+
 def count(rel):
     t = io.open(os.path.join(ROOT, rel), encoding="utf-8", errors="ignore").read()
-    return len(PAT_FULL.findall(t)) + len(PAT_BARE.findall(t))
+    return len(PAT_FULL.findall(t)) + len(PAT_BARE.findall(t)) + _n_bare_module(t)
 
 
 def resolve_src(fname):
@@ -220,6 +277,17 @@ if os.path.isfile(os.path.join(ROOT, BOTTOM_DOC)):
     t = io.open(os.path.join(ROOT, BOTTOM_DOC), encoding="utf-8", errors="ignore").read()
     fe = [m.group(0) for m in PAT_FULL.finditer(t) if not m.group(1).endswith(".py")]
     check("%s 前端行号引用 = 0" % BOTTOM_DOC, fe, [])
+
+print("\n[8] 无扩展名 `模块:行号`：已锚点化的文档必须为 0（2026-10-28 补口径）")
+# 这一节就是「口径洞」本身的守卫。`Docs/数据源.md` 附 A 曾有 11 处 `AppScan:422`
+# 这种无扩展名写法，旧 PAT_FULL 认不出 ⇒ [1]/[4] 一路绿、文档里 11 处照旧漂。
+# 现在两个方向都钉：该文档必须 = 0（口径更窄，防总数降下来后又悄悄加回去）；
+# 全库方向由 [1]/[3] 承担（count 已并入无扩展名口径）。
+for rel in ("Docs/数据源.md",):
+    p = os.path.join(ROOT, rel)
+    if os.path.isfile(p):
+        check("%s 无扩展名行号引用 = 0" % rel,
+              _n_bare_module(io.open(p, encoding="utf-8", errors="ignore").read()), 0)
 
 print("\n[5] 临时豁免不许长期化（评审 P3-7）")
 # 多实例文档那 55 处行号是**临时豁免**：§8.4 自陈「实施前坐标快照……实施后一并
