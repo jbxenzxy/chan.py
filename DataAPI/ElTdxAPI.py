@@ -188,13 +188,23 @@ def _check_eltdx_api_compat(client):
 
 
 def _supports_on_missing(client):
-    """批量取数方法是否支持 on_missing（eltdx 3.3.2+）。结果进程内缓存。"""
+    """**两条**批量取数方法是否都支持 on_missing（eltdx 3.3.2+）。结果进程内缓存。
+
+    必须逐条探，不能只探一条：
+      · 两条命令分别属于 quotes / corporate 两个 API 对象，签名各自演进；
+      · 只探 `get_snapshots` 时，若上游某版本只给其中一条加了参数，另一条会在
+        `finance_batch(..., on_missing="skip")` 处抛
+        `TypeError: unexpected keyword argument` —— 调用点在 lambda 里，栈上
+        完全看不出是版本问题，用户只会看到「取数异常」。
+    任一条不支持即判 False，由 `_check_eltdx_api_compat` 统一抛升级指引。
+    """
     global _ON_MISSING_SUPPORTED
     if _ON_MISSING_SUPPORTED is None:
         try:
-            params = inspect.signature(client.quotes.get_snapshots).parameters
-            _ON_MISSING_SUPPORTED = "on_missing" in params
-        except (TypeError, ValueError):
+            probes = (client.quotes.get_snapshots, client.corporate.finance_batch)
+            _ON_MISSING_SUPPORTED = all(
+                "on_missing" in inspect.signature(fn).parameters for fn in probes)
+        except (TypeError, ValueError, AttributeError):
             _ON_MISSING_SUPPORTED = False
     return _ON_MISSING_SUPPORTED
 
@@ -474,9 +484,11 @@ def _salvage_fetch(codes, batch_fn):
       改为「拆段 + 逐只」后请求数由结构本身封顶，没有放大路径。
 
     请求上限：ceil(n/8) + n 次。且**只要有一段成功**，就证明载荷本身可解析、
-    失败是代码相关，才继续逐只；若所有段都失败，判定为与代码无关的整批故障
-    （帧级错位 / 服务端整批不可解析），立刻止损、不逐只 —— 实测整批故障 10 次
-    请求即止（旧实现 76 次应用层调用、wire 上千次）。
+    失败是代码相关，才继续逐只；若所有段都失败**且段数 > 1**，判定为与代码
+    无关的整批故障（帧级错位 / 服务端整批不可解析），立刻止损、不逐只 ——
+    实测整批故障 10 次请求即止（旧实现 76 次应用层调用、wire 上千次）。
+    n <= _SALVAGE_SUBCHUNK 时整批只有一段，「所有段都失败」无判别力（小股池
+    会整批丢），故照常逐只，代价最多 n(≤8) 次请求。
 
     非协议类异常（超时 / 断连）**不拆不逐只**：批一级已重试过 1 次，到这一层再
     放大只会把 1 次断连变成 n 次等待 —— 与 _chunked_stats_fetch 的批一级口径
@@ -485,8 +497,19 @@ def _salvage_fetch(codes, batch_fn):
     rows, bad = [], []
 
     def _transport_bad(exc):
+        """非协议类异常（超时 / 断连）时，把「尚未取到」的代码记 bad。
+
+        两个排除项缺一不可：
+          · `done` —— 已经从 rows 拿到的，不算失败；
+          · `recorded` —— **已经因协议错记过 bad 的**，不得再记一次。
+        逐只阶段「某只协议错、紧接着另一只传输错」时，那只协议错的票不在 `done`
+        里（失败的不进 rows），只按 `done` 过滤就会让同一 code 在日志里出现两条、
+        把失败只数报虚（`_salvage_or_drop` 的计数与预览直接读这个列表）。
+        """
         done = {_row_code(r) for r in rows}
-        return [(c, f"{type(exc).__name__}: {exc}") for c in codes if c not in done]
+        recorded = {c for c, _ in bad}
+        return [(c, f"{type(exc).__name__}: {exc}")
+                for c in codes if c not in done and c not in recorded]
 
     pieces = [codes[i:i + _SALVAGE_SUBCHUNK]
               for i in range(0, len(codes), _SALVAGE_SUBCHUNK)]
@@ -501,8 +524,13 @@ def _salvage_fetch(codes, batch_fn):
             failed.append(piece)
     if not failed:
         return rows, bad
-    if len(failed) == len(pieces):
-        # 每一段都失败 ⇒ 故障与具体代码无关。逐只重试只会把 1 次故障放大成 n 次。
+    if len(failed) == len(pieces) and len(pieces) > 1:
+        # 每一段都失败**且段数 > 1** ⇒ 故障与具体代码无关。逐只重试只会把 1 次
+        # 故障放大成 n 次。
+        # 段数 == 1（n <= _SALVAGE_SUBCHUNK：自选股 / 小板块这类小股池）不走这个
+        # 止损 —— 整批只有一段，「所有段都失败」没有判别力，逐只最多再打 n(≤8)
+        # 次请求就能救回毒丸旁边的票；按段数止损会把这几只全部记 bad（市值列
+        # 整列 `--`），而请求数省下的只是个位数。
         bad.extend((c, "拆段后所有段均失败，判整批故障，未细分") for c in codes)
         return rows, bad
     for piece in failed:

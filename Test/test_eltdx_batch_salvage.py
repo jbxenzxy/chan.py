@@ -39,6 +39,12 @@ eltdx 批量取数的「缺票跳过 + 坏批补救」守护
       缺票语义的源头，缺了它 3.3.2 的收益全部回退（默认 raise 仍会整批失败）。
   [15] 补救途中遇上网络故障（超时 / 断连）：**不得逐只放大**，立即收手；
       账目必须「已取到的进 rows、未取到的进 bad」且两者不重叠。
+  [16] 逐只阶段「先一只协议错、随后另一只传输错」：同一 code 只许有一条 bad
+      （[15] 的传输错落在段阶段、bad 为空，覆盖不到这条混合路径）；
+  [17] n <= _SALVAGE_SUBCHUNK（自选股 / 小板块）遇载荷异常毒丸：仍须救回好票，
+      不得按「所有段都失败」整批丢；
+  [18] n <= _SALVAGE_SUBCHUNK 且每只都失败：逐只有界（n 次）、账目无重复；
+  [19] 能力探测必须覆盖两条批量命令：只给一条加 on_missing 判不支持。
 
 全程打桩，不联网、不依赖 eltdx 服务器。跑法：
     python Test/test_eltdx_batch_salvage.py
@@ -472,6 +478,130 @@ def test_salvage_transport_no_fanout(failures):
               f"rows {len(got)} / bad {len(bad_codes)} 账目无重叠")
 
 
+def test_transport_after_protocol_no_dup(failures):
+    """[16] 逐只阶段「先一只协议错、随后另一只传输错」：同一 code 不得记两条 bad。
+
+    [15] 的传输错发生在**段阶段**，那时 `bad` 还是空的，按 rows 反推未取到的
+    代码已经够用；逐只阶段 `bad` 非空，那只先前协议失败的票并不在 rows 里，
+    只按 rows 过滤就会再记一次 —— 日志失败只数虚报，而 `_salvage_or_drop`
+    的计数与预览直接读这个列表。
+    """
+    codes = _codes(16)
+    calls = []
+    first_piece = set(codes[:8])
+    poisoned = codes[8]
+    timed_out = codes[9]
+
+    def batch_fn(codes_):
+        codes_ = list(codes_)
+        calls.append(len(codes_))
+        if len(codes_) > 1:
+            if set(codes_) == first_piece:
+                return [_record(c) for c in codes_]
+            raise ProtocolError("finance batch unexpected or duplicate record")
+        if codes_[0] == poisoned:
+            raise ProtocolError("invalid record: all-zero placeholder")
+        if codes_[0] == timed_out:
+            raise TimeoutError("read timed out")
+        return [_record(c) for c in codes_]
+
+    rows, bad = _salvage_fetch(codes, batch_fn)
+    bad_codes = [c for c, _ in bad]
+    dup = sorted(c for c in set(bad_codes) if bad_codes.count(c) > 1)
+    got = {r.full_code for r in rows}
+    if dup:
+        failures.append(f"[16] 逐只阶段混合路径重复记账：{dup}（bad {len(bad)} 条 / "
+                        f"不同 code {len(set(bad_codes))} 个）")
+        print(f"[FAIL] [16] 重复记账 {dup}：bad={len(bad)} 去重={len(set(bad_codes))}")
+    elif len(got) != 8 or set(bad_codes) & got:
+        failures.append(f"[16] 账目错：rows={len(got)}、bad={len(bad_codes)}、"
+                        f"重叠 {len(set(bad_codes) & got)}")
+        print(f"[FAIL] [16] rows={len(got)} bad={len(bad_codes)}")
+    else:
+        print(f"[PASS] [16] 逐只阶段先协议错后传输错：bad {len(bad)} 条对应 "
+              f"{len(set(bad_codes))} 个 code，无重复、与 rows 不重叠")
+
+
+def test_small_batch_recovers(failures):
+    """[17] n <= 拆段粒度（自选股 / 小板块）遇载荷异常毒丸：必须救回好票。
+
+    整批只有一段时「所有段都失败」没有判别力 —— 按它止损会把 5 只全记 bad，
+    市值列整列 `--`；逐只最多再打 n 次请求即可救回。
+    """
+    codes = _codes(5)
+    calls = []
+    poison = {codes[2]}
+    rows, bad = _salvage_fetch(codes, _make_batch_fn(poison, calls))
+    got = {r.full_code for r in rows}
+    expect_calls = 1 + len(codes)          # 1 段 + 逐只 5 次
+    if got != set(codes) - poison:
+        failures.append(f"[17] 小批应救回 {len(codes) - 1} 只，实际 {len(got)} 只"
+                        f"（整批丢）")
+        print(f"[FAIL] [17] 只救回 {len(got)}/{len(codes)}")
+    elif len(bad) != 1 or len(calls) != expect_calls:
+        failures.append(f"[17] 账目/请求数错：bad={len(bad)}（应 1）、"
+                        f"请求 {len(calls)} 次（应 {expect_calls}）")
+        print(f"[FAIL] [17] bad={len(bad)} 请求={len(calls)}")
+    else:
+        print(f"[PASS] [17] {len(codes)} 只小批遇 1 颗毒丸：救回 {len(got)} 只，"
+              f"请求 {len(calls)} 次（按段数止损会 0 只救回）")
+
+
+def test_small_batch_all_bad_bounded(failures):
+    """[18] n <= 拆段粒度且每只都失败：逐只有界（n 次），账目无重复。"""
+    codes = _codes(8)
+    calls = []
+    rows, bad = _salvage_fetch(codes, _make_batch_fn(set(codes), calls))
+    bad_codes = [c for c, _ in bad]
+    expect_calls = 1 + len(codes)
+    if rows or len(bad) != len(codes) or len(set(bad_codes)) != len(codes):
+        failures.append(f"[18] rows={len(rows)}、bad={len(bad)}、"
+                        f"去重 {len(set(bad_codes))}（应 0 / 8 / 8）")
+        print(f"[FAIL] [18] rows={len(rows)} bad={len(bad)}")
+    elif len(calls) != expect_calls:
+        failures.append(f"[18] 请求 {len(calls)} 次，应 {expect_calls} 次（不得放大）")
+        print(f"[FAIL] [18] 请求={len(calls)}")
+    else:
+        print(f"[PASS] [18] {len(codes)} 只全坏：逐只有界 {len(calls)} 次请求，"
+              f"bad {len(set(bad_codes))} 只无重复")
+
+
+def test_supports_on_missing_checks_both(failures):
+    """[19] 能力探测必须覆盖两条批量命令：只给一条加 on_missing 即判不支持。"""
+    def snap_new(codes, on_missing="raise"):
+        return ()
+
+    def fin_new(codes, on_missing="raise"):
+        return ()
+
+    def fin_old(codes):
+        return ()
+
+    def probe(quotes_fn, finance_fn):
+        eltdx_api._ON_MISSING_SUPPORTED = None
+        fake = types.SimpleNamespace(
+            quotes=types.SimpleNamespace(get_snapshots=quotes_fn),
+            corporate=types.SimpleNamespace(finance_batch=finance_fn))
+        return eltdx_api._supports_on_missing(fake)
+
+    try:
+        both = probe(snap_new, fin_new)
+        only_quotes = probe(snap_new, fin_old)
+        only_finance = probe(fin_old, fin_new)
+    finally:
+        eltdx_api._ON_MISSING_SUPPORTED = None      # 还原真实探测缓存
+
+    if not both or only_quotes or only_finance:
+        failures.append(f"[19] 探测未覆盖两条命令：both={both}、"
+                        f"仅 quotes={only_quotes}、仅 finance={only_finance}"
+                        f"（后两者应为 False）")
+        print(f"[FAIL] [19] both={both} only_quotes={only_quotes} "
+              f"only_finance={only_finance}")
+    else:
+        print("[PASS] [19] on_missing 探测覆盖 quotes + corporate："
+              "缺任一条即判不支持")
+
+
 def main():
     failures = []
     test_clean_batch(failures)
@@ -489,6 +619,10 @@ def main():
     test_whole_batch_fault_stops(failures)
     test_fetch_float_mc_uses_skip(failures)
     test_salvage_transport_no_fanout(failures)
+    test_transport_after_protocol_no_dup(failures)
+    test_small_batch_recovers(failures)
+    test_small_batch_all_bad_bounded(failures)
+    test_supports_on_missing_checks_both(failures)
     print("=" * 60)
     if failures:
         print(f"结果: {len(failures)} 处 FAIL")

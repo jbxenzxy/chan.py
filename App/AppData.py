@@ -1769,9 +1769,14 @@ class AppData:
         #     的**就地追加** → 只拷 dict 不够，须逐键拷 list。
         # 删除类操作是整体替换列表（`_annotations[key] = [...]`），不会
         # 就地改写，故浅拷贝两层即等价于不可变快照。
-        # 市值缓存先加载（**必须在取锁之前**：load_float_mc_cache 自己要拿
-        # _user_store_lock，放锁内就是同锁自锁死）。标注模式不经过扫描池，
-        # 没有扫描前置那段取数，只能在这里按需读本地 JSON（幂等、只读一次）。
+        # 市值缓存先加载（放在取锁**之前**，理由只有一个：让缓存在本方法真正
+        # 需要它之前就就绪，并缩短 _user_store_lock 的持锁时长）。注意
+        # `load_float_mc_cache` 自己也要拿 `_user_store_lock`，而该锁是
+        # `threading.RLock()`（见本类 `__init__` 中 `_user_store_lock` 的定义，
+        # 与 `_stocks_cache_lock` / `_meta_cache_lock` 同为可重入锁）——同线程
+        # 重入不阻塞，放锁内也不会死锁。
+        # 标注模式不经过扫描池，没有扫描前置那段取数，只能在这里按需读本地
+        # JSON（幂等、只读一次）。
         self.load_float_mc_cache()
         with self._user_store_lock:
             self.load_annotations()
