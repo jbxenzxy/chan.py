@@ -7221,8 +7221,17 @@
             html += '<span class="scan-col-name">' + statsEsc(r.name || code) + '</span>';
             html += '<span class="scan-col-code">' + code + '</span>';
             html += '<span class="scan-col-mv">' + _fmtFloatMc(r.float_mc) + '</span>';
+            // 120 日均线列（↓跌破 / ↑站上）—— 7 个模式的面板都有，**列序固定**
+            //   在流通市值之后、模式自有列（周期 / 笔数 / 期望 / 涨幅）之前。
+            //   由这里统一输出，各模式不再自己拼：原先只有买卖点自己传
+            //   `cols: buildMa120Html(r)`，另外 6 个模式各行其是 ⇒ 加列就得改 7 处。
+            //   唯一例外是标注模式（`ma120: false`）：那一行要放周期 + 标注文字，
+            //   列数已经 7 个，再加就没有文字宽度了（用户裁定保持不变）。
+            html += (o.ma120 === false ? "" : buildMa120Html(r));
             html += (o.cols || "");
-            html += '<span class="scan-col-tags">' + (o.tags || "") + '</span>';
+            // 标签列没有内容就**不输出**（回测模式无标签）：空 span 仍会按
+            //   min-width 占 36px，等于在行尾白留一列。
+            if (o.tags) { html += '<span class="scan-col-tags">' + o.tags + '</span>'; }
             html += '</div>';
             return html;
         }
@@ -7348,6 +7357,10 @@
                             // 信息丢失（悬停即可读全）。列内文字**不截字符数**：见
                             // `_closestAnnText` 注释（字符预算在 JS 里必然估错）。
                             title: "点击查看K线图" + (full ? " · 标注：" + full : ""),
+                            // 标注模式**不出** 120 日均线列（用户裁定）：这一行已是
+                            //   名称/代码/市值/周期/标注文字/条数 7 列，标注文字是唯一
+                            //   可伸缩列，再插一列就只剩 6 个汉字。
+                            ma120: false,
                             cols: '<span class="scan-col-freq">' + (freqLabelMap[r.freq] || r.freq) + '</span>'
                                 + '<span class="scan-col-ann">' + statsEsc(full) + '</span>',
                             tags: '<span class="scan-bsp-tag buy">' + r.count + '条</span>'
@@ -7813,7 +7826,6 @@
                 var r = results[i];
                 html += _scanRowHtml(r, {
                     checked: isLatestBspBuy(r),
-                    cols: buildMa120Html(r),
                     tags: buildBspTagsHtml(r.buy_points, r.sell_points)
                 });
             }

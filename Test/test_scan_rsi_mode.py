@@ -512,7 +512,7 @@ def part3():
                            ("_rsiGroupOf", "buildRsiTagHtml", "_rsiCaliberHtml",
                             "_renderRsiRows", "renderRsiScanResults",
                             "_fmtFloatMc", "_scanRowHtml", "_scanSummaryLine",
-                            "_scanPanelHtml", "_paintScanFinal")) + "\n"
+                            "buildMa120Html", "_scanPanelHtml", "_paintScanFinal")) + "\n"
                + driver)
 
     jf = tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8")

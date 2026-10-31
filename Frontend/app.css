@@ -441,10 +441,11 @@
         }
         .scan-panel {
             position: fixed; bottom: 40px; left: 10px;
-            /* 440 = 420（2026-10-31 前的原宽）+ 20：结果行新增「流通市值」列后，
-               420 下标注模式的「标注文字」会被截掉约 3 个汉字、「N条」标签被压到
-               18px（实测见 Test/test_scan_panel_layout.py 的宽度预算断言）。 */
-            width: 440px; max-height: calc(100vh - 120px);
+            /* 480 = 440（加流通市值列后的宽度）+ 40：结果行再增「120 日均线」列后，
+               回测模式的行长到 8 列（chk/名称/代码/市值/120线/笔数/期望/标签），
+               440 下按内容宽需 457px，必然溢出。480 是「8 列 + 8px 等间距」的下限；
+               标注模式（7 列）因此多出的空间全部给了标注文字列。 */
+            width: 480px; max-height: calc(100vh - 120px);
             background: rgba(22, 33, 62, 0.97);
             border: 1px solid #0f3460; border-radius: 8px;
             z-index: 200; display: none;
@@ -526,8 +527,15 @@
             color: #a8b2d1; font-size: 11px;
         }
         .scan-summary b { color: #e94560; }
+        /* 行内列间空隙的**唯一来源**：gap。各列一律不再写 padding-left/right ——
+           否则"列间距 = gap + 列内距"两处叠加，6 列行与 8 列行的视觉空隙就不一样
+           （这轮修的正是这个：原先 freq 6px / code 4px / mv 2px / ma 4px / ann 4px，
+           且 tags 还有 margin-left:auto 把自由空间全揽到一处）。
+           列宽用「权重 + flex-basis:0」摊满整行，min-width 保内容不被压 —— 这样
+           不同列数的面板都是同一组 gap，间距处处相等，且最后一行贴齐右边缘。 */
         .scan-stock-row {
             display: flex !important; align-items: center !important; padding: 4px 8px !important;
+            gap: 8px !important;
             border-radius: 4px !important; cursor: pointer !important;
             border-bottom: 1px solid rgba(15, 52, 96, 0.3) !important;
             flex-wrap: nowrap !important; overflow: hidden !important;
@@ -535,41 +543,37 @@
         }
         .scan-stock-row:hover { background: rgba(233, 69, 96, 0.1); }
         .scan-col-name {
-            width: 64px !important; flex-shrink: 0 !important;
+            flex: 0.80 1 0 !important; min-width: 52px !important;
             text-align: left !important; overflow: hidden !important;
             text-overflow: ellipsis !important; white-space: nowrap !important;
             color: #8892b0 !important; font-weight: 400 !important;
         }
         .scan-col-freq {
-            width: 34px !important; flex-shrink: 0 !important;
+            flex: 0.45 1 0 !important; min-width: 30px !important;
             text-align: left !important; color: #e94560 !important;
             font-size: 11px !important; white-space: nowrap !important;
-            padding-left: 6px !important;
         }
-        /* 代码列 72：code 契约固定为 market(2 字符) + 代码(≤6 字符)，最长
-           "hkHSTECH"/"ds932000" 实测 ~64px；85 是点号形态（600519.sh，已废弃）留下的余量。 */
+        /* 代码列 min-width 68：code 契约固定为 market(2 字符) + 代码(≤6 字符)，最长
+           "hkHSTECH"/"ds932000" 实测 ~64px。 */
         .scan-col-code {
-            width: 72px !important; flex-shrink: 0 !important;
+            flex: 0.95 1 0 !important; min-width: 68px !important;
             text-align: left !important; color: #8892b0 !important;
             overflow: hidden !important; text-overflow: ellipsis !important;
-            white-space: nowrap !important; padding-left: 4px !important;
+            white-space: nowrap !important;
         }
-        /* 流通市值（亿）。44px 容纳 "1234亿"；后端缺值时前端出 "--"，不写 0。 */
+        /* 流通市值（亿）。min-width 40 容纳 "1234亿"；后端缺值时前端出 "--"，不写 0。 */
         .scan-col-mv {
-            width: 44px !important; flex-shrink: 0 !important;
+            flex: 0.62 1 0 !important; min-width: 40px !important;
             text-align: left !important; color: #8892b0 !important;
             font-size: 11px !important; white-space: nowrap !important;
             overflow: hidden !important; text-overflow: ellipsis !important;
-            padding-left: 2px !important;
         }
+        /* 120 日均线（↓ 跌破 / ↑ 站上）。这一列 7 个模式都有，列间距由行上的 gap
+           统一给，所以这里不再留 padding-left（旧写法靠列内距补缝，会和 gap 叠加）。 */
         .scan-col-ma {
-            width: 56px !important; flex-shrink: 0 !important;
+            flex: 0.72 1 0 !important; min-width: 50px !important;
             text-align: left !important; color: #8892b0 !important;
             font-size: 11px !important; white-space: nowrap !important;
-            /* 与前一列（流通市值）之间留 4px：市值列 width 是 content-box 且无右
-               内距，不留缝时 "20150亿↑1480.5" 会粘成一串。56px 减 4px 仍容得下
-               7 字符（↑1480.5 ≈ 43px）。 */
-            padding-left: 4px !important;
         }
         .scan-col-ma.warn {
             color: #e94560 !important; font-weight: 600 !important;
@@ -578,32 +582,32 @@
            期望值列右对齐 + tabular-nums —— 比例字体下 "3.21%" 与 "11.05%"
            的目视长度不一致，小数点对不齐会让人误判大小（这一列就是拿来比大小的）。 */
         .scan-col-btcount {
-            width: 46px !important; flex-shrink: 0 !important;
+            flex: 0.62 1 0 !important; min-width: 40px !important;
             text-align: right !important; color: #8892b0 !important;
             font-size: 11px !important; white-space: nowrap !important;
         }
         .scan-col-expect {
-            width: 68px !important; flex-shrink: 0 !important;
+            flex: 0.78 1 0 !important; min-width: 52px !important;
             text-align: right !important; font-size: 11px !important;
             font-weight: 600 !important; white-space: nowrap !important;
             font-variant-numeric: tabular-nums !important;
-            padding-right: 2px !important;
         }
         .scan-col-ann {
-            flex: 1 1 auto !important; min-width: 0 !important;
+            flex: 2.00 1 0 !important; min-width: 90px !important;
             text-align: left !important; color: #a8b2d1 !important;
             overflow: hidden !important; text-overflow: ellipsis !important;
-            white-space: nowrap !important; padding: 0 4px 0 4px !important;
+            white-space: nowrap !important;
         }
-        /* 标签列：可收缩但**不收到一个标签以下**（原 min-width:0 会被旁边的
-           标注文字列一路挤到 18px，标签只剩个色块）。让位由 .scan-col-ann 承担。
-           margin-left:auto 把自由空间全推到标签左边 ⇒ 7 个没有可伸缩列的模式
-           （均线/放量/连涨/RSI/底分型/买-卖点/回测）标签**贴行尾右对齐**，
-           各行右边缘对齐；标注模式里自由空间已被 .scan-col-ann 吃干，
-           auto 边距自然为 0，标注文字宽度不受影响。 */
+        /* 标签列：**宽度按内容**（flex-basis:auto，不参与剩余空间的摊分），因为
+           标签长度跨模式差 4 倍（"类3" 22px vs RSI 的 "超卖 12.3 (3/5)" 80px，
+           买/卖点还可能两个标签并排）。固定权重会把它们裁掉 —— 实测 0.38 权重下
+           63px，"超卖 1" 两个字直接消失在左边缘外。
+           剩余空间由其余列按权重摊走，所以行末仍贴右、列间距仍是行上的 gap。
+           代价：同一面板内 tags 宽度随行浮动几像素 ⇒ 其余列宽随之浮动 1~2px
+           （RSI 面板实测最大 2.1px，肉眼不可辨）。这个取舍优于"为了像素级对齐
+           把标签裁掉"。 */
         .scan-col-tags {
-            flex: 0 1 auto !important; min-width: 33px !important;
-            margin-left: auto !important;
+            flex: 0 1 auto !important; min-width: 36px !important; max-width: 96px !important;
             text-align: right !important;
             display: flex !important; justify-content: flex-end !important;
             gap: 2px !important; flex-wrap: nowrap !important;

@@ -372,6 +372,31 @@ def _row_float_mc(code):
         return None
 
 
+def _row_ma120(klines):
+    """120 日均线值与「是否收在其下方」—— 扫描结果行的跨模式展示列。
+
+    这一列原先只有买/卖点模式算（在其分支里现算现发），现在 7 个模式的面板
+    都要显示，故上提为共用口径：**全模式同一份算法**，前端只负责画 ↑/↓。
+
+    口径与买/卖点分支被替换掉的那段**逐字一致**：收盘均值 `sum(closes[-120:])/120`
+    四舍五入 2 位；末根收盘**严格小于**均值才算"下方"（等于算上方，与 K 线
+    站上均线的直觉一致，也避免浮点相等时抖动）。
+
+    返回 `{"below_ma120": bool, "ma120_val": float}`。K 线不足 120 根（新股 /
+    停牌 / 长时间无数据）或末根收盘 <=0 ⇒ `ma120_val=0`，前端显示 `--` ——
+    **不发 0**，因为 0 是一个会被当成"均线价位为 0"的真实数值。
+    """
+    try:
+        closes = [float(k.get("close") or 0) for k in (klines or [])]
+        last_close = closes[-1] if closes else 0.0
+        if last_close > 0 and len(closes) >= 120:
+            ma120_val = round(sum(closes[-120:]) / 120, 2)
+            return {"below_ma120": last_close < ma120_val, "ma120_val": ma120_val}
+    except Exception as e:  # noqa: BLE001 —— 展示字段算不出来不得打断扫描
+        log.info(f"[120日均线] 行字段计算失败: {type(e).__name__}: {e}")
+    return {"below_ma120": False, "ma120_val": 0}
+
+
 def _fetch_float_mc_all(stock_list):
     """批量获取 A 股流通市值（A 股走 eltdx；该口径只覆盖 A 股，无需选源）。
 
@@ -887,6 +912,12 @@ class Scanner:
         同型事故：市场分布行在进度期与终态各写一份，扫完就消失）。
         取数口径见 `_row_float_mc`；失败/未命中返回 None（前端显示 `--`），
         不影响命中判定 —— 市值不参与任何模式的判据。
+
+        另一个跨模式展示列 `below_ma120` / `ma120_val`（120 日均线）**不在这里补**：
+        它由 K 线算出来，而 K 线是 `_scan_one` 内部的分析产物，收口拿不到；再取一次
+        等于对同一票取两遍数据。故在 `_scan_one` 里算一次（`ma120_fields`）、由各
+        模式的命中 return 带出。两者的分工是"依赖外部数据源的在收口、依赖本次分析
+        产物的一起算"，不是两套规矩。
         """
         resp = self._scan_one(code, freq=freq, prefix=prefix, recent=recent,
                               source=source, mode=mode, bsp_types=bsp_types,
@@ -951,6 +982,11 @@ class Scanner:
             bsps = result.get("bsps", [])
             stock_name = result.get("meta", {}).get("name", f"{code}")
             klines = result.get("klines", [])
+            # 120 日均线：**7 个模式的面板都要显示这一列**，所以在这里算一次、
+            #   由各模式的「命中 return」带出去（未命中行不渲染，不必带）。
+            #   放在这里而非 scan_one 收口：收口拿不到 klines，而 klines 属于
+            #   本函数的分析产物；再取一次等于对同一票做两次取数。
+            ma120_fields = _row_ma120(klines)
             t_filter = 0
 
             # ── 底分型扫描模式 ──
@@ -973,6 +1009,7 @@ class Scanner:
                         "last_close": klines[-1]["close"] if klines else 0,
                         "freq": freq,
                         "fx_strength": fx_strength,
+                        **ma120_fields,
                     }
                 else:
                     mkt, cd = _m._get_market_code(qualified_code)
@@ -1064,6 +1101,7 @@ class Scanner:
                     "amount_a": amount_a,
                     "peak_prev": peak_prev,
                     "a_is_rise": a_is_rise,
+                    **ma120_fields,
                 }
 
             # ── 连涨扫描模式 ──
@@ -1111,6 +1149,7 @@ class Scanner:
                     "gain_pct": gain_pct,
                     "date_from": seg[0].get("date", ""),
                     "date_to": seg[-1].get("date", ""),
+                    **ma120_fields,
                 }
 
             # ── RSI 扫描模式 ──
@@ -1211,6 +1250,7 @@ class Scanner:
                     "rsi_hit_under": hit_under,
                     "rsi_hit_over": hit_over,
                     "last_close": klines[-1]["close"] if klines else 0,
+                    **ma120_fields,
                 }
 
             # ── 回测扫描模式 ──
@@ -1273,6 +1313,7 @@ class Scanner:
                     "profit_loss_ratio": _sum.get("profit_loss_ratio"),
                     "profit_factor": _sum.get("profit_factor"),
                     "expectancy_r": _sum.get("expectancy_r"),
+                    **ma120_fields,
                 }
 
             # ── 买卖点扫描模式 ──
@@ -1309,14 +1350,6 @@ class Scanner:
                     sell_points.append(point)
             has_points = buy_points or sell_points
 
-            below_ma120 = False
-            ma120_val = 0
-            closes = [k.get("close", 0) for k in klines]
-            last_close = klines[-1]["close"] if klines else 0
-            if last_close > 0 and len(closes) >= 120:
-                ma120_val = round(sum(closes[-120:]) / 120, 2)
-                below_ma120 = last_close < ma120_val
-
             t_filter = time.time() - t0
 
             if not buy_points:
@@ -1333,8 +1366,7 @@ class Scanner:
                     "sell_points": sell_points,
                     "last_close": klines[-1]["close"] if klines else 0,
                     "freq": freq,
-                    "below_ma120": below_ma120,
-                    "ma120_val": ma120_val,
+                    **ma120_fields,
                 }
             else:
                 t_total = time.time() - t_scan_start

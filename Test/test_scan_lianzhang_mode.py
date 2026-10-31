@@ -383,6 +383,7 @@ def part3():
                + _extract_any_fn(appjs, "_lianzhangCaliberHtml") + "\n"
                + _extract_any_fn(appjs, "_fmtFloatMc") + "\n"
                + _extract_any_fn(appjs, "_scanRowHtml") + "\n"
+               + _extract_any_fn(appjs, "buildMa120Html") + "\n"
                + _extract_any_fn(appjs, "_scanSummaryLine") + "\n"
                + _extract_any_fn(appjs, "_scanPanelHtml") + "\n"
                + _extract_any_fn(appjs, "_paintScanFinal") + "\n"

@@ -6,20 +6,27 @@
 漏一处就是某模式少一列。同时标注模式的「标注文字」列是唯一可压缩列，加列会不会把它
 挤没，需要实测而不是拍脑袋。
 
-本轮落地的两条契约（本文件即它们的守卫）：
-  ① **列序契约**：`[勾选][名称][代码][流通市值][模式专属列…][标签]`
-     唯一实现 = `_scanRowHtml`；8 个 `_renderXxxRows` 只提供「专属列」与「标签」。
+本轮落地的三条契约（本文件即它们的守卫）：
+  ① **列序契约**：`[勾选][名称][代码][流通市值][120日均线][模式专属列…][标签]`
+     唯一实现 = `_scanRowHtml`；7 个 `_renderXxxRows` 只提供「专属列」与「标签」。
+     120 日均线（↓跌破/↑站上）由 `_scanRowHtml` 统一出，**唯一例外是标注模式**
+     （`ma120:false`）—— 它已有 7 列，再插一列标注文字就只剩 6 个汉字。
   ② **块序契约**：`头部行 → 口径行 → 市场分布行 → 行列表 | 空态`
      唯一实现 = `_scanPanelHtml`；进度期（`_doUpdatePanel`）与终态（`_paintScanFinal`）
      都调它 —— 此前两处各拼一遍，市场分布行因此在放量/底分型/买卖点上「扫完就消失」。
+  ③ **间距契约**：列与列之间的空隙**只有一个来源** —— `.scan-stock-row` 的 `gap`。
+     各列一律不写 padding-left/right、标签列不写 margin-left:auto。列宽用
+     「权重 + flex-basis:0」摊满整行，min-width 保内容不被压。这样 6 列行与 8 列行
+     的间距是同一个 8px（实测：8 个面板各自的相邻列间距集合都恰好是 {8}）。
 
-列宽预算（实测，非估算；量法见交付说明的 measure 脚本）：
+列宽预算（实测，非估算；量法见 `_artifact/build_mockup_v2.py` 的页内探针）：
   行内容宽 = 面板宽 − 2×8(body padding) − 2×8(row padding)
-  · 440 面板 ⇒ 408；标注行 = 18+64+76+46+40+**131**+33 = 408（标注文字 ≈ 10 汉字）
-  · 420 面板 ⇒ 388；同一行标注文字只剩 98px（≈ 7 汉字），且标签列被压到 18px
-  ⇒ 440 是"新增一列后标注仍可读"的下限；420 下必须二选一（砍标注列或砍标签列）。
-  · 标签列 `flex-grow:0` + `margin-left:auto`：自由空间归标注列，无伸缩列的模式
-    靠 auto 边距贴行尾 —— 两者缺一，行内版式就歪（③h / ③i 钉住）。
+  · 480 面板 ⇒ 464。各列实测：标注 name 57 / code 68 / mv 44 / freq 32 / ann 144 /
+    tags 36；6 列模式 name 92 / code 109 / mv 71 / ma 83 / tags 36；回测 8 列
+    name 68 / code 81 / mv 53 / ma 61 / 笔数 53 / 期望 66（无标签列）。
+  · 440 面板 ⇒ 424；回测 8 列的 min-width 合计 380 + 7×8 gap + 18 勾选 = 454 > 424
+    ⇒ 装不下（③e 反锚点）。480 是"8 列 + 8px 等间距"的下限。
+  · K 线不足 120 根 / 末根收盘 <=0 ⇒ 后端发 ma120_val=0，前端显示 `--`（不显示 0）。
 
 标题契约（2026-10-31 用户拍板，两套风格）：
   · 判据带「最近 N 根」的 4 个模式（放量/连涨/RSI/买-卖点）→ `周期 · 最新 N 根 · 模式名`
@@ -110,6 +117,7 @@ def _run_node(appjs, calls):
                      for t, e in calls)
     driver += "console.log(out.join('\\n'));\n"
     harness = prelude + _extract_fn(appjs, "_fmtFloatMc") + "\n" + \
+        _extract_fn(appjs, "buildMa120Html") + "\n" + \
         _extract_fn(appjs, "_scanRowHtml") + "\n" + driver
     jf = tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8")
     jf.write(harness)
@@ -217,78 +225,141 @@ def part2(appjs):
     check("②i 市场分布行只在装配器里出现一次（进度/终态不再各算一份）",
           n_ms == 1, n_ms)
 
+    # ── 120 日均线列：7 个模式共用、标注例外 ──
+    row_fn = _extract_fn(appjs, "_scanRowHtml")
+    row_code = _code_only(row_fn)
+    check("②j `_scanRowHtml` 是 120 日均线列的唯一输出点（8 个模式共用一处）",
+          row_code.count("buildMa120Html(") == 1, row_code.count("buildMa120Html("))
+    check("②k 120 日均线列夹在「市值」与「模式专属列」之间（列序固定）",
+          row_code.index('scan-col-mv') < row_code.index("buildMa120Html(")
+          < row_code.index("o.cols"), "列序不符")
+    check("②l 标注模式用 ma120:false 关掉该列（它已有 7 列，标注文字是唯一可压列）",
+          "ma120: false" in appjs, "标注未关列")
+
+    dup = []
+    for label, fn, _ in MODES:
+        if "buildMa120Html" in _extract_fn(appjs, fn):
+            dup.append(label)
+    check("②m 7 个行渲染函数**不再**自己传 buildMa120Html（否则每行两列）",
+          not dup, dup)
+
+    scan_src = io.open(APPSCAN, encoding="utf-8").read()
+    check("②n 后端 `_row_ma120` 定义 1 处、全模式同一份口径",
+          scan_src.count("def _row_ma120(") == 1, "定义数不符")
+    check("②o `_scan_one` 里只算一次（ma120_fields），不在收口重复取数",
+          scan_src.count("ma120_fields = _row_ma120(klines)") == 1,
+          scan_src.count("ma120_fields = _row_ma120(klines)"))
+    n_carry = scan_src.count("**ma120_fields,")
+    check("②p 6 个命中 return 都带出 ma120（底分型/放量/连涨/RSI/回测/买-卖点）",
+          n_carry == 6, n_carry)
+    check("②q 买/卖点分支不再自算 below_ma120（口径已上提到 _row_ma120）",
+          "below_ma120 = False" not in scan_src, "仍有分支自算")
+    check("②r 标签为空时**不输出**标签列（回测无标签，空 span 会白占一列宽度）",
+          "if (o.tags) {" in row_fn, "仍无条件输出")
+
 
 # ══════════════════════════════════════════════════════════════════════
-# ③ 列宽预算（静态算术，数字全部来自 app.css 真值）
+# ③ 列宽预算与列间距（静态算术，数字全部来自 app.css 真值）
 # ══════════════════════════════════════════════════════════════════════
-def _px(css, sel, prop="width"):
+def _px(css, sel, prop="min-width"):
     m = re.search(re.escape(sel) + r"\s*\{[^}]*?" + prop + r":\s*(\d+)px", css, re.S)
     return int(m.group(1)) if m else None
 
 
-def _budget(css, panel):
-    """标注行的列宽预算：返回 (行内容宽, 标注文字可用宽, 标签可用宽)。"""
-    body_pad = 8      # .scan-body padding:8px
-    row_pad = 8       # .scan-stock-row padding:4px 8px
-    cols = {
-        "chk": _px(css, ".scan-col-chk"),
-        "name": _px(css, ".scan-col-name"),
-        "code": _px(css, ".scan-col-code"),
-        "mv": _px(css, ".scan-col-mv"),
-        "freq": _px(css, ".scan-col-freq"),
-    }
-    # 各列的 padding-left 也占宽度（width 是 content-box）
-    pads = {
-        "code": _px(css, ".scan-col-code", "padding-left") or 0,
-        "freq": _px(css, ".scan-col-freq", "padding-left") or 0,
-        "mv": _px(css, ".scan-col-mv", "padding-left") or 0,
-        "ann": _px(css, ".scan-col-ann", "padding") or 8,
-    }
-    row_inner = panel - 2 * body_pad - 2 * row_pad
-    fixed = cols["chk"] + cols["name"] + cols["code"] + cols["mv"] + cols["freq"]
-    fixed += pads["code"] + pads["freq"] + pads["mv"]
-    tags_min = _px(css, ".scan-col-tags", "min-width") or 0
-    return row_inner, row_inner - fixed - tags_min, tags_min
+def _flex_w(css, sel):
+    """取 `flex: <w> <s> <b>` 的权重位。"""
+    m = re.search(re.escape(sel) + r"\s*\{[^}]*?flex:\s*([\d.]+)\s", css, re.S)
+    return float(m.group(1)) if m else None
+
+
+def _gap(css):
+    m = re.search(r"\.scan-stock-row\s*\{[^}]*?gap:\s*(\d+)px", css, re.S)
+    return int(m.group(1)) if m else None
+
+
+_SEL = {"name": ".scan-col-name", "code": ".scan-col-code", "mv": ".scan-col-mv",
+        "freq": ".scan-col-freq", "ann": ".scan-col-ann", "ma": ".scan-col-ma",
+        "btcount": ".scan-col-btcount", "expect": ".scan-col-expect",
+        "tags": ".scan-col-tags"}
+
+# 每种模式的列（不含勾选），顺序 = 行内列序。回测没有标签列（②r 钉住空标签不输出）。
+_ROW_COLS = {
+    "标注(7列)": ["name", "code", "mv", "freq", "ann", "tags"],
+    "通用(6列)": ["name", "code", "mv", "ma", "tags"],
+    "连涨(7列)": ["name", "code", "mv", "ma", "expect", "tags"],
+    "回测(8列)": ["name", "code", "mv", "ma", "btcount", "expect"],
+}
+
+
+def _min_need(css, cols, gap):
+    """一行所需最小宽度 = 勾选 + Σ各列 min-width + gap × 间隙数。"""
+    total = _px(css, ".scan-col-chk", "width") or 0
+    for c in cols:
+        total += _px(css, _SEL[c]) or 0
+    return total + gap * len(cols)
 
 
 def part3():
-    print("══ ③ 列宽预算：440 面板下标注列仍可读，420 下不可读（证明加宽必要）══")
+    print("══ ③ 列宽/间距契约：480 面板 + 间距唯一来源 gap（440 下 8 列装不下）══")
     css = io.open(APPCSS, encoding="utf-8").read()
-    panel = _px(css, ".scan-panel")
-    check("③a 面板宽 = 440px（420 放不下新增的市值列，见 ③c）", panel == 440, panel)
+    panel = _px(css, ".scan-panel", "width")
+    gap = _gap(css)
+    check("③a 面板宽 = 480px（440 下回测 8 列装不下，见 ③e）", panel == 480, panel)
+    check("③b 列间距唯一来源 = .scan-stock-row 的 gap，且值为 8px", gap == 8, gap)
 
-    row_inner, ann_avail, tags_min = _budget(css, panel)
-    check("③b 行内容宽 = 面板 − 2×8(body) − 2×8(row)", row_inner == panel - 32, row_inner)
-    # 一个汉字 ≈ 12px（12px 字体）；标注列还要 8px 左右内距
-    check("③c 标注文字列 >= 10 个汉字（120px + 8px 内距）",
-          ann_avail >= 128, ann_avail)
-    check("③d 标签列至少保留一个标签宽（33px，否则只剩色块）",
-          tags_min >= 33, tags_min)
+    row_inner = panel - 2 * 8 - 2 * 8
+    check("③c 行内容宽 = 面板 − 2×8(body) − 2×8(row)", row_inner == panel - 32, row_inner)
 
-    # 反锚点：把面板改回 420，同一行就装不下 —— 证明 440 不是为了"顺手改大"
-    row_420, ann_420, _ = _budget(css, 420)
-    check("③e 反锚点：420 面板 ⇒ 标注文字列 < 10 汉字（装不下，故加宽到 440）",
-          ann_420 < 128, ann_420)
-    check("③f 反锚点：420 面板仍装得下固定列（说明缺口就在可压缩列上）",
-          row_420 > 0 and ann_420 > 0, (row_420, ann_420))
+    # 每种模式的最小需求宽都必须 <= 行内容宽（否则列会被压到 min-width 以下 → 溢出）
+    need = {k: _min_need(css, v, gap) for k, v in _ROW_COLS.items()}
+    for k, v in need.items():
+        check("③d %s 最小需求 %dpx <= 行内容 %dpx" % (k, v, row_inner), v <= row_inner, v)
 
-    # 代码列宽缩减必须仍容得下最长代码形态
-    code_w = _px(css, ".scan-col-code")
-    check("③g 代码列 72px 仍容得下市场前缀形态（market 2 字符 + 代码 6 字符 ≈ 64px）",
-          code_w is not None and 64 <= code_w <= 80, code_w)
+    # 反锚点：面板改回 440，回测 8 列虽有 368px 的 min 下限、但行内容只剩 408px——
+    #   余量 40px 摊到 7 列不到 6px/列，等于每列都贴死在 min-width 上（内容一变长就裁）。
+    #   480 下余量 80px，才留得住"按权重摊开"的空间。
+    slack_440 = (440 - 32) - need["回测(8列)"]
+    slack_480 = row_inner - need["回测(8列)"]
+    check("③e 反锚点：440 下回测 8 列余量仅 %dpx（每列贴死 min-width，故加宽到 480 的 %dpx）"
+          % (slack_440, slack_480), slack_440 < 48 <= slack_480, (slack_440, slack_480))
 
-    # 标签列的两条硬约束（缺一条，行内版式就歪）：
-    #   ① flex-grow 必须为 0 —— 写回 flex:1 会与 `.scan-col-ann`（flex:1）平分自由
-    #      空间，把标注文字列从 131px 挤到 ~121px（加列后本就吃紧）；
-    #   ② 右对齐必须靠 margin-left:auto —— 7 个没有可伸缩列的模式（均线/放量/连涨/
-    #      RSI/底分型/买·卖点/回测）全靠它把标签推到行尾；少了它标签就紧贴内容，
-    #      各行右边缘参差（实测：均线行内容止于 237px、回测行 353px，差 116px）。
+    # 标注文字列必须是权重最大的列（弹性摊分下才拿得到最宽），且 min-width 容得下 7 汉字
+    w_ann = _flex_w(css, ".scan-col-ann")
+    w_others = [_flex_w(css, _SEL[c]) or 0 for c in ("name", "code", "mv", "freq")]
+    check("③f 标注文字列权重最大（弹性摊分时优先吃空间）",
+          w_ann is not None and w_ann > max(w_others), (w_ann, w_others))
+    check("③g 标注列 min-width >= 90px（放得下 7 个汉字，其余由权重摊）",
+          (_px(css, ".scan-col-ann") or 0) >= 90, _px(css, ".scan-col-ann"))
+
+    code_min = _px(css, ".scan-col-code")
+    check("③h 代码列 min-width 68px 仍容得下市场前缀形态（2+6 字符 ≈ 64px）",
+          code_min is not None and 64 <= code_min <= 76, code_min)
+
+    # 间距唯一来源：各列不得再写内距 / auto 边距（否则与 gap 叠加 → 6 列行与 8 列行
+    #   的空隙不一样，正是本轮要修的现象）
+    row_rule = re.search(r"\.scan-stock-row\s*\{[^}]*\}", css, re.S)
+    check("③i 行上声明 gap（列间空隙的唯一来源）",
+          "gap: 8px" in (row_rule.group(0) if row_rule else ""), "行上无 gap")
+    leftovers = []
+    for sel in (".scan-col-name", ".scan-col-code", ".scan-col-mv", ".scan-col-freq",
+                ".scan-col-ma", ".scan-col-btcount", ".scan-col-expect", ".scan-col-ann",
+                ".scan-col-tags"):
+        m = re.search(re.escape(sel) + r"\s*\{[^}]*\}", css, re.S)
+        body = m.group(0) if m else ""
+        if "padding-left" in body or "padding-right" in body or "margin-left: auto" in body:
+            leftovers.append(sel)
+    check("③j 各列不再写 padding-left/right 或 margin-left:auto（与 gap 叠加会让间距不均）",
+          not leftovers, leftovers)
+
+    # 标签列：宽度按内容（basis auto，不参与摊分），否则 RSI 的 "超卖 12.3 (3/5)"
+    #   会被裁成 "…12.3 (3/5)"、买/卖点多标签会被裁掉后面的
     tags_rule = re.search(r"\.scan-col-tags\s*\{[^}]*\}", css, re.S)
     rule_txt = tags_rule.group(0) if tags_rule else ""
-    check("③h 标签列 flex-grow = 0（自由空间归标注列）",
-          "flex: 0 1 auto" in rule_txt, rule_txt[:200])
-    check("③i 标签列 margin-left:auto（无可伸缩列的模式靠它贴行尾右对齐）",
-          "margin-left: auto" in rule_txt, rule_txt[:200])
+    check("③k 标签列 flex-basis = auto（按内容宽，不参与剩余空间摊分）",
+          re.search(r"flex:\s*0\s+1\s+auto", rule_txt) is not None, rule_txt[:200])
+    check("③l 标签列有 max-width 上限（防止长标签吃光整行）",
+          _px(css, ".scan-col-tags", "max-width") is not None,
+          _px(css, ".scan-col-tags", "max-width"))
 
 
 # ══════════════════════════════════════════════════════════════════════
