@@ -254,6 +254,17 @@ def _extract_any_fn(appjs, fn_name):
     raise AssertionError("app.js 花括号不配平: " + fn_name)
 
 
+def _extract_colors(appjs):
+    """抽 app.js 的 `COLORS` 常量块（`_btCol` 的正负两色都引用它）。
+
+    必须在 harness 里跑**真值**，不能在测试里另抄一份颜色 —— 本轮断言的正是
+    「面板跌色 == COLORS.macdDown」，抄一份就等于自己跟自己比。
+    """
+    m = re.search(r"const COLORS = \{.*?\n        \};", appjs, re.S)
+    assert m, "app.js COLORS 抽取失败"
+    return m.group(0).replace("const COLORS", "var COLORS", 1) + "\n"
+
+
 
 
 def _title_row(appjs, mode, name):
@@ -343,7 +354,7 @@ def part3():
         "  cls: _rowHtml('sz000001').indexOf('scan-tag-up') >= 0 }));\n"
         "out.push('COLOR=' + JSON.stringify({\n"
         "  pos: _rowHtml('sz000001').indexOf('#FF3C3C') >= 0,\n"
-        "  neg: _rowHtml('sz000003').indexOf('#00F0F0') >= 0,\n"
+        "  neg: _rowHtml('sz000003').indexOf('rgba(0,240,240,0.6)') >= 0,\n"
         "  zero: _rowHtml('sz000004').indexOf('#FF3C3C') >= 0,\n"
         "  posTxt: _rowHtml('sz000001').indexOf('6.25%') >= 0,\n"
         "  negTxt: _rowHtml('sz000003').indexOf('-1.50%') >= 0,\n"
@@ -356,8 +367,8 @@ def part3():
         "renderLianzhangScanResults(rows.slice(), 100, 7, false);\n"
         "var F = document.getElementById('scan-body').innerHTML;\n"
         "out.push('FIN=' + JSON.stringify({\n"
-        "  cnt: F.indexOf('\u8fde\u6da8 <b>4</b> \u53ea') >= 0,\n"
-        "  skip: F.indexOf('\u8df3\u8fc7 <b>7</b> \u53ea') >= 0,\n"
+        "  cnt: F.indexOf('\u8fde\u6da8 <span class=\"scan-num\">4</span> \u53ea') >= 0,\n"
+        "  skip: F.indexOf('\u8df3\u8fc7 <span class=\"scan-num\">7</span> \u53ea') >= 0,\n"
         "  cal: F.indexOf('\u9010\u6839\u6536\u7ea2\uff08\u6536\u76d8 > \u5f00\u76d8\uff0c\u5e73\u76d8\u4e0d\u7b97\uff09') >= 0,\n"
         "  gain: F.indexOf('\u6da8\u5e45 = \u9996\u6839\u7684\u524d\u4e00\u6839\u6536\u76d8"
         " \u2192 \u672b\u6839\u6536\u76d8\uff08\u540c K \u7ebf\u56fe\u5e95\u90e8\u767d\u6846"
@@ -373,6 +384,7 @@ def part3():
     )
 
     harness = (prelude
+               + _extract_colors(appjs)
                + _extract_any_fn(appjs, "updateScanRecentDisabled") + "\n"
                + _extract_any_fn(appjs, "_scanSourceLabel") + "\n"
                + _extract_any_fn(appjs, "_btCol") + "\n"
@@ -382,6 +394,7 @@ def part3():
                + _extract_any_fn(appjs, "renderLianzhangScanResults") + "\n"
                + _extract_any_fn(appjs, "_lianzhangCaliberHtml") + "\n"
                + _extract_any_fn(appjs, "_fmtFloatMc") + "\n"
+               + _extract_any_fn(appjs, "buildFloatMcHtml") + "\n"
                + _extract_any_fn(appjs, "_scanRowHtml") + "\n"
                + _extract_any_fn(appjs, "buildMa120Html") + "\n"
                + _extract_any_fn(appjs, "_scanSummaryLine") + "\n"
@@ -426,7 +439,7 @@ def part3():
     check("③b 标签为「N连涨」且用红色方向语义类 scan-tag-up（与 K 线红柱同色）",
           tag["lz"] and tag["cls"], tag)
     color = json.loads(kv["COLOR"])
-    check("③b 涨红跌绿（正 #FF3C3C / 负 #00F0F0 / 0 归非负侧）+ 数值格式",
+    check("③b 涨红跌青（正 #FF3C3C / 负 rgba(0,240,240,0.6) / 0 归非负侧）+ 数值格式",
           color["pos"] and color["neg"] and color["zero"]
           and color["posTxt"] and color["negTxt"] and color["zeroTxt"], color)
     chk = json.loads(kv["CHK"])

@@ -18,6 +18,14 @@
      各列一律不写 padding-left/right、标签列不写 margin-left:auto。列宽用
      「权重 + flex-basis:0」摊满整行，min-width 保内容不被压。这样 6 列行与 8 列行
      的间距是同一个 8px（实测：8 个面板各自的相邻列间距集合都恰好是 {8}）。
+  ④ **行字段契约**：后端 `scan_one` 的响应**原样**进结果数组，前端不得再抄一份
+     「字段白名单」。均线模式曾有一份 `normalize`（只有它这么做），加市值列时漏了
+     `float_mc`、加 120 日均线列时漏了 `below_ma120/ma120_val` ⇒ 该面板这两列恒为空。
+     同一轮后端 ma 分支也漏了 `**ma120_fields`（它不是「命中才 return」形态，被
+     「6 个命中 return」的统计漏掉）。两端都已修，本文件 ①j/②p2/②p3 守着。
+  ⑤ **市值格式**：列宽只够 4~5 字符、字号 11px ⇒ 一律四舍五入到整数，**不出现
+     小数点**（`83.4亿` 的点在小字号下看不见，会被读成 `834亿`，差 10 倍）。
+     0 < 市值 < 1 亿显示 `<1亿`（取整成 `0亿` 会被误读为「没取到」），缺值仍 `--`。
 
 列宽预算（实测，非估算；量法见 `_artifact/build_mockup_v2.py` 的页内探针）：
   行内容宽 = 面板宽 − 2×8(body padding) − 2×8(row padding)
@@ -116,9 +124,12 @@ def _run_node(appjs, calls):
     driver = "".join("out.push(%s + '=' + JSON.stringify(%s));\n" % (json.dumps(t), e)
                      for t, e in calls)
     driver += "console.log(out.join('\\n'));\n"
-    harness = prelude + _extract_fn(appjs, "_fmtFloatMc") + "\n" + \
+    harness = prelude + \
+        _extract_fn(appjs, "_fmtFloatMc") + "\n" + \
+        _extract_fn(appjs, "buildFloatMcHtml") + "\n" + \
         _extract_fn(appjs, "buildMa120Html") + "\n" + \
-        _extract_fn(appjs, "_scanRowHtml") + "\n" + driver
+        _extract_fn(appjs, "_scanRowHtml") + "\n" + \
+        _extract_fn(appjs, "_renderMaRows") + "\n" + driver
     jf = tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8")
     jf.write(harness)
     jf.close()
@@ -144,11 +155,26 @@ def part1(appjs):
         ("ROW", row),
         ("MV30", '_fmtFloatMc(30)'),
         ("MV305", '_fmtFloatMc(30.5)'),
+        ("MV834", '_fmtFloatMc(83.4)'),
         ("MV1234", '_fmtFloatMc(1234)'),
         ("MVNULL", '_fmtFloatMc(null)'),
         ("MVZERO", '_fmtFloatMc(0)'),
         ("MVUNDEF", '_fmtFloatMc(undefined)'),
         ("MVSTR", '_fmtFloatMc("30.5")'),
+        ("MVSUB1", '_fmtFloatMc(0.4)'),
+        # 小盘（< 50 亿）＝ 面板下行青 + ↓ 前缀，与第四列 120 日均线同一套记号
+        ("MVH_LOW", 'buildFloatMcHtml(30)'),
+        ("MVH_EDGE", 'buildFloatMcHtml(49.4)'),
+        ("MVH_50", 'buildFloatMcHtml(50)'),
+        ("MVH_BIG", 'buildFloatMcHtml(1234)'),
+        ("MVH_NULL", 'buildFloatMcHtml(null)'),
+        ("MVH_SUB1", 'buildFloatMcHtml(0.4)'),
+        # 均线模式整行：第四列（120 日均线）必须真有内容 —— 这一列曾在均线面板
+        #   恒为 `--`（前端 normalize 白名单 + 后端 ma 分支同时漏字段）。
+        ("MAROW_DOWN", '_renderMaRows([{code:"sh600000",name:"浦发银行",float_mc:1234.6,'
+                       'ma_category:2,below_ma120:true,ma120_val:8.88}])'),
+        ("MAROW_UP", '_renderMaRows([{code:"sz000001",name:"平安银行",float_mc:2009.2,'
+                     'ma_category:5,below_ma120:false,ma120_val:11.11}])'),
     ])
     if kv is None:
         check("node 不在位，列契约运行时段 SKIP", True)
@@ -162,14 +188,44 @@ def part1(appjs):
           html.find("scan-col-code") < html.find("scan-col-mv"), html)
     check("①c 30 亿 ⇒ 「30亿」（整数不带 .0，与用户示例逐字一致）",
           kv["MV30"] == "30亿", kv["MV30"])
-    check("①d 30.5 ⇒ 「30.5亿」（<100 亿保留 1 位）", kv["MV305"] == "30.5亿", kv["MV305"])
-    check("①e 1234 ⇒ 「1234亿」（>=100 亿取整，不出现 1234.5）",
+    check("①d 30.5 ⇒ 「31亿」（四舍五入，不再保留 1 位小数）",
+          kv["MV305"] == "31亿", kv["MV305"])
+    check("①d2 83.4 ⇒ 「83亿」（用户举的反例：带点时会被看成 834 亿）",
+          kv["MV834"] == "83亿", kv["MV834"])
+    check("①e 1234 ⇒ 「1234亿」（>=100 亿同样取整）",
           kv["MV1234"] == "1234亿", kv["MV1234"])
     check("①f 缺值 / 0 ⇒ 「--」（0 代表没取到，不能显示成市值 0）",
           kv["MVNULL"] == "--" and kv["MVZERO"] == "--" and kv["MVUNDEF"] == "--",
           (kv["MVNULL"], kv["MVZERO"], kv["MVUNDEF"]))
     check("①g 数字串（JSON 里偶发）按数值处理，不当 0",
-          kv["MVSTR"] == "30.5亿", kv["MVSTR"])
+          kv["MVSTR"] == "31亿", kv["MVSTR"])
+    check("①h 0 < 市值 < 1 亿 ⇒ 「<1亿」（取整会变 0亿，与缺值混淆）",
+          kv["MVSUB1"] == "<1亿", kv["MVSUB1"])
+    _mv_all = ["MV30", "MV305", "MV834", "MV1234", "MVSTR", "MVSUB1"]
+    check("①i 市值列**任何取值都不含小数点**（本列字号 11px，点看不清 ⇒ 量级误读）",
+          not any("." in kv[k] for k in _mv_all),
+          [(k, kv[k]) for k in _mv_all if "." in kv[k]])
+
+    md, mu = kv["MAROW_DOWN"], kv["MAROW_UP"]
+    check("①j 均线模式行**第四列有内容**：跌破 ⇒ ↓8.88，站上 ⇒ ↑11.11（曾恒为 --）",
+          "↓8.88" in md and "↑11.11" in mu, (md, mu))
+    check("①k 均线行里 120 日线列夹在市值与标签之间（与其余 6 个模式同列序）",
+          md.find("scan-col-mv") < md.find("scan-col-ma") < md.find("scan-col-tags"), md)
+    check("①l 均线行市值同样取整（1234.6 ⇒ 1235亿；2009.2 ⇒ 2009亿）",
+          "1235亿" in md and "2009亿" in mu, (md[:120], mu[:120]))
+
+    # 小盘（< 50 亿）＝ 下行青 + ↓ 前缀，与第四列 120 日均线同一套记号
+    check("①m 30 亿 ⇒ `<span class=\"scan-col-mv low\">↓30亿`（箭头 + low 类，与 ↓120线同构）",
+          kv["MVH_LOW"] == '<span class="scan-col-mv low">↓30亿</span>', kv["MVH_LOW"])
+    check("①n 边界：49.4 亿（显示 49）算小盘；50 亿整不算；49.6 显示 50亿也不算（避免「↓50亿」自相矛盾）",
+          kv["MVH_EDGE"] == '<span class="scan-col-mv low">↓49亿</span>'
+          and kv["MVH_50"] == '<span class="scan-col-mv">50亿</span>'
+          and kv["MVH_BIG"] == '<span class="scan-col-mv">1234亿</span>',
+          (kv["MVH_EDGE"], kv["MVH_50"], kv["MVH_BIG"]))
+    check("①o 缺值不加箭头不着色（`--` 没有数，谈不上「低」）；<1 亿仍带箭头 ⇒ `↓<1亿`",
+          kv["MVH_NULL"] == '<span class="scan-col-mv">--</span>'
+          and kv["MVH_SUB1"] == '<span class="scan-col-mv low">↓<1亿</span>',
+          (kv["MVH_NULL"], kv["MVH_SUB1"]))
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -231,7 +287,7 @@ def part2(appjs):
     check("②j `_scanRowHtml` 是 120 日均线列的唯一输出点（8 个模式共用一处）",
           row_code.count("buildMa120Html(") == 1, row_code.count("buildMa120Html("))
     check("②k 120 日均线列夹在「市值」与「模式专属列」之间（列序固定）",
-          row_code.index('scan-col-mv') < row_code.index("buildMa120Html(")
+          row_code.index("buildFloatMcHtml(") < row_code.index("buildMa120Html(")
           < row_code.index("o.cols"), "列序不符")
     check("②l 标注模式用 ma120:false 关掉该列（它已有 7 列，标注文字是唯一可压列）",
           "ma120: false" in appjs, "标注未关列")
@@ -250,12 +306,32 @@ def part2(appjs):
           scan_src.count("ma120_fields = _row_ma120(klines)") == 1,
           scan_src.count("ma120_fields = _row_ma120(klines)"))
     n_carry = scan_src.count("**ma120_fields,")
-    check("②p 6 个命中 return 都带出 ma120（底分型/放量/连涨/RSI/回测/买-卖点）",
-          n_carry == 6, n_carry)
+    check("②p 7 个会上屏的 return 都带出 ma120（底分型/均线/放量/连涨/RSI/回测/买-卖点）",
+          n_carry == 7, n_carry)
+    # 均线分支不是「命中才 return」形态，靠计数器容易被漏 → 直接锚住那段代码
+    _ma_seg = scan_src[scan_src.index("# ── 均线分类扫描模式 ──"):
+                       scan_src.index("# ── 放量扫描模式 ──")]
+    check("②p2 均线分类分支的响应体带 ma120 字段（曾漏 ⇒ 面板第四列恒为 --）",
+          "**ma120_fields," in _ma_seg, "均线分支未带字段")
+    check("②p3 前端不再有 normalize 字段白名单（8 个模式里只有均线加过，连漏两列）",
+          appjs.count("normalize:") == 0 and "spec.normalize" not in appjs,
+          appjs.count("normalize:"))
     check("②q 买/卖点分支不再自算 below_ma120（口径已上提到 _row_ma120）",
           "below_ma120 = False" not in scan_src, "仍有分支自算")
     check("②r 标签为空时**不输出**标签列（回测无标签，空 span 会白占一列宽度）",
           "if (o.tags) {" in row_fn, "仍无条件输出")
+    _bfn = _extract_fn(appjs, "buildFloatMcHtml")
+    check("②s 市值列经 `buildFloatMcHtml` 单点构造（类名/箭头不散在行里）",
+          "buildFloatMcHtml(r.float_mc)" in row_code
+          and row_code.count("_fmtFloatMc(") == 0,
+          row_code.count("_fmtFloatMc("))
+    check("②t 小盘分界在 `buildFloatMcHtml` 内声明 1 处（无外部全局依赖，抽这个函数即可测）",
+          len(re.findall(r"var LOW_YI\s*=\s*50\s*;", _bfn)) == 1 and "LOW_YI" not in appjs.replace(_bfn, ""),
+          _bfn[:120])
+    check("②u 该常量**不读**后端过滤阈值（显示口径不跟着业务阈值走：用户把阈值调大，"
+          "整列不该一起变色）",
+          "scan_min_float_mc" not in row_fn and "scan_min_float_mc" not in _bfn,
+          "显示路径引用了业务阈值")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -275,6 +351,71 @@ def _flex_w(css, sel):
 def _gap(css):
     m = re.search(r"\.scan-stock-row\s*\{[^}]*?gap:\s*(\d+)px", css, re.S)
     return int(m.group(1)) if m else None
+
+
+def _css_code_only(css):
+    """去掉 CSS 注释块，只留声明体。
+
+    字重/颜色断言必须打在**真声明**上：本轮写的注释里就带 `.scan-col-ma.down`、
+    `#00F0F0` 这些字样，不去注释会把说明文字当规则匹配（铁律：注释不算证据）。
+    """
+    return re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+
+
+def _norm_color(v):
+    """颜色值归一：去所有空白 + 小写。
+
+    CSS 写字面量时按惯例留空格（`rgba(0, 240, 240, 0.6)`），JS 常量不写
+    （`rgba(0,240,240,0.6)`）—— 逐字比对前必须先吃掉这个差异，否则「同源」断言
+    会因为一个空格假红。
+    """
+    return re.sub(r"\s+", "", v).lower() if v else v
+
+
+def _color(css, sel):
+    """取**包含该选择器**的规则块里的 color 值（块内可能先有 background，取最后一处）。
+
+    值可能是 hex，也可能是 rgba() —— 面板的下行青与副图 MACD 跌柱同源，就是
+    半透明 rgba 形态（不透明版在深底上比红亮 2.7 倍，红青失衡）。
+    `(?<![-\\w])` 是为了不把 `background-color:` 抓成 `color:`。
+
+    选择器允许是**逗号列表**：市值小盘色与 120 日均线跌破色共用一条规则
+    （`.scan-col-ma.down, .scan-col-mv.low { color: … }`），只认 `sel {` 紧邻
+    形态会把这种"单一色源"写法判成没颜色。按逗号切分后**逐项精确比对**，不用
+    子串（否则查 `.scan-col-ma` 会命中 `.scan-col-ma.down`，把中性灰判成青）。
+    """
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+    for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", css):
+        sels = [s.strip() for s in m.group(1).split(",")]
+        if sel not in sels:
+            continue
+        hits = re.findall(r"(?<![-\w])color:\s*(#[0-9a-fA-F]{3,8}|rgba?\([^)]*\))",
+                          m.group(2))
+        if hits:
+            return _norm_color(hits[-1])
+    return None
+
+
+def _hex_rgb(v):
+    """`#rrggbb` → [r,g,b]；非 hex 返回 None（用来跟 COLORS 里的 rgba 比 RGB 位）。"""
+    m = re.match(r"#([0-9a-f]{6})$", v or "")
+    return [int(m.group(1)[i:i + 2], 16) for i in (0, 2, 4)] if m else None
+
+
+def _rgba_rgb(v):
+    """`rgba(r,g,b,a)` → [r,g,b]；非 rgb 形态返回 None。"""
+    m = re.match(r"rgba?\((\d+),\s*(\d+),\s*(\d+)", v or "")
+    return [int(m.group(i)) for i in (1, 2, 3)] if m else None
+
+
+def _scan_css(css):
+    """切出扫描面板那一段样式（`.scan-panel {` … `.amo-panel {`），去注释。
+
+    「面板内不得出现某某色」这类反锚点必须限定在这个区间 —— 全文件 grep 会把
+    别的面板（统计 / 量能 / 设置抽屉）算进来，那不是在守本面板的契约。
+    """
+    c = _css_code_only(css)
+    return c[c.index(".scan-panel {"):c.index(".amo-panel {")]
 
 
 _SEL = {"name": ".scan-col-name", "code": ".scan-col-code", "mv": ".scan-col-mv",
@@ -302,6 +443,7 @@ def _min_need(css, cols, gap):
 def part3():
     print("══ ③ 列宽/间距契约：480 面板 + 间距唯一来源 gap（440 下 8 列装不下）══")
     css = io.open(APPCSS, encoding="utf-8").read()
+    appjs = io.open(APPJS, encoding="utf-8").read()
     panel = _px(css, ".scan-panel", "width")
     gap = _gap(css)
     check("③a 面板宽 = 480px（440 下回测 8 列装不下，见 ③e）", panel == 480, panel)
@@ -361,6 +503,93 @@ def part3():
           _px(css, ".scan-col-tags", "max-width") is not None,
           _px(css, ".scan-col-tags", "max-width"))
 
+    # 120 日均线列的方向色：跌破（↓）必须与面板里其余"下行"元素同一个青。
+    #   此前的 #e94560 是面板**强调红**，同时被周期列（日K）、面板标题、计数标签复用
+    #   ⇒ 同一行里 `日K`（中性）与 `↓68.42`（看空）同色，颜色就丧失了区分力。
+    #   2026-10-31 再进一步：青的**唯一事实源**是副图 MACD 跌柱 COLORS.macdDown
+    #   （`rgba(0,240,240,0.6)`）。不透明的 #00F0F0 在面板底 #16213e 上感知亮度
+    #   0.69，是同屏红 #FF3C3C（0.25）的 2.7 倍 —— 看空信号比看多信号亮一倍，红青失衡。
+    c_down = _color(css, ".scan-col-ma.down")
+    c_sell = _color(css, ".scan-bsp-tag.scan-tag-down")
+    c_sell_base = _color(css, ".scan-bsp-tag.sell")
+    c_cross = _color(css, ".crosshair-info .down")
+    c_freq = _color(css, ".scan-col-freq")
+    c_neutral = _color(css, ".scan-col-name")
+    m_macd = re.search(r'macdDown:\s*"([^"]+)"', appjs)
+    macd_down = _norm_color(m_macd.group(1)) if m_macd else None
+    check("③m 跌破均线（↓）用面板内的下行青，与卖点标签 scan-tag-down / sell 同色",
+          c_down is not None and c_down == c_sell == c_sell_base,
+          (c_down, c_sell, c_sell_base))
+    check("③m2 该青与副图 MACD 跌柱 COLORS.macdDown 逐字同源（不是另调一个近似青）",
+          macd_down is not None and c_down == macd_down, (c_down, macd_down))
+    check("③m3 反锚点：面板下行青不再是**不透明** #00f0f0（它比红亮 2.7 倍）",
+          c_down is not None and c_down != "#00f0f0", c_down)
+    check("③m4 光标条的跌幅数字同用这一个青（同屏三处，不能漂成两种）",
+          c_cross == c_down, (c_cross, c_down))
+    # 市值小盘色（< 50 亿）：与 ↓120线用的是**同一条 CSS 规则**（逗号选择器），
+    # 而不是各写一遍色值 —— 后者改一处漏一处，就成了两个青。
+    c_mvlow = _color(css, ".scan-col-mv.low")
+    check("③m5 市值小盘（< 50 亿）与 ↓120线同一个青（两条选择器共用一条 color 规则）",
+          c_mvlow is not None and c_mvlow == c_down, (c_mvlow, c_down))
+    n_mvlow_rule = len(re.findall(r"\.scan-col-mv\.low\s*[,{]", _css_code_only(css)))
+    check("③m6 小盘色只出现 1 条规则（不留第二处色值副本）", n_mvlow_rule == 1, n_mvlow_rule)
+    check("③n 反锚点：跌破均线不再用强调红（周期列同色 ⇒ 中性信息与看空信号不分）",
+          c_down is not None and c_freq is not None and c_down != c_freq, (c_down, c_freq))
+    check("③o 站上均线（↑）仍是中性灰，强调只给 ↓ 一侧",
+          c_neutral is not None and _color(css, ".scan-col-ma") == c_neutral,
+          (_color(css, ".scan-col-ma"), c_neutral))
+
+    # ── 字重：面板内一律常规（2026-10-31 用户拍板「面板显示中的文字不用粗体，数字也一样」）──
+    #   小字号下粗体把笔画糊成一块：9px 标签、11px 汇总数字、13px 标题原先全是 600/700，
+    #   面板里唯一"不粗"的只有正文列。层级改由**颜色 + 字号**表达。
+    bad_weight = []
+    for m in re.finditer(r"([^{}\n]*)\{([^}]*)\}", _css_code_only(css)):
+        sel, body = m.group(1).strip(), m.group(2)
+        if ".scan-" not in sel:
+            continue
+        for w in re.findall(r"font-weight:\s*(\d+|bold)", body):
+            if w == "bold" or int(w) >= 600:
+                bad_weight.append(sel + " → " + w)
+    check("③p 扫描面板内无 font-weight >= 600 / bold（含标签、标题、数值列）",
+          not bad_weight, bad_weight[:6])
+
+    n_b = len(re.findall(r"<b>", _code_only(appjs)))
+    check("③q 汇总行数字改用 <span class=\"scan-num\">，不再用 <b>（<b> 默认 700）",
+          n_b == 0 and '"scan-num"' in _code_only(appjs),
+          "app.js 仍有 %d 处 <b>" % n_b)
+    check("③r .scan-summary 的数字强调只变色不加粗（.scan-num 无 font-weight 声明）",
+          _color(css, ".scan-summary .scan-num") is not None
+          and re.search(r"\.scan-summary\s+\.scan-num\s*\{[^}]*font-weight",
+                        _css_code_only(css)) is None,
+          _color(css, ".scan-summary .scan-num"))
+    check("③r2 反锚点：`.scan-summary b` 选择器已不存在（<b> 没人用了，留着是死规则）",
+          re.search(r"\.scan-summary\s+b\s*[,{]", _css_code_only(css)) is None, "仍存在")
+
+    # ── 面板的红：全部收敛到副图 MACD 涨柱的 RGB（2026-10-31 用户：「面板中的红色
+    #   也改为跟 MACD 红柱同样的红色」）──
+    #   此前面板里有 4 种红：#e94560（标题/周期/计数，偏粉）、#ff3c3c（买点/涨）、
+    #   #ff4444（底分型最强）、#F44336（均线类0）。同一个"红"四种值，改一处必漂。
+    #   红**不照抄 macdUp 的 0.6 alpha**：同底上 rgba(255,60,60,.6) 合成对比只有
+    #   2.3:1（AA 4.5），13px 标题会糊；取同 RGB 的不透明形态。青能真用 0.6 是因为
+    #   #00F0F0 亮度高、合成后仍有 4.84:1 —— 各按自己亮度取 alpha，视觉才拉得平。
+    m_up = re.search(r'macdUp:\s*"([^"]+)"', appjs)
+    macd_up_rgb = _rgba_rgb(_norm_color(m_up.group(1))) if m_up else None
+    red_sels = (".scan-title", ".scan-col-freq", ".scan-summary .scan-num",
+                ".scan-bsp-tag.buy", ".scan-bsp-tag.scan-tag-up",
+                ".scan-bsp-tag.fx-strongest", ".scan-bsp-tag.ma-cat0")
+    red_bad = {}
+    for sel in red_sels:
+        got = _hex_rgb(_color(css, sel))
+        if got != macd_up_rgb:
+            red_bad[sel] = _color(css, sel)
+    check("③s 面板内的红 = 副图 MACD 涨柱 COLORS.macdUp 的 RGB(255,60,60)",
+          macd_up_rgb is not None and not red_bad, (red_bad, macd_up_rgb))
+    check("③s2 反锚点：扫描面板内不再出现旧的粉红 #e94560（4 种红 → 1 种）",
+          "#e94560" not in _scan_css(css).lower(), "仍有 #e94560")
+    check("③s3 反锚点：也不再有 #ff4444 / #f44336 这两种近似红",
+          "#ff4444" not in _scan_css(css).lower()
+          and "#f44336" not in _scan_css(css).lower(), "仍有旧红")
+
 
 # ══════════════════════════════════════════════════════════════════════
 # ④ 代码形态与字段来源（静态）
@@ -372,6 +601,14 @@ def part4(appjs):
           n_dot == 0, "仍 %d 处" % n_dot)
     check("④b 标注行改用 market + code（前缀在前）",
           '(c.market || "") + c.code' in appjs, "未归一")
+
+    # 均线列的跌破类名必须与 CSS 选择器同名：JS 写 `warn`、CSS 写 `down` 时颜色会静默失效
+    #   （类名不匹配不报错，只是不生效 —— 只能靠这条断言挡住）。`warn` 是旧名，已弃用。
+    code_js = _code_only(appjs)
+    check("④b2 跌破均线用 `scan-col-ma down`（与 CSS `.scan-col-ma.down` 同名）",
+          code_js.count('class="scan-col-ma down"') == 1
+          and 'class="scan-col-ma warn"' not in code_js,
+          code_js.count('class="scan-col-ma down"'))
 
     src = io.open(APPSCAN, encoding="utf-8").read()
     check("④c 后端行契约收口在 scan_one（业务分支 = _scan_one，字段在此补齐）",
@@ -466,6 +703,85 @@ def part5(appjs):
           (appjs.count('getElementById("scan-title")'), 'scan-title").innerHTML' in appjs))
 
 
+# ══════════════════════════════════════════════════════════════════════
+# ⑥ 后端 ma 分支**运行时**：响应字段 → 前端真函数整行（端到端）
+# ══════════════════════════════════════════════════════════════════════
+def _synth_klines(n=240, rising=True):
+    """合成日线：单调升/降。240 根同时满足均线分类（>=233）与 120 日均线（>=120）。"""
+    out = []
+    for i in range(n):
+        c = round(10.0 + i * 0.05 if rising else 60.0 - i * 0.05, 2)
+        out.append({"date": "2025/%02d/%02d" % (1 + i // 28 % 12, 1 + i % 28),
+                    "open": round(c - 0.02, 2), "high": round(c + 0.05, 2),
+                    "low": round(c - 0.05, 2), "close": c, "vol": 1000 + i,
+                    "amount": 100000 + i})
+    return out
+
+
+def part6(appjs):
+    print("══ ⑥ 后端 ma 分支运行时（桩喂 K 线跑真 scan_one，再交前端真函数渲染）══")
+    if ROOT not in sys.path:
+        sys.path.insert(0, ROOT)
+    try:
+        from App import AppScan as _sc
+    except Exception as e:                                # pragma: no cover
+        check("⑥a 运行时段前置：能导入 AppScan", False, repr(e)[:200])
+        return
+
+    def _run(klines):
+        def _stub(qualified_code, **kw):
+            return {"klines": klines, "meta": {"name": "测试股"}, "bsps": [], "bis": []}
+
+        orig = _sc._m.analyze_stock
+        _sc._m.analyze_stock = _stub
+        try:
+            return _sc.scanner.scan_one("300750", freq="d", prefix="0", recent="1",
+                                        source="zxg", mode="ma", bsp_types=None)
+        finally:
+            _sc._m.analyze_stock = orig
+
+    up, down = _synth_klines(rising=True), _synth_klines(rising=False)
+    r_up, r_down = _run(up), _run(down)
+
+    check("⑥a 均线模式响应带全 120 日均线字段（曾缺 ⇒ 面板第四列恒为 `--`）",
+          isinstance(r_up, dict) and all(k in r_up for k in ("below_ma120", "ma120_val")),
+          sorted(r_up) if isinstance(r_up, dict) else r_up)
+    check("⑥b 与 `_row_ma120` 逐位相等（后端只此一份口径，不另算）",
+          (r_up.get("below_ma120"), r_up.get("ma120_val")) ==
+          (_sc._row_ma120(up)["below_ma120"], _sc._row_ma120(up)["ma120_val"])
+          and (r_down.get("below_ma120"), r_down.get("ma120_val")) ==
+          (_sc._row_ma120(down)["below_ma120"], _sc._row_ma120(down)["ma120_val"]),
+          (r_up.get("ma120_val"), _sc._row_ma120(up)["ma120_val"]))
+    check("⑥c 方向正确：单调升 ⇒ 站上（False）；单调降 ⇒ 跌破（True）",
+          r_up.get("below_ma120") is False and r_down.get("below_ma120") is True
+          and r_up.get("ma120_val", 0) > 0 and r_down.get("ma120_val", 0) > 0,
+          (r_up.get("below_ma120"), r_down.get("below_ma120")))
+    check("⑥d 均线分类同轮有效（升 ⇒ 类0，降 ⇒ 类8）",
+          r_up.get("ma_category") == 0 and r_down.get("ma_category") == 8,
+          (r_up.get("ma_category"), r_down.get("ma_category")))
+
+    # 后端响应 → 前端真 `_renderMaRows`（不经任何手工补字段）
+    kv = _run_node(appjs, [
+        ("UP", '_renderMaRows([%s])' % json.dumps(r_up, ensure_ascii=False)),
+        ("DOWN", '_renderMaRows([%s])' % json.dumps(r_down, ensure_ascii=False)),
+    ])
+    if kv is None:
+        check("node 不在位，端到端渲染段 SKIP", True)
+        return
+    m_up = re.search(r'scan-col-ma">↑([\d.]+)<', kv["UP"])
+    m_dn = re.search(r'scan-col-ma down">↓([\d.]+)<', kv["DOWN"])
+    check("⑥e 整行渲染出 4 列真值：站上 ⇒ `↑<值>`，跌破 ⇒ `↓<值>`（不再出现 `--` 空列）",
+          m_up is not None and m_dn is not None, (kv["UP"], kv["DOWN"]))
+    check("⑥f 渲染出的均线价位与后端一致（小数点后逐位相同）",
+          m_up is not None and m_dn is not None
+          and abs(float(m_up.group(1)) - float(r_up["ma120_val"])) < 1e-9
+          and abs(float(m_dn.group(1)) - float(r_down["ma120_val"])) < 1e-9,
+          (m_up.group(1) if m_up else None, r_up.get("ma120_val")))
+    check("⑥g 该行同时带市值与类标签（列不因某模式缺字段而消失）",
+          "scan-col-mv" in kv["UP"] and "ma-cat0" in kv["UP"],
+          kv["UP"][:200])
+
+
 def main():
     appjs = io.open(APPJS, encoding="utf-8").read()
     part1(appjs)
@@ -473,6 +789,7 @@ def main():
     part3()
     part4(appjs)
     part5(appjs)
+    part6(appjs)
     ok = all(_OK)
     print("\n%s  (%d/%d)" % ("ALL PASS" if ok else "FAILED", sum(_OK), len(_OK)))
     return 0 if ok else 1

@@ -550,6 +550,17 @@ def _extract_any_fn(appjs, fn_name):
     raise AssertionError("app.js 花括号不配平: " + fn_name)
 
 
+def _extract_colors(appjs):
+    """抽 app.js 的 `COLORS` 常量块（`_btCol` 的正负两色都引用它）。
+
+    必须在 harness 里跑**真值** —— 在测试里另抄一份颜色，就等于自己跟自己比，
+    将来 `COLORS` 改了也测不出来。
+    """
+    m = re.search(r"const COLORS = \{.*?\n        \};", appjs, re.S)
+    assert m, "app.js COLORS 抽取失败"
+    return m.group(0).replace("const COLORS", "var COLORS", 1) + "\n"
+
+
 def part8_9_10_11(d_idx, d_stock, d_open=None, d1=None):
     print("══ ⑧⑨⑩⑪⑫ 前端真函数（node 抽段；node 不在位则 SKIP）══")
     node = shutil.which("node")
@@ -679,6 +690,7 @@ def part8_9_10_11(d_idx, d_stock, d_open=None, d1=None):
     )
 
     harness = (prelude
+               + _extract_colors(appjs)
                + _extract_fn(appjs, "syncStatsButtonLabel") + "\n"
                + _extract_fn(appjs, "_btBspTypes") + "\n"
                + _extract_assign(appjs, "toggleStats") + "\n"

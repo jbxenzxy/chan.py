@@ -277,7 +277,9 @@
         }
         .crosshair-info .label { color: #8892b0; }
         .crosshair-info .up { color: #FF3C3C; }
-        .crosshair-info .down { color: #00F0F0; }
+        /* 光标条与扫描面板共用一个下行青 = 副图 MACD 跌柱（COLORS.macdDown）：
+           三者同屏，各写一份字面量时改一处就漂成两种青。 */
+        .crosshair-info .down { color: rgba(0, 240, 240, 0.6); }
         .ma-tooltip {
             position: absolute; pointer-events: none; z-index: 20;
             display: none; background: #16213e;
@@ -458,13 +460,18 @@
             padding: 10px 14px; border-bottom: 1px solid #0f3460;
             background: rgba(15, 52, 96, 0.3);
         }
-        .scan-title { font-size: 13px; font-weight: 600; color: #e94560; }
+        /* 面板标题的红 = 副图 MACD 涨柱的 RGB（COLORS.macdUp = rgba(255,60,60,0.6)）。
+           柱取 0.6 是为了半透明压在 K 线上，文字不能照抄 alpha —— 同底上
+           rgba(255,60,60,0.6) 合成后对比只有 2.3:1（AA 要 4.5），13px 标题直接糊。
+           故文字取**同 RGB 的不透明形态**；青可以真的用 0.6，是因为 #00F0F0 亮度高、
+           合成后仍有 4.84:1 —— 两边各按自己的物理亮度取 alpha，视觉亮度才拉得平。 */
+        .scan-title { font-size: 13px; color: #ff3c3c; }
         .scan-status { font-size: 11px; color: #8892b0; }
         .scan-close {
             font-size: 18px; color: #8892b0; cursor: pointer;
             padding: 0 4px; line-height: 1;
         }
-        .scan-close:hover { color: #e94560; }
+        .scan-close:hover { color: #ff3c3c; }
         /* 扫描进行中：× 灰化。closeScanPanel 内 `if (_scanRunning) return` 会静默无效，
            故灰化 + title 明示原因，消除「点了没反应」（class 由 _setScanRunning 单点同步） */
         .scan-close.disabled { opacity: 0.35; cursor: not-allowed; }
@@ -493,7 +500,7 @@
             padding: 2px 8px; border: 1px solid #0f3460; border-radius: 3px;
             background: transparent; margin-right: 8px;
         }
-        .scan-save-btn:hover { color: #e94560; border-color: #e94560; }
+        .scan-save-btn:hover { color: #ff3c3c; border-color: #ff3c3c; }
         .scan-save-btn:disabled { opacity: 0.4; cursor: not-allowed; }
         .scan-col-chk {
             width: 18px !important; flex-shrink: 0 !important;
@@ -501,7 +508,7 @@
         }
         .scan-col-chk input[type="checkbox"] {
             width: 12px; height: 12px; cursor: pointer;
-            accent-color: #e94560; vertical-align: middle;
+            accent-color: #ff3c3c; vertical-align: middle;
             filter: grayscale(0.5) brightness(0.8);
         }
         .scan-body {
@@ -516,7 +523,7 @@
         }
         .scan-loading .spinner {
             display: inline-block; width: 20px; height: 20px;
-            border: 2px solid #0f3460; border-top-color: #e94560;
+            border: 2px solid #0f3460; border-top-color: #ff3c3c;
             border-radius: 50%; animation: spin 0.8s linear infinite;
             margin-bottom: 8px;
         }
@@ -526,7 +533,11 @@
             background: rgba(15, 52, 96, 0.3); border-radius: 4px;
             color: #a8b2d1; font-size: 11px;
         }
-        .scan-summary b { color: #e94560; }
+        /* 汇总行里的计数用**只变色不加粗**的 span。原先是 <b>，浏览器给 700 —— 面板里
+           唯一还在用粗体的地方（9px 标签 + 11px 汇总数字 + 13px 标题全都靠字重硬撑，
+           小字号下粗体笔画糊成一块，反而比常规更难读）。类名 scan-num 而不是继续用
+           b 选择器：字重归零之后 <b> 没有任何优势，留个语义空壳只会让人以为还要加粗。 */
+        .scan-summary .scan-num { color: #ff3c3c; }
         /* 行内列间空隙的**唯一来源**：gap。各列一律不再写 padding-left/right ——
            否则"列间距 = gap + 列内距"两处叠加，6 列行与 8 列行的视觉空隙就不一样
            （这轮修的正是这个：原先 freq 6px / code 4px / mv 2px / ma 4px / ann 4px，
@@ -550,7 +561,7 @@
         }
         .scan-col-freq {
             flex: 0.45 1 0 !important; min-width: 30px !important;
-            text-align: left !important; color: #e94560 !important;
+            text-align: left !important; color: #ff3c3c !important;
             font-size: 11px !important; white-space: nowrap !important;
         }
         /* 代码列 min-width 68：code 契约固定为 market(2 字符) + 代码(≤6 字符)，最长
@@ -575,8 +586,23 @@
             text-align: left !important; color: #8892b0 !important;
             font-size: 11px !important; white-space: nowrap !important;
         }
-        .scan-col-ma.warn {
-            color: #e94560 !important; font-weight: 600 !important;
+        /* 跌破 120 日均线（↓）用**面板内的下行色** —— 与卖点标签
+           `.scan-bsp-tag.sell` / `.scan-tag-down` 同一个青，含义也同一个（向下）。
+           原先是 #e94560，那是面板的强调红：在扫描面板里同时被周期列（日K）、
+           面板标题、计数标签复用，等于「中性信息」和「看空信号」一个色，同一行
+           里 `日K` 与 `↓68.42` 无从区分。
+           取色**与副图 MACD 跌柱逐字同源** `rgba(0, 240, 240, 0.6)`
+           （app.js `COLORS.macdDown`）—— 不透明的 #00F0F0 在同一深底上比红
+           亮 2.7 倍，红青失衡；0.6 alpha 在面板底 #16213e 上合成 #099da9，
+           感知亮度 0.27 ≈ 红的 0.25，两侧对等。字重与其余列同为常规，
+           方向只由箭头 + 颜色表达。
+           注：面板的强调红此后也收敛到 MACD 涨柱的 RGB（见 `.scan-title`），
+           全面板只剩「红 #ff3c3c / 青 rgba(0,240,240,.6)」这一对方向色。
+           `.scan-col-mv.low`（流通市值 < 50 亿）**共用这一条规则**，不另写色值：
+           两处含义都是「低于某条线」，同一个青才不会读成两种信号，改色也只改这里。 */
+        .scan-col-ma.down,
+        .scan-col-mv.low {
+            color: rgba(0, 240, 240, 0.6) !important;
         }
         /* 回测扫描结果列：笔数 + 期望值(%/笔)。
            期望值列右对齐 + tabular-nums —— 比例字体下 "3.21%" 与 "11.05%"
@@ -589,7 +615,7 @@
         .scan-col-expect {
             flex: 0.78 1 0 !important; min-width: 52px !important;
             text-align: right !important; font-size: 11px !important;
-            font-weight: 600 !important; white-space: nowrap !important;
+            white-space: nowrap !important;
             font-variant-numeric: tabular-nums !important;
         }
         .scan-col-ann {
@@ -622,25 +648,27 @@
         .scan-bsp-tag {
             display: inline-block !important;
             padding: 1px 3px !important; border-radius: 3px !important;
-            font-size: 9px !important; font-weight: 600 !important;
+            font-size: 9px !important;
             white-space: nowrap !important; flex-shrink: 0 !important;
             line-height: 1.2 !important;
         }
-        .scan-bsp-tag.buy { background: rgba(255, 60, 60, 0.25); color: #FF3C3C; }
-        .scan-bsp-tag.sell { background: rgba(0, 240, 240, 0.2); color: #00F0F0; }
+        .scan-bsp-tag.buy { background: rgba(255, 60, 60, 0.25); color: #ff3c3c; }
+        .scan-bsp-tag.sell { background: rgba(0, 240, 240, 0.2); color: rgba(0, 240, 240, 0.6); }
         .scan-bsp-tag.fx-d { background: rgba(255, 120, 120, 0.2); color: #ff7878; }
         .scan-bsp-tag.fx-weak { background: rgba(180, 180, 180, 0.2); color: #b0b0b0; }
         .scan-bsp-tag.fx-strong { background: rgba(255, 165, 0, 0.2); color: #ffa500; }
-        .scan-bsp-tag.fx-strongest { background: rgba(255, 68, 68, 0.3); color: #ff4444; font-weight: 600; }
+        .scan-bsp-tag.fx-strongest { background: rgba(255, 68, 68, 0.3); color: #ff3c3c; }
         /* 方向语义标签（红 = 涨/强，青 = 跌/弱）。原类名 fl-rise / fl-fall 是
            "放量-阳线/阴线" 的缩写，后来被连涨与 RSI 超买/超卖原样复用 —— 一个
            颜色类名同时代表三件事，改放量标签的配色会顺手改掉另两个模式。
-           改成语义名后，任何一处取色都只表达"方向"，各模式各自决定用哪个方向。 */
-        .scan-bsp-tag.scan-tag-up { background: rgba(255, 60, 60, 0.25); color: #FF3C3C; font-weight: 600; }
-        .scan-bsp-tag.scan-tag-down { background: rgba(0, 240, 240, 0.2); color: #00F0F0; font-weight: 600; }
+           改成语义名后，任何一处取色都只表达"方向"，各模式各自决定用哪个方向。
+           青与 MACD 跌柱同源（COLORS.macdDown），红保持 COLORS.up 实色 —— 半透明
+           青正好把两者的感知亮度拉平（见 `.scan-col-ma.down` 的注释）。 */
+        .scan-bsp-tag.scan-tag-up { background: rgba(255, 60, 60, 0.25); color: #ff3c3c; }
+        .scan-bsp-tag.scan-tag-down { background: rgba(0, 240, 240, 0.2); color: rgba(0, 240, 240, 0.6); }
         .scan-bsp-tag.scan-bsp-more { background: rgba(255,255,255,0.1); color: #8892b0; font-weight: 400; }
         /* 均线分类标签：类0(最强,红) → 类8(最弱,绿) */
-        .scan-bsp-tag.ma-cat0 { background: rgba(244, 67, 54, 0.25); color: #F44336; font-weight: 600; }
+        .scan-bsp-tag.ma-cat0 { background: rgba(244, 67, 54, 0.25); color: #ff3c3c; }
         .scan-bsp-tag.ma-cat1 { background: rgba(255, 87, 34, 0.22); color: #FF5722; }
         .scan-bsp-tag.ma-cat2 { background: rgba(255, 152, 0, 0.2); color: #FF9800; }
         .scan-bsp-tag.ma-cat3 { background: rgba(255, 193, 7, 0.2); color: #FFC107; }
@@ -648,7 +676,7 @@
         .scan-bsp-tag.ma-cat5 { background: rgba(198, 255, 0, 0.2); color: #C6FF00; }
         .scan-bsp-tag.ma-cat6 { background: rgba(118, 255, 3, 0.2); color: #76FF03; }
         .scan-bsp-tag.ma-cat7 { background: rgba(0, 230, 118, 0.22); color: #00E676; }
-        .scan-bsp-tag.ma-cat8 { background: rgba(0, 200, 83, 0.25); color: #00C853; font-weight: 600; }
+        .scan-bsp-tag.ma-cat8 { background: rgba(0, 200, 83, 0.25); color: #00C853; }
         .scan-no-result {
             text-align: center; color: #555; padding: 30px 0; font-size: 12px;
         }

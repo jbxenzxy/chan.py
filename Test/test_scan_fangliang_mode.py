@@ -367,6 +367,7 @@ def part3():
                + _extract_any_fn(appjs, "_fangliangCaliberHtml") + "\n"
                + _extract_any_fn(appjs, "renderFangliangScanResults") + "\n"
                + _extract_any_fn(appjs, "_fmtFloatMc") + "\n"
+               + _extract_any_fn(appjs, "buildFloatMcHtml") + "\n"
                + _extract_any_fn(appjs, "_scanRowHtml") + "\n"
                + _extract_any_fn(appjs, "buildMa120Html") + "\n"
                + _extract_any_fn(appjs, "_scanSummaryLine") + "\n"

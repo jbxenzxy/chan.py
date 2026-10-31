@@ -1041,6 +1041,11 @@ class Scanner:
                     "ma_category": ma_category,
                     "last_close": round(last_close, 2),
                     "freq": freq,
+                    # 本模式**不是**「命中才 return」的形态（分类值 -1 也照样返回，
+                    # 由前端 classify 判 >=0 才入列），所以当初统计「6 个命中 return
+                    # 带 ma120」时把它漏了 —— 面板第四列于是恒为 `--`。跨模式展示列
+                    # 与命中与否无关：只要这一行会上屏，就必须给全字段。
+                    **ma120_fields,
                 }
                 if ma_category > 3:
                     mkt, cd = _m._get_market_code(qualified_code)

@@ -159,10 +159,13 @@ def part1(appjs):
         check("node 不在位，前端契约层 SKIP", True)
         return
 
+    # 汇总行数字的形态：`<span class="scan-num">N</span>`（只变色、不加粗）。
+    #   2026-10-31 起 `<b>` 全下线 —— 它默认 700，面板里一律常规字重。
+    SN = '<span class="scan-num">%d</span>'
     four = kv["FOUR"]
     check("①a 四市场各 1 只 ⇒ 四条摘要齐全",
-          all(("上海 <b>1</b> 只" in four, "深圳 <b>1</b> 只" in four,
-               "北京 <b>1</b> 只" in four, "香港 <b>1</b> 只" in four)), four)
+          all(("上海 " + SN % 1 + " 只" in four, "深圳 " + SN % 1 + " 只" in four,
+               "北京 " + SN % 1 + " 只" in four, "香港 " + SN % 1 + " 只" in four)), four)
     # 用 find（而非 index）+ 显式 -1 检查：摘要为空时必须**报红**而不是抛 ValueError
     #   —— 抛异常会让后续断言全被跳过（变异自证时实测到过这个坑）。
     o = [four.find(x) for x in ("上海", "深圳", "北京", "香港")]
@@ -173,18 +176,19 @@ def part1(appjs):
 
     mix = kv["MIX"]
     check("①d 混合计数：sh×2 + sz×1 ⇒ 「上海 2 只，深圳 1 只」，且**不含**北京/香港",
-          "上海 <b>2</b> 只" in mix and "深圳 <b>1</b> 只" in mix
+          "上海 " + SN % 2 + " 只" in mix and "深圳 " + SN % 1 + " 只" in mix
           and "北京" not in mix and "香港" not in mix, mix)
     check("①e 市场之间用全角逗号「，」连接（与仓库中文文案一致）",
           "，" in mix and "," not in mix, mix)
 
     check("①f 只深市 ⇒ 仅一条（不输出 0 只的市场）",
-          kv["ONLY_SZ"].count("<b>") == 1 and "深圳 <b>1</b> 只" in kv["ONLY_SZ"],
+          kv["ONLY_SZ"].count('class="scan-num"') == 1
+          and "深圳 " + SN % 1 + " 只" in kv["ONLY_SZ"],
           kv["ONLY_SZ"])
     check("①g 港股指数 `hkHSTECH`（market 前缀港 hk）计入香港",
-          "香港 <b>1</b> 只" in kv["HKIDX"], kv["HKIDX"])
+          "香港 " + SN % 1 + " 只" in kv["HKIDX"], kv["HKIDX"])
     check("①h 大写输入 `SH600519` 同样计入（toUpperCase 容错）",
-          "上海 <b>2</b> 只" in kv["UPPER"] and "深圳 <b>1</b> 只" in kv["UPPER"],
+          "上海 " + SN % 2 + " 只" in kv["UPPER"] and "深圳 " + SN % 1 + " 只" in kv["UPPER"],
           kv["UPPER"])
 
     check("①i 无匹配前缀（ds 指数 / 期货 / 裸数字）⇒ 返回**空串**（不留空 div）",
@@ -209,9 +213,10 @@ def part3(appjs):
         check("node 不在位，跨语言契约层 SKIP", True)
         return
     html = kv["REAL"]
+    SN = '<span class="scan-num">%d</span>'
     check("③b 后端每个 market 取值构造的 code 都能被前端统计（4 个市场各 1 只）",
-          all(("上海 <b>1</b> 只" in html, "深圳 <b>1</b> 只" in html,
-               "北京 <b>1</b> 只" in html, "香港 <b>1</b> 只" in html)), html)
+          all(("上海 " + SN % 1 + " 只" in html, "深圳 " + SN % 1 + " 只" in html,
+               "北京 " + SN % 1 + " 只" in html, "香港 " + SN % 1 + " 只" in html)), html)
 
     # 反向：不在 _PREFIX_MAP 里的前缀不得被误统计
     kv2 = _run_node(appjs, [("EXTRA", _call("ds932000", "fu000001", "zz000001"))])

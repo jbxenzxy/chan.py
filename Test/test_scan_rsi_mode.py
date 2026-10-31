@@ -511,7 +511,7 @@ def part3():
                + "\n".join(_extract_any_fn(appjs, n) for n in
                            ("_rsiGroupOf", "buildRsiTagHtml", "_rsiCaliberHtml",
                             "_renderRsiRows", "renderRsiScanResults",
-                            "_fmtFloatMc", "_scanRowHtml", "_scanSummaryLine",
+                            "_fmtFloatMc", "buildFloatMcHtml", "_scanRowHtml", "_scanSummaryLine",
                             "buildMa120Html", "_scanPanelHtml", "_paintScanFinal")) + "\n"
                + driver)
 
@@ -603,8 +603,9 @@ def part3():
           rows_html[:200])
 
     fin = json.loads(kv["FIN"])
-    check("③ 终态：摘要按**组**计数「超卖 4 只，超买 2 只」",
-          "\u8d85\u5356 <b>4</b> \u53ea" in fin and "\u8d85\u4e70 <b>2</b> \u53ea" in fin,
+    check("③ 终态：摘要按**组**计数「超卖 4 只，超买 2 只」（数字走 scan-num，不加粗）",
+          "\u8d85\u5356 <span class=\"scan-num\">4</span> \u53ea" in fin
+          and "\u8d85\u4e70 <span class=\"scan-num\">2</span> \u53ea" in fin,
           fin[:400])
     check("③ 终态：含披露行 + 6 行数据行",
           _CAL_MARK in fin and fin.count("scan-stock-row") == 6, fin[:300])

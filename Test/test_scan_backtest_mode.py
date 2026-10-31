@@ -346,6 +346,17 @@ def _extract_any_fn(appjs, fn_name):
     raise AssertionError("app.js 花括号不配平: " + fn_name)
 
 
+def _extract_colors(appjs):
+    """抽 app.js 的 `COLORS` 常量块（`_btCol` 的正负两色都引用它）。
+
+    必须在 harness 里跑**真值**，不能在测试里另抄一份颜色 —— 本轮断言的正是
+    「面板跌色 == COLORS.macdDown」，抄一份就等于自己跟自己比。
+    """
+    m = re.search(r"const COLORS = \{.*?\n        \};", appjs, re.S)
+    assert m, "app.js COLORS 抽取失败"
+    return m.group(0).replace("const COLORS", "var COLORS", 1) + "\n"
+
+
 
 
 def _title_row(appjs, mode, name):
@@ -455,7 +466,7 @@ def part5():
         "  b: html.indexOf('<chk:sz000002:0>') >= 0 }));\n"
         "out.push('COLOR=' + JSON.stringify({\n"
         "  posRed: _rowHtml('sz000001').indexOf('#FF3C3C') >= 0,\n"
-        "  negGreen: _rowHtml('sz000003').indexOf('#00F0F0') >= 0,\n"
+        "  negGreen: _rowHtml('sz000003').indexOf('rgba(0,240,240,0.6)') >= 0,\n"
         "  naGrey: _rowHtml('sz000002').indexOf('#8b93a7') >= 0,\n"
         "  posTxt: _rowHtml('sz000001').indexOf('3.25%') >= 0,\n"
         "  negTxt: _rowHtml('sz000003').indexOf('-1.50%') >= 0,\n"
@@ -478,9 +489,9 @@ def part5():
         "var F = _fin();\n"
         "out.push('FIN=' + JSON.stringify({\n"
         "  html: F,\n"
-        "  cnt: F.indexOf('有成交 <b>4</b> 只') >= 0,\n"
-        "  pos: F.indexOf('期望 > 0 <b>2</b> 只') >= 0,\n"
-        "  skip: F.indexOf('跳过 <b>7</b> 只') >= 0,\n"
+        "  cnt: F.indexOf('有成交 <span class=\"scan-num\">4</span> 只') >= 0,\n"
+        "  pos: F.indexOf('期望 > 0 <span class=\"scan-num\">2</span> 只') >= 0,\n"
+        "  skip: F.indexOf('跳过 <span class=\"scan-num\">7</span> 只') >= 0,\n"
         "  caliber: F.indexOf('区间：最新 500 根（截至 2026-10-01）') >= 0,\n"
         "  bsp: F.indexOf('买卖点类型：全部（未启用过滤）') >= 0 }));\n"
         "document.getElementById('scan-body').innerHTML = '';\n"
@@ -492,6 +503,7 @@ def part5():
     )
 
     harness = (prelude
+               + _extract_colors(appjs)
                + _extract_any_fn(appjs, "updateScanRecentDisabled") + "\n"
                + _extract_any_fn(appjs, "_scanSourceLabel") + "\n"
                + _extract_any_fn(appjs, "_btBspTypes") + "\n"
@@ -504,6 +516,7 @@ def part5():
                + _extract_any_fn(appjs, "renderBacktestScanResults") + "\n"
                + _extract_any_fn(appjs, "_btCaliberHtml") + "\n"
                + _extract_any_fn(appjs, "_fmtFloatMc") + "\n"
+               + _extract_any_fn(appjs, "buildFloatMcHtml") + "\n"
                + _extract_any_fn(appjs, "_scanRowHtml") + "\n"
                + _extract_any_fn(appjs, "buildMa120Html") + "\n"
                + _extract_any_fn(appjs, "_scanSummaryLine") + "\n"
@@ -557,7 +570,7 @@ def part5():
     check("⑤b 默认勾选：仅期望值 > 0 的两只（null / 负期望不勾）",
           chk["a"] and chk["d"] and chk["c"] and chk["b"], chk)
     color = json.loads(kv["COLOR"])
-    check("⑤b 涨红跌绿（正值 #FF3C3C / 负值 #00F0F0 / 无值灰 #8b93a7）",
+    check("⑤b 涨红跌青（正值 #FF3C3C / 负值 rgba(0,240,240,0.6)=COLORS.macdDown / 无值灰 #8b93a7）",
           color["posRed"] and color["negGreen"] and color["naGrey"], color)
     check("⑤b 数值格式：正 3.25% / 负 -1.50% / 无值 — / 笔数「10 笔」",
           color["posTxt"] and color["negTxt"] and color["naTxt"]

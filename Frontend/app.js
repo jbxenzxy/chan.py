@@ -6200,7 +6200,9 @@
             if (box) box.innerHTML = html;
         }
 
-        function _btCol(x) { return Number(x) >= 0 ? "#FF3C3C" : "#00F0F0"; }   // 涨红跌绿（与统计面板同款）
+        // 涨红跌青：正负两色**直接引用副图常量**（COLORS.up / COLORS.macdDown），
+        //   不写字面量 —— 面板里同屏就有 MACD 柱，两处一旦各写一份，改一处就漂移。
+        function _btCol(x) { return Number(x) >= 0 ? COLORS.up : COLORS.macdDown; }
         // `_btNA`（指数页「不适用」徽章）已随 2026-10-06「指数当个股」拍板删除：
         //   字段与个股完全一致地下发与渲染，不再有任何「不适用」分流；指数的假设
         //   由口径披露行说明（前端横幅 + Report.caliber_lines；面板底部 disclosures 不追加）。
@@ -6840,11 +6842,14 @@
         }
 
         // 生成120均线列HTML
+        //   类名用 `down`（跌破）而非原来的 `warn`：颜色已改为面板的下行青，
+        //   名字若还叫 warn，后来人会以为它是"警示色"而去调黄/调红。
+        //   `↑` 站上 = 无附加类（`.scan-col-ma` 的默认灰），强调只给 ↓ 一侧。
         function buildMa120Html(data) {
             if (data.below_ma120 === undefined || data.ma120_val === undefined) return '<span class="scan-col-ma">--</span>';
             if (data.ma120_val === 0) return '<span class="scan-col-ma">--</span>';
             if (data.below_ma120) {
-                return '<span class="scan-col-ma warn">↓' + data.ma120_val + '</span>';
+                return '<span class="scan-col-ma down">↓' + data.ma120_val + '</span>';
             } else {
                 return '<span class="scan-col-ma">↑' + data.ma120_val + '</span>';
             }
@@ -7197,12 +7202,43 @@
         //   → `--`（不写 0，0 是"真的很小"与"没取到"分不开）。
         //   取整规则：>=100 亿取整（5 位以上小数没意义），<100 保留 1 位（30.5 亿），
         //   整数不带 `.0` —— 于是 30.0 显示 `30亿`、30.5 显示 `30.5亿`。
+        // 流通市值列（第 3 列）：一律**四舍五入到整数**，不出现小数点。
+        //   原先是「>=100 亿取整、<100 亿保留 1 位」，但本列字号 11px、列宽只够
+        //   4~5 个字符 —— `83.4亿` 里那个点几乎看不见，极易被读成 `834亿`（差 10 倍）。
+        //   小数位在这个尺寸下是负收益：既读不出，又占宽度，还可能看错量级。
+        //   0 < 市值 < 1 亿（4000 万这类）取整会变成 `0亿`，那会被误读成"没取到"，
+        //   故单列一档 `<1亿`：与缺值的 `--` 语义必须分开。
         function _fmtFloatMc(v) {
             if (v === null || v === undefined || v === "") return "--";
             var n = Number(v);
             if (!isFinite(n) || n <= 0) return "--";
-            n = (n >= 100) ? Math.round(n) : (Math.round(n * 10) / 10);
-            return String(n).replace(/\.0$/, "") + "亿";
+            n = Math.round(n);
+            return (n < 1 ? "<1亿" : n + "亿");
+        }
+
+        // 流通市值列的 HTML（列内唯一构造点）。
+        //   ↓ 的语义与第四列 120 日均线一致：「低于某条线」—— 那边是 120 日线，
+        //   这边是 50 亿。同一个青（CSS 里两条选择器共用一条 color 规则）+
+        //   同一个箭头，读者不需要再学第二套记号。
+        //   缺值 `--` 不加箭头不着色：没有数，就谈不上"低"。
+        //   分界值写在这里（函数内常量）而不是模块级 `var`：这样这段逻辑没有外部
+        //   依赖，测试/样图脚本抽这一个函数就能跑，不必连带注入一个全局变量。
+        //   50 与扫描前置过滤的默认阈值（AppConfig SCAN_MIN_FLOAT_MC）同值，但
+        //   **故意不共享**：那是可配置的业务过滤，把显示颜色挂在它上面，用户把
+        //   阈值调成 200 亿时整个市值列会一起变青。这里是展示口径。
+        function buildFloatMcHtml(v) {
+            var LOW_YI = 50;
+            var t = _fmtFloatMc(v);
+            var n = Number(v);
+            if (t === "--" || !isFinite(n) || n <= 0) {
+                return '<span class="scan-col-mv">' + t + '</span>';
+            }
+            // 判据用**显示值**（四舍五入之后）：49.6 亿显示成 `50亿`，若还加 ↓
+            //   就成了「↓50亿」—— 箭头说"低于 50"，数字写着 50，自相矛盾。
+            if (Math.round(n) >= LOW_YI) {
+                return '<span class="scan-col-mv">' + t + '</span>';
+            }
+            return '<span class="scan-col-mv low">↓' + t + '</span>';
         }
 
         // 单行渲染 —— 8 个模式的**唯一**行构造函数。
@@ -7220,7 +7256,7 @@
             html += chkBox(code, !!o.checked);
             html += '<span class="scan-col-name">' + statsEsc(r.name || code) + '</span>';
             html += '<span class="scan-col-code">' + code + '</span>';
-            html += '<span class="scan-col-mv">' + _fmtFloatMc(r.float_mc) + '</span>';
+            html += buildFloatMcHtml(r.float_mc);
             // 120 日均线列（↓跌破 / ↑站上）—— 7 个模式的面板都有，**列序固定**
             //   在流通市值之后、模式自有列（周期 / 笔数 / 期望 / 涨幅）之前。
             //   由这里统一输出，各模式不再自己拼：原先只有买卖点自己传
@@ -7292,10 +7328,10 @@
                 else if (mkt === "HK") { hkCount++; }
             }
             var marketParts = [];
-            if (shCount > 0) marketParts.push("上海 <b>" + shCount + "</b> 只");
-            if (szCount > 0) marketParts.push("深圳 <b>" + szCount + "</b> 只");
-            if (bjCount > 0) marketParts.push("北京 <b>" + bjCount + "</b> 只");
-            if (hkCount > 0) marketParts.push("香港 <b>" + hkCount + "</b> 只");
+            if (shCount > 0) marketParts.push("上海 <span class=\"scan-num\">" + shCount + "</span> 只");
+            if (szCount > 0) marketParts.push("深圳 <span class=\"scan-num\">" + szCount + "</span> 只");
+            if (bjCount > 0) marketParts.push("北京 <span class=\"scan-num\">" + bjCount + "</span> 只");
+            if (hkCount > 0) marketParts.push("香港 <span class=\"scan-num\">" + hkCount + "</span> 只");
             // 无匹配市场（ds 指数 / 期货代码 / 无前缀裸数字）时不留空 div —— 免得白撑 8px 空白。
             if (marketParts.length === 0) { return ""; }
             return '<div class="scan-summary" style="margin-top:8px;">' + marketParts.join("，") + '</div>';
@@ -7344,7 +7380,7 @@
                         };
                     });
                     var freqLabelMap = {"d": "日K", "w": "周K", "30m": "30分", "15m": "15分", "5m": "5分", "60m": "60分", "1m": "1分", "15s": "15秒"};
-                    var head = '<div class="scan-summary">全周期 标注 <b>' + rows.length + '</b> 只</div>';
+                    var head = '<div class="scan-summary">全周期 标注 <span class="scan-num">' + rows.length + '</span> 只</div>';
                     var caliber = '<div class="scan-summary" style="font-size:10px;color:#7a8399;">'
                         + '查全周期标注库 · 与当前周期、扫描来源无关 · 行内文字 = 距今天最近的一条标注</div>';
                     var rowsHtml = rows.map(function(r) {
@@ -7406,7 +7442,7 @@
                                 _setScanRunning(false);
                                 btn.classList.remove("active");
                                 body.innerHTML = '<div class="scan-no-result" style="text-align:center;padding:20px;">' +
-                                    '<div style="font-size:14px;color:#e94560;margin-bottom:12px;">&#9888; ' + scanStartData.msg + '</div>' +
+                                    '<div style="font-size:14px;color:#ff3c3c;margin-bottom:12px;">&#9888; ' + scanStartData.msg + '</div>' +
                                     '<button class="btn" onclick="refreshStockNames();closeScanPanel();" style="margin-top:8px;">立即刷新</button>' +
                                     '</div>';
                                 return null;
@@ -7484,7 +7520,12 @@
                             if (data.skipped) { skipped++; }
                             else if (data.error) { skipped++; }
                             else if (spec.classify(data)) {
-                                results.push(spec.normalize ? spec.normalize(data) : data);
+                                // 响应**原样**入列：行字段由后端 scan_one 单点给全
+                                //   （含 float_mc / below_ma120 / ma120_val），前端
+                                //   不得再加"字段白名单"—— 8 个模式里只有均线加过，
+                                //   于是它连漏两列（市值、120 日均线）。列要什么字段，
+                                //   由 `_scanRowHtml` 决定，不在收数处裁剪。
+                                results.push(data);
                             }
                             updatePanel();
                         }, function(err, interrupted) {
@@ -7559,12 +7600,12 @@
                         return '<div class="scan-loading"><div class="spinner"></div><br>正在扫描 ' + (completed + "/" + total) + '，跳过 ' + (preSkipped + skipped) + ' 只，命中 ' + results.length + ' 只</div>';
                     },
                     classify: function(data) { return data.ma_category !== undefined && data.ma_category >= 0; },
-                    normalize: function(data) {
-                        // float_mc 必须一并带上：本模式是唯一做行白名单的模式，
-                        // 漏一个字段就等于该模式少一列（新加列时最容易漏这里）。
-                        return { code: data.code, name: data.name, ma_category: data.ma_category,
-                                 last_close: data.last_close, float_mc: data.float_mc };
-                    },
+                    // 本模式曾有一份**字段白名单**（normalize），逐字抄 code/name/
+                    //   ma_category/last_close/float_mc 五个字段。它已经连漏两列：
+                    //   加流通市值列时漏 float_mc；加 120 日均线列时漏 below_ma120 /
+                    //   ma120_val ⇒ 这一列在均线面板里恒为 `--`（用户察觉"第四列
+                    //   没有任何显示"）。后端 resp 本来就只有这么几个展示字段，抄
+                    //   一遍白名单零收益、漏一项就少一列，故整份删除、响应原样入列。
                     renderRows: _renderMaRows,
                     caliber: _maCaliberHtml,
                     emptyText: "当前周期下未发现均线分类结果",
@@ -7789,9 +7830,9 @@
         //   现在：行由 `_renderXxxRows` 出（进度/终态同一份），块序由 `_scanPanelHtml` 定。
         function _scanSummaryLine(countsHtml, total, skipped, interrupted) {
             var label = interrupted ? "（已中断）" : "";
-            return '<div class="scan-summary">' + _scanSourceLabel() + ' <b>' + total
-                + '</b> 只，跳过 <b>' + skipped + '</b> 只，扫描 <b>' + (total - skipped)
-                + '</b> 只' + (countsHtml ? '，' + countsHtml : '') + label + '</div>';
+            return '<div class="scan-summary">' + _scanSourceLabel() + ' <span class="scan-num">' + total
+                + '</span> 只，跳过 <span class="scan-num">' + skipped + '</span> 只，扫描 <span class="scan-num">' + (total - skipped)
+                + '</span> 只' + (countsHtml ? '，' + countsHtml : '') + label + '</div>';
         }
 
         // 终态写面板（6 个模式共用）。rowsFn / caliber 按**函数**传入，保证与
@@ -7837,7 +7878,7 @@
             for (var i = 0; i < results.length; i++) {
                 if (isLatestBspBuy(results[i])) { buyCount++; } else { sellCount++; }
             }
-            _paintScanFinal('买点 <b>' + buyCount + '</b> 只，卖点 <b>' + sellCount + '</b> 只',
+            _paintScanFinal('买点 <span class="scan-num">' + buyCount + '</span> 只，卖点 <span class="scan-num">' + sellCount + '</span> 只',
                 _bspCaliberHtml(), results, _renderBspRows,
                 "当前周期下未发现买卖点股票", total, skipped, interrupted);
         }
@@ -7868,7 +7909,7 @@
                 else if (s === 1) { strong++; }
                 else { weak++; }
             }
-            _paintScanFinal('底分型 <b>' + results.length + '</b> 只（' + strongest + ' / '
+            _paintScanFinal('底分型 <span class="scan-num">' + results.length + '</span> 只（' + strongest + ' / '
                 + strong + ' / ' + weak + '）',
                 _fxdCaliberHtml(), results, _renderFxDRows,
                 "当前周期下未发现底分型股票", total, skipped, interrupted);
@@ -7905,7 +7946,7 @@
             }
             var catParts = [];
             for (var cat = 0; cat <= 8; cat++) {
-                if (catCounts[cat]) { catParts.push("类" + cat + " <b>" + catCounts[cat] + "</b> 只"); }
+                if (catCounts[cat]) { catParts.push("类" + cat + " <span class=\"scan-num\">" + catCounts[cat] + "</span> 只"); }
             }
             _paintScanFinal(catParts.length > 0 ? catParts.join("，") : "无",
                 _maCaliberHtml(), results, _renderMaRows,
@@ -7963,7 +8004,7 @@
         }
 
         function renderFangliangScanResults(results, total, skipped, interrupted) {
-            _paintScanFinal('放量 <b>' + results.length + '</b> 只',
+            _paintScanFinal('放量 <span class="scan-num">' + results.length + '</span> 只',
                 _fangliangCaliberHtml(), results, _renderFangliangRows,
                 "当前周期下未发现放量标的", total, skipped, interrupted);
         }
@@ -8006,7 +8047,7 @@
         }
 
         function renderLianzhangScanResults(results, total, skipped, interrupted) {
-            _paintScanFinal('连涨 <b>' + results.length + '</b> 只', _lianzhangCaliberHtml(),
+            _paintScanFinal('连涨 <span class="scan-num">' + results.length + '</span> 只', _lianzhangCaliberHtml(),
                 results, _renderLianzhangRows,
                 "当前周期下未发现连涨标的", total, skipped, interrupted);
         }
@@ -8104,7 +8145,7 @@
                 if (_rsiGroupOf(results[i]) === "under") { underCount++; } else { overCount++; }
             }
             // 空结果同样给披露行（口径不该只在有票时才出现）—— 与放量同约定。
-            _paintScanFinal('超卖 <b>' + underCount + '</b> 只，超买 <b>' + overCount + '</b> 只',
+            _paintScanFinal('超卖 <span class="scan-num">' + underCount + '</span> 只，超买 <span class="scan-num">' + overCount + '</span> 只',
                 _rsiCaliberHtml(results), results, _renderRsiRows,
                 "当前周期下未发现 RSI 超买/超卖标的", total, skipped, interrupted);
         }
@@ -8169,7 +8210,7 @@
                 if (e === null) { naCount++; }
                 else if (e > 0) { posCount++; }
             }
-            var counts = '有成交 <b>' + results.length + '</b> 只（期望 > 0 <b>' + posCount + '</b> 只'
+            var counts = '有成交 <span class="scan-num">' + results.length + '</span> 只（期望 > 0 <span class="scan-num">' + posCount + '</span> 只'
                 + (naCount > 0 ? '，未平仓 ' + naCount + ' 只' : '') + '）';
             _paintScanFinal(counts, _btCaliberHtml(results), results, _renderBacktestRows,
                 "当前周期下没有股票产生成交" + (skipped > 0 ? '（另有 ' + skipped + ' 只被跳过）' : ''),
@@ -8259,21 +8300,21 @@
             fetch("/api/stocks/scan/save/zxg?codes=" + encodeURIComponent(codes.join(",")), { method: "POST" })
             .then(function(r) { return r.json(); })
             .then(function(data) {
-                // 保存结果用与扫描面板汇总行一致的亮度：普通文字 #a8b2d1，高亮数字/状态 #e94560
+                // 保存结果用与扫描面板汇总行一致的色：普通文字 #a8b2d1，高亮数字/状态 #ff3c3c
                 btn.style.opacity = "1";
                 var parts = [];
                 if (data.tdx_saved > 0) {
-                    parts.push("<span style='color:#a8b2d1'>通达信：</span><span style='color:#e94560'>" + data.tdx_saved + "</span><span style='color:#a8b2d1'> 只</span>");
+                    parts.push("<span style='color:#a8b2d1'>通达信：</span><span style='color:#ff3c3c'>" + data.tdx_saved + "</span><span style='color:#a8b2d1'> 只</span>");
                 } else {
-                    parts.push("<span style='color:#a8b2d1'>通达信：</span><span style='color:#e94560'> 已保存</span>");
+                    parts.push("<span style='color:#a8b2d1'>通达信：</span><span style='color:#ff3c3c'> 已保存</span>");
                 }
                 // 同花顺状态：区分成功/已存在/失败/未配置
                 if (data.ths_saved > 0) {
-                    parts.push("<span style='color:#a8b2d1'>同花顺：</span><span style='color:#e94560'>" + data.ths_saved + "</span><span style='color:#a8b2d1'> 只</span>");
+                    parts.push("<span style='color:#a8b2d1'>同花顺：</span><span style='color:#ff3c3c'>" + data.ths_saved + "</span><span style='color:#a8b2d1'> 只</span>");
                 } else if (!data.ths_msg || data.ths_msg === "THS_DIR 未配置") {
                     // 未配置同花顺目录，静默不显示
                 } else if (data.ths_msg === "ok") {
-                    parts.push("<span style='color:#a8b2d1'>同花顺：</span><span style='color:#e94560'> 已保存</span>");
+                    parts.push("<span style='color:#a8b2d1'>同花顺：</span><span style='color:#ff3c3c'> 已保存</span>");
                 } else {
                     parts.push("<span style='color:#a8b2d1'>同花顺：失败</span>");
                     console.warn("[THS] 保存失败:", data.ths_msg);
