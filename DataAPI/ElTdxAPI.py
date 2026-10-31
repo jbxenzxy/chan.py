@@ -29,9 +29,11 @@ PE 单位：倍；流通市值单位：亿元。「按市场 / 标的类型选�
 快照对 hk 不可用），故本模块三个入口一律只服务 sh / sz / bj。港股 PE-TTM
 仍由 DataAPI/TxAPI.py 提供。
 """
+import inspect
 import threading
 import logging
 import time
+import warnings
 
 import pandas as pd
 from datetime import datetime
@@ -154,21 +156,69 @@ def _normalize_xdxr_df(df):
 #     连接失败时 eltdx 内部仍会按 hosts 顺序重连），从根上消除该警告。
 _eltdx_client = None
 _eltdx_client_ready = False
+# 能力探测 / 告警抑制的一次性开关（见 _supports_on_missing、_quiet_eltdx_missing_warnings）
+_ON_MISSING_SUPPORTED = None      # None=未探测，True/False=探测结果
+_MISSING_WARN_QUIET = False
 
 
 def _check_eltdx_api_compat(client):
-    """校验当前 eltdx 是否具备所需的 corporate.capital_changes 接口。
+    """校验当前 eltdx 具备本模块所需的最小接口集（缺一即抛升级指引）。
 
-    若旧版 eltdx（缺少 capital_changes）仍在运行，直接抛 RuntimeError（附升级指引），
-    让用户及时得知接口失效，而不是静默返回空。
+    两代接口都查：
+      - `corporate.capital_changes` —— 前复权必需，3.0.0 起提供；
+      - 批量取数方法的 `on_missing` 关键字 —— 缺票跳过必需，**3.3.2 起提供**。
+        缺它时 `finance_batch(..., on_missing="skip")` 会落成
+        `TypeError: unexpected keyword argument`，提示完全不可读（调用点在
+        lambda 里，栈上根本看不出是版本问题），故在入口提前拦。
+    签名探测结果进程内缓存，热路径（逐票 xdxr）只多一次字典查表级开销。
     """
     corporate = getattr(client, "corporate", None)
     if corporate is None or not hasattr(corporate, "capital_changes"):
         raise RuntimeError(
             "[eltdx 接口不兼容] 前复权所需的 client.corporate.capital_changes 不存在："
-            "当前 eltdx 版本过旧，请升级：pip install -U 'eltdx>=3.0.0'。"
+            "当前 eltdx 版本过旧，请升级：pip install -U 'eltdx>=3.3.2'。"
+        )
+    if not _supports_on_missing(client):
+        raise RuntimeError(
+            "[eltdx 接口不兼容] 批量取数方法缺少 on_missing 关键字（eltdx 3.3.2 起提供）："
+            "旧版本遇到退市 / 停牌票会让整批 80 只一起取数失败。"
+            "请升级：pip install -U 'eltdx>=3.3.2'。"
         )
     return client
+
+
+def _supports_on_missing(client):
+    """批量取数方法是否支持 on_missing（eltdx 3.3.2+）。结果进程内缓存。"""
+    global _ON_MISSING_SUPPORTED
+    if _ON_MISSING_SUPPORTED is None:
+        try:
+            params = inspect.signature(client.quotes.get_snapshots).parameters
+            _ON_MISSING_SUPPORTED = "on_missing" in params
+        except (TypeError, ValueError):
+            _ON_MISSING_SUPPORTED = False
+    return _ON_MISSING_SUPPORTED
+
+
+def _quiet_eltdx_missing_warnings():
+    """把 eltdx 的 `MissingCodesWarning` 压掉，改由 `_log_missing` 记账。
+
+    `on_missing="skip"` 每次命中缺票都 `warnings.warn` 一条，全市场 63 批会刷
+    几十行，内容与 `_log_missing` 完全重复。这里装一条**进程级一次性**过滤器。
+
+    这不是「把问题藏起来」：缺票明细由 `_log_missing` 以 log.info（含代码清单、
+    条数）与 log.warning（整批一只都没回来）打出，信息量不低于原始 warning。
+    用 `filterwarnings` 而不是 `catch_warnings` 是因为后者会在 with 块期间替换
+    全局 filters，多线程下不安全；本函数可能在扫描线程中被调用。
+    """
+    global _MISSING_WARN_QUIET
+    if _MISSING_WARN_QUIET:
+        return
+    try:
+        from eltdx.exceptions import MissingCodesWarning
+    except Exception:
+        return                       # 旧版 eltdx 没有该告警类，无需处理
+    warnings.filterwarnings("ignore", category=MissingCodesWarning)
+    _MISSING_WARN_QUIET = True
 
 
 def _ensure_eltdx_client():
@@ -380,36 +430,23 @@ ELTDX_MARKETS = ("sh", "sz", "bj")
 # 故取 80（与 eltdx helpers 内部同值）。
 STATS_BATCH = 80
 
-# 帧级故障止损阈值：二分过程中**「单只仍失败」的叶子累计达此数且一次成功
-# 都没有** ⇒ 帧级故障**嫌疑**（整批错位等），触发后先做等距取样探测再决定
-# 是否真止损，见 _BISECT_PROBE_POINTS。按叶子（而非失败段）计数是 2026-10-27
-# 修正：二分 DFS 先探右半，毒丸**成簇在尾部**时前 32 次失败全落在毒丸区、好票
-# 段还没轮到，按段计数会把「好票未探索」误判成帧级故障（实测尾部连续 16 只
-# ⇒ 整批 80 只全丢）；叶子计数要求 32 只逐只确认失败，成簇 ≤31 只不再触发。
-# 正常毒丸场景（散布 / 小簇）好票段必然穿插成功请求，同样不触发；实测 80 只
-# 1 颗 13 次、散布 20 颗 ≈104 次、尾部成簇 28 只 62 次，全部零误丢。
-_BISECT_ABORT_FAILURES = 32
-# 止损阈值命中后的**存活探测点数**（2026-10-27 追加）：阈值分不清「整批帧级
-# 故障」与「毒丸成簇在 DFS 探索序首位、好票段还没轮到」。继续沿 DFS 探没用 ——
-# DFS 一路走的都是右半，成簇毒丸恰在右端时探测全耗在毒丸区（实测再给 8 次 DFS
-# 机会仍救不回尾部 40 只）。改为**在整个批上按等距下标取样**逐只请求：连续成簇
-# 的毒丸最多覆盖其中一段，只要有一个采样点落在好票区就能证伪「帧级故障」，随即
-# 恢复完整二分；真帧级故障则每个采样点都失败，白付这几次请求（68→75 次）。
-# 采样点在各次命中间不复用（probe_done），故探测总量上限 = 本常量。
-# 下标由 _probe_indices 生成：把 [0, n-1] 均分且**必含批首批尾**（2026-10-28 修，
-# 原 range(0, n, n//k)[:k] 漏掉末段）。仍属**抽样不是穷举**：好票孤岛窄于步长
-# （n=80/k=8 约 11 只）时可能整段漏采 ⇒ 判帧级故障、最多 48 只记 bad（缺失即
-# 放行，不误杀）；要消除这条只有退回逐只 80 次，代价与收益不成比例，故明确保留。
-_BISECT_PROBE_POINTS = 8
+# 批次整体失败后的补救拆分粒度（见 _salvage_fetch）。取 8 的依据是 eltdx
+# 3.3.2 的库内恢复预算 `_RECOVERY_REQUESTS = 32`（eltdx/api/_batch.py）：库内
+# 定位「哪几只缺失」的代价约 2k·log2(n/k)，8 只小段即使**全缺**也只要 ~16 次，
+# 稳稳落在 32 之内；而 80 只批在缺失过半时必然打满 32 次抛 budget exhausted。
+_SALVAGE_SUBCHUNK = 8
 
 
 def _is_protocol_error(err):
-    """异常是否属于「协议解析失败」——即批次里含坏代码的信号。
+    """异常是否属于「协议解析失败」——即批次载荷层面出问题的信号。
 
-    eltdx 分层：ProtocolError（编码 / 解码失败，数据层面 ⇒ 值得二分定位是哪只）
+    eltdx 分层：ProtocolError（编码 / 解码失败，数据层面 ⇒ 拆段重取有意义）
     vs TransportError（超时 / 断连 / 池忙，网络层面 ⇒ 拆分与重试都无意义，
     逐只重试只会把 1 次超时放大成 80 次）。
-    eltdx 未安装或异常层次变动时按类名兜底，避免把网络故障误判成毒丸。
+    `MissingCodesError` 继承 `ProtocolError`（eltdx/exceptions.py），但本模块
+    一律以 `on_missing="skip"` 调用，缺票不会走到这里；真走上来（例如未来有人
+    改回 `raise`）也会被当作可拆段处理，行为安全。
+    eltdx 未安装或异常层次变动时按类名兜底，避免把网络故障误判成坏代码。
     """
     try:
         from eltdx.exceptions import ProtocolError
@@ -418,155 +455,174 @@ def _is_protocol_error(err):
         return "ProtocolError" in type(err).__name__
 
 
-def _probe_indices(n, points=None):
-    """取样探测用的下标集合：把 [0, n-1] 均分覆盖，**必含首尾**。
+def _salvage_fetch(codes, batch_fn):
+    """整批取数失败后的补救：先按 _SALVAGE_SUBCHUNK 拆段，再对仍失败的段逐只。
 
-    存活探测（见 _BISECT_PROBE_POINTS）要回答的是「整批里还有没有好票」，取样
-    范围就必须是整批。原实现 range(0, n, n//k)[:k] 在 n=80/k=8 时给出
-    0,10,…,70 —— 末段 71~79 一个点都没有，「整批取样」名不副实：一旦 DFS 探索
-    顺序改动（现在右先，末段先被探索，故不表现为误丢），末段即成盲区。
-    本函数改为按 (n-1)/(k-1) 取整均分，n=80/k=8 → 0,11,23,34,45,56,68,79。
+    返回 (rows, bad)，bad 为 [(code, 原因)]。
+    **成功的段直接复用本次响应**，不重复请求 —— 数据在补救过程中就已拿全。
 
-    n <= 1 或 points <= 1 时退化为 [0]：单点取样在 n>1 时永远只覆盖批首，等价于
-    关掉探测，故显式收敛到「探批首一只」而不是散成 1 个随机点。
-    下标去重且升序：n < k 时自然收敛为全量，不会重复请求同一只。
-    """
-    k = _BISECT_PROBE_POINTS if points is None else points
-    if n <= 1 or k <= 1:
-        return [0]
-    return sorted({round(_i * (n - 1) / (k - 1)) for _i in range(k)})
+    为什么不再递归二分（2026-10-31，eltdx 3.3.2 起）：
+      eltdx 3.3.2 把「批次里有票没返回 ⇒ 整批报错」改成了 on_missing 策略。
+      本模块一律传 on_missing="skip"（见 fetch_float_mc 的两个 lambda），缺票由
+      库内**在 32 次请求的预算内**自行定位并返回其余记录，不再抛异常上浮。
+      能逃出库的 ProtocolError 只剩两类（eltdx/api/_batch.py recover_batch）：
+        ① `... recovery request budget exhausted (32)` —— 缺失过密，库内预算不足；
+        ② 载荷异常（invalid record / unexpected or duplicate record /
+           count exceeds request）—— 库内已判为不可自动恢复，直接上抛。
+      旧实现在应用层再递归二分一次，等于给**每个子批重新发放一份 32 次预算**：
+      实测 80 只批的整批故障从 ~90 次请求放大到上千次，单颗坏码也要 100+ 次。
+      改为「拆段 + 逐只」后请求数由结构本身封顶，没有放大路径。
 
+    请求上限：ceil(n/8) + n 次。且**只要有一段成功**，就证明载荷本身可解析、
+    失败是代码相关，才继续逐只；若所有段都失败，判定为与代码无关的整批故障
+    （帧级错位 / 服务端整批不可解析），立刻止损、不逐只 —— 实测整批故障 10 次
+    请求即止（旧实现 76 次应用层调用、wire 上千次）。
 
-def _bisect_fetch(codes, batch_fn):
-    """二分定位「毒丸」代码，返回 (rows, bad)。
-
-    成功的那一段**直接复用本次响应**，不重复请求 —— 数据在定位过程中就已拿全。
-    请求次数：k 颗毒丸约 2k·log2(n/k)；80 只含 1 颗约 13 次（原逐只重试 80 次）。
-
-    止损判据 _BISECT_ABORT_FAILURES：**失败叶子**（单只仍失败）累计达 32 只
-    **且一次成功都没有** ⇒ 帧级故障**嫌疑**。按叶子而非失败段计数：DFS 先探
-    右半，毒丸成簇在尾部时失败段会在好票段被请求前堆满阈值，把「好票未探索」
-    误判成帧级故障（实测尾部连续 16 只 ⇒ 整批全丢）；叶子计数要求逐只确认，
-    成簇 ≤31 只不触发。
-    命中后**不立刻**放弃，先做**等距取样探测**（_BISECT_PROBE_POINTS）：沿 DFS
-    继续探没用 —— DFS 一路走右半，成簇毒丸恰在右端时探测会全耗在毒丸区（实测
-    再给 8 次 DFS 机会仍救不回尾部 40 只）。改为在整批上按等距下标逐只请求
-    （下标含批首批尾，见 _probe_indices），
-    命中任一只好票即证「只是还没轮到」⇒ `successes>0` 让阈值永久失效、恢复
-    完整二分（实测头/中/尾成簇 16~79 只全部零误丢）；采样点全落空才判帧级故障、
-    整段记 bad。
-    正常毒丸场景好票段必然穿插成功、判据不触发（零误丢，代价是最坏仍可到
-    2n−1=160 次——那种批次本来就必须逐段取回）；真帧级故障 75 次请求即止
-    （原 68 次，多付的 7 次是取样探测）。
-
-    非协议类异常（超时 / 断连）不细分：整段记入 bad 立即返回，防止 1 次网络
-    故障被拆成 159 次超时等待。
+    非协议类异常（超时 / 断连）**不拆不逐只**：批一级已重试过 1 次，到这一层再
+    放大只会把 1 次断连变成 n 次等待 —— 与 _chunked_stats_fetch 的批一级口径
+    一致，只把「尚未取到」的代码记 bad 后立即返回。
     """
     rows, bad = [], []
-    stack = [list(codes)]
-    successes = 0
-    leaf_failures = 0
-    probe_done = set()
-    while stack:
-        seg = stack.pop()
+
+    def _transport_bad(exc):
+        done = {_row_code(r) for r in rows}
+        return [(c, f"{type(exc).__name__}: {exc}") for c in codes if c not in done]
+
+    pieces = [codes[i:i + _SALVAGE_SUBCHUNK]
+              for i in range(0, len(codes), _SALVAGE_SUBCHUNK)]
+    failed = []
+    for piece in pieces:
         try:
-            rows.extend(batch_fn(seg))
-            successes += 1
+            rows.extend(batch_fn(piece))
         except Exception as _e:
             if not _is_protocol_error(_e):
-                bad.extend((_c, "传输失败，未细分") for _c in seg)
-                continue
-            if len(seg) == 1:
-                leaf_failures += 1
-                bad.append((seg[0], f"{type(_e).__name__}: {_e}"))
-            else:
-                mid = len(seg) // 2
-                stack.append(seg[:mid])
-                stack.append(seg[mid:])
-            if leaf_failures >= _BISECT_ABORT_FAILURES and successes == 0:
-                # 存活探测（见 _BISECT_PROBE_POINTS 注释）：等距取样逐只请求。
-                # 命中任意一只 ⇒ 好票存在、判据是「还没轮到」而非「帧级故障」，
-                # 加一次 successes 让阈值永久失效，继续正常二分。
-                # 下标把 [0, len-1] 均分覆盖（**含最后一个**）：原实现
-                # range(0, len, len//k)[:k] 在 n=80/k=8 时只到 70，末段 71~79
-                # 永不采样——与「整批取样」的语义不符，且 DFS 改为左先/广度优先
-                # 时末段就成了不可见的盲区（现右先顺序下末段已被 DFS 覆盖，
-                # 故这是隐患而非当前误丢来源）。
-                alive = False
-                for _i in _probe_indices(len(codes)):
-                    if _i in probe_done:
-                        continue
-                    probe_done.add(_i)
-                    try:
-                        rows.extend(batch_fn([codes[_i]]))
-                        alive = True
-                        successes += 1
-                        break
-                    except Exception:
-                        continue
-                if not alive:
-                    bad.extend((_c, f"帧级故障止损（{_BISECT_ABORT_FAILURES} 只叶子协议失败"
-                                    f"且无成功，等距取样 {len(probe_done)} 点仍全失败），"
-                                    "未细分")
-                               for _s in stack for _c in _s)
-                    stack.clear()
+                bad.extend(_transport_bad(_e))
+                return rows, bad
+            failed.append(piece)
+    if not failed:
+        return rows, bad
+    if len(failed) == len(pieces):
+        # 每一段都失败 ⇒ 故障与具体代码无关。逐只重试只会把 1 次故障放大成 n 次。
+        bad.extend((c, "拆段后所有段均失败，判整批故障，未细分") for c in codes)
+        return rows, bad
+    for piece in failed:
+        for code in piece:
+            try:
+                rows.extend(batch_fn([code]))
+            except Exception as _e:
+                if not _is_protocol_error(_e):
+                    bad.extend(_transport_bad(_e))
+                    return rows, bad
+                bad.append((code, f"{type(_e).__name__}: {_e}"))
     return rows, bad
 
 
-def _bisect_or_drop(start, chunk, batch_fn, reason):
-    """对整段失败批次做二分隔离，隔离结果打日志后返回可用 rows。
+def _salvage_or_drop(start, chunk, batch_fn, reason, tag="[eltdx 统计]"):
+    """对整段失败批次做拆段补救，补救结果打日志后返回可用 rows。
 
-    首轮协议失败与「重试后转为协议失败」（首轮超时 + 重试读到错位帧，是同一
-    故障链的相邻两跳，见 eltdx 帧层注释）共用此入口，保证两条路径的分类与
+    首轮协议失败与「重试后转为协议失败」共用此入口，保证两条路径的分类与
     日志口径一致。
     """
-    rows, bad = _bisect_fetch(chunk, batch_fn)
+    rows, bad = _salvage_fetch(chunk, batch_fn)
     if bad:
         preview = "、".join(f"{c}（{why}）" for c, why in bad[:5])
         tail = " …" if len(bad) > 5 else ""
-        log.warning("[eltdx 统计] 批次 %d-%d %s，隔离出 %d 只取数失败代码"
-                    "（无数据 / 传输失败 / 帧级故障止损，原因附后）：%s%s",
-                    start, start + len(chunk), reason, len(bad), preview, tail)
+        log.warning("%s 批次 %d-%d %s，拆段后仍 %d 只取数失败"
+                    "（无数据 / 载荷异常 / 整批故障，原因附后）：%s%s",
+                    tag, start, start + len(chunk), reason, len(bad), preview, tail)
     return rows
 
 
-def _chunked_stats_fetch(full_codes, batch_fn, extract):
+def _row_code(row):
+    """记录对应的 full_code（`sh600000` 这种 8 位形态）。
+
+    两条批量命令的记录都自带 `full_code`（eltdx 的 `recover_batch` 就靠它按请求
+    顺序重组，见 eltdx/api/_batch.py）；`exchange` + `code` 是兜底拼法，防止上游
+    字段改名后 _log_missing 把**整批**误报成「均未返回」。
+    """
+    full_code = getattr(row, "full_code", None)
+    if isinstance(full_code, str):
+        return full_code
+    exchange = getattr(row, "exchange", None)
+    code = getattr(row, "code", None)
+    if isinstance(exchange, str) and isinstance(code, str):
+        return exchange + code
+    return None
+
+
+def _log_missing(tag, start, chunk, rows):
+    """把「请求了但没返回」的代码显式记一笔。
+
+    eltdx 3.3.2 起 `on_missing="skip"` 把缺票从「异常」降级为「少几条记录」，
+    代价是静默丢数据——差集必须由调用方自己还原。缺票本身是常态（退市 /
+    长期停牌 / 当日无行情），记 log.info；**整批一只都没回来**才是服务端异常，
+    记 log.warning。
+
+    tag 带命令标识（0x0010 / 0x054c）：两条命令跑同一批代码，不标就出现两行
+    一模一样的「未返回」，看起来像重复执行，实际是一条命令丢一次。
+    """
+    returned = {_row_code(r) for r in rows}
+    missing = [c for c in chunk if c not in returned]
+    if not missing:
+        return
+    preview = "、".join(missing[:8])
+    tail = f" …（共 {len(missing)} 只）" if len(missing) > 8 else ""
+    if len(missing) == len(chunk):
+        log.warning("%s 批次 %d-%d 整批 %d 只均未返回（服务端异常？）：%s%s",
+                    tag, start, start + len(chunk), len(chunk), preview, tail)
+    else:
+        log.info("%s 批次 %d-%d 服务端未返回 %d/%d 只（退市 / 长期停牌）：%s%s",
+                 tag, start, start + len(chunk), len(missing), len(chunk), preview, tail)
+
+
+def _chunked_stats_fetch(full_codes, batch_fn, extract, label=""):
     """按 STATS_BATCH 分批取数，返回 {full_code: 值}。
 
+    label: 日志用的命令标识（如 "0x0010 股本"）。两条批量命令共用本函数，
+           不标则同批缺票会打出两行完全相同的日志、无法区分是哪条命令丢的。
+
+    缺票语义（2026-10-31，eltdx 3.3.2 起）：batch_fn 一律以 `on_missing="skip"`
+    调用（见 fetch_float_mc 的两个 lambda），服务端没给的代码**不再抛异常**，
+    而是落在返回记录之外。差集由 _log_missing 还原并记账 —— 少了这一步，
+    「跳过」就等于静默丢数据。
+
     单批异常时按异常性质分流，不再一律逐只重试 80 次：
-      - ProtocolError（协议解析失败）⇒ **二分隔离**坏代码，其余照常取到数据。
-        实测 0x054c 快照遇到个别代码（如已退市的 sh601059、北交所 bj920025）会抛
-        "snapshot record marker not found" / "invalid ASCII response code"，且是
-        **整批失败**而非跳过单条 —— 一颗毒丸拖掉整批 80 只。
+      - ProtocolError（载荷层面）⇒ 拆段补救（_salvage_fetch），其余照常取数。
+        3.3.2 之后能上浮的只剩「缺失过密打满库内 32 次预算」与「载荷异常」两类。
       - 其他异常（超时 / 断连 / 池忙）⇒ 整批重试 1 次：仍抛协议错（错位帧）
-        则转入二分，仍是传输错才整批跳过。这类错误逐只重试只会把 1 次超时
+        则转入拆段，仍是传输错才整批跳过。这类错误逐只重试只会把 1 次超时
         放大成 80 次；瞬时抖动重试即可成功（上层已有「本地缓存兜底」，且缓存
         是合并写、缺失即放行，不会误杀）。
     """
+    tag = f"[eltdx 统计][{label}]" if label else "[eltdx 统计]"
     out = {}
     for start in range(0, len(full_codes), STATS_BATCH):
         chunk = full_codes[start:start + STATS_BATCH]
         try:
-            rows = batch_fn(chunk)
+            rows = list(batch_fn(chunk))
         except Exception as _e:
             if not _is_protocol_error(_e):
                 try:
-                    rows = batch_fn(chunk)
+                    rows = list(batch_fn(chunk))
                 except Exception as _retry_err:
                     if not _is_protocol_error(_retry_err):
-                        log.warning("[eltdx 统计] 批次 %d-%d 传输失败（重试 1 次仍失败），整批跳过：%s: %s",
-                                    start, start + len(chunk), type(_retry_err).__name__, _retry_err)
+                        log.warning("%s 批次 %d-%d 传输失败（重试 1 次仍失败），整批跳过：%s: %s",
+                                    tag, start, start + len(chunk),
+                                    type(_retry_err).__name__, _retry_err)
                         continue
-                    log.warning("[eltdx 统计] 批次 %d-%d 重试后转为协议失败（首轮 %s），转入二分",
-                                start, start + len(chunk), type(_e).__name__)
-                    rows = _bisect_or_drop(start, chunk, batch_fn,
-                                           f"重试后转为协议失败（首轮 {type(_e).__name__}）")
+                    log.warning("%s 批次 %d-%d 重试后转为协议失败（首轮 %s），转入拆段补救",
+                                tag, start, start + len(chunk), type(_e).__name__)
+                    rows = _salvage_or_drop(start, chunk, batch_fn,
+                                            f"重试后转为协议失败（首轮 {type(_e).__name__}）",
+                                            tag=tag)
                 else:
-                    log.info("[eltdx 统计] 批次 %d-%d 传输抖动，重试 1 次成功", start, start + len(chunk))
+                    log.info("%s 批次 %d-%d 传输抖动，重试 1 次成功",
+                             tag, start, start + len(chunk))
             else:
-                log.warning("[eltdx 统计] 批次 %d-%d 取数失败，二分隔离坏代码：%s: %s",
-                            start, start + len(chunk), type(_e).__name__, _e)
-                rows = _bisect_or_drop(start, chunk, batch_fn, "取数失败")
+                log.warning("%s 批次 %d-%d 取数失败，拆段补救：%s: %s",
+                            tag, start, start + len(chunk), type(_e).__name__, _e)
+                rows = _salvage_or_drop(start, chunk, batch_fn, "取数失败", tag=tag)
+        _log_missing(tag, start, chunk, rows)
         out.update(extract(rows))
     return out
 
@@ -587,26 +643,48 @@ def _finance_shares_map(records):
 
     流通股本为 0/None 的代码不计入（如部分北交所标的无流通股本，
     市值本就无从计算）——不写 0，交由调用方按「未获取到」统计。
+
+    脏 code 过滤（`_is_code6`）是**廉价兜底，不是主防线**：eltdx 3.3.2 已在
+    协议层校验「市场号 + 六位 ASCII 数字 + 记录必须属于本次请求的代码集合」，
+    正常情况永不命中。一旦命中说明上游校验退化，必须**响**——否则脏记录会以
+    随机键写进结果并顶掉同批真实票的位置（整批数据丢失且无异常）。
     """
     out = {}
+    dirty = []
     for r in records:
         exchange = getattr(r, "exchange", None) or ""
         code = getattr(r, "code", None)
         shares = getattr(r, "circulating_shares", None)
-        if exchange and _is_code6(code) and shares:
-            out[f"{exchange}{code}"] = float(shares)
+        if exchange and _is_code6(code):
+            if shares:
+                out[f"{exchange}{code}"] = float(shares)
+        else:
+            dirty.append(repr(code))
+    if dirty:
+        log.warning("[eltdx 统计] 0x0010 出现 %d 条非法代码记录（eltdx 协议校验退化？"
+                    "已验证 3.3.2 应永不出现），示例：%s", len(dirty), "、".join(dirty[:5]))
     return out
 
 
 def _snapshot_price_map(rows):
-    """0x054c 快照 → {full_code: 最新价(元)}"""
+    """0x054c 快照 → {full_code: 最新价(元)}
+
+    脏 code 过滤口径同 `_finance_shares_map`：3.3.2 协议层已保证「六位数字 +
+    属于请求集合」，此处的 `_is_code6` 只是兜底；命中即告警。
+    """
     out = {}
+    dirty = []
     for r in rows:
         full_code = getattr(r, "full_code", None)
         price = getattr(r, "last_price", None)
-        if (isinstance(full_code, str) and len(full_code) == 8
-                and _is_code6(full_code[2:]) and price):
-            out[full_code] = float(price)
+        if isinstance(full_code, str) and len(full_code) == 8 and _is_code6(full_code[2:]):
+            if price:
+                out[full_code] = float(price)
+        else:
+            dirty.append(repr(full_code))
+    if dirty:
+        log.warning("[eltdx 统计] 0x054c 出现 %d 条非法代码记录（eltdx 协议校验退化？"
+                    "已验证 3.3.2 应永不出现），示例：%s", len(dirty), "、".join(dirty[:5]))
     return out
 
 
@@ -735,6 +813,11 @@ def fetch_float_mc(stock_list):
           StockProfile.circulating_market_value 同源同式；单位由「元」→「亿元」
           （腾讯 [44] 返回亿元且只有两位小数，本路径为原值，精度更高）。
     缺失语义：无股本 / 股本为 0 / 无快照的代码不计入结果，不写 0。
+    缺票语义：两条批量命令都以 `on_missing="skip"` 调用（eltdx 3.3.2 起）。
+          服务端没返回的代码（退市 / 长期停牌 / 当日无行情）**不再让整批报错**，
+          由 _chunked_stats_fetch 记录差集后跳过；默认的 `"raise"` 会让一颗缺票
+          拖掉整批 80 只。**要求 eltdx >= 3.3.2**（`on_missing` 自 3.3.2 起提供，
+          见 `_check_eltdx_api_compat`）。
     """
     _PFX_TO_MKT = {"0": "sz", "1": "sh", "2": "bj"}
     full_codes = []
@@ -751,21 +834,28 @@ def fetch_float_mc(stock_list):
     if client is None:
         raise RuntimeError(
             "[eltdx 不可用] 流通市值取数需要 eltdx，请安装/升级："
-            "pip install -U 'eltdx>=3.0.0'"
+            "pip install -U 'eltdx>=3.3.2'"
         )
+    _check_eltdx_api_compat(client)     # 缺 on_missing() 直接抛升级指引，不落成 TypeError
+    _quiet_eltdx_missing_warnings()     # 缺票改由 _log_missing 记账，见该函数注释
     with client:
-        # 先跑完股本批再取快照批：实测同一连接上「前一个请求失败」会让紧随其后的
-        # 一个请求读到错位响应（invalid ASCII response code）。把股本批放在前面，
-        # 快照批的坏代码隔离就不会牵连股本数据。
+        # 先跑完股本批再取快照批：两批互不依赖，但股本批的失败面更小（财务批
+        # 载荷规整），先跑它可让后续快照批的补救日志只覆盖真正的快照故障。
+        # 注意：这与「前一个请求失败会让下一个请求读到错位响应」无关 —— eltdx
+        # 运行时按 message identity（msg_id + msg_type）配对响应，不匹配的帧归
+        # Push 丢弃（crates/eltdx-runtime/src/slot.rs `on_frame`），不会串包。
         shares = _chunked_stats_fetch(
             full_codes,
-            lambda ch: list(getattr(client.corporate.finance_batch(ch), "records", ()) or ()),
+            lambda ch: list(getattr(client.corporate.finance_batch(ch, on_missing="skip"),
+                                    "records", ()) or ()),
             _finance_shares_map,
+            label="0x0010 股本",
         )
         prices = _chunked_stats_fetch(
             full_codes,
-            lambda ch: list(client.quotes.get_snapshots(ch)),
+            lambda ch: list(client.quotes.get_snapshots(ch, on_missing="skip")),
             _snapshot_price_map,
+            label="0x054c 快照",
         )
 
     result = {}
@@ -832,9 +922,11 @@ def get_shareholder_reduction_plans(market, code):
         reduce_shares, reduce_pct, start, end, progress
     非 A 股（指数 / 港股 / 期货等）、取数失败 → 返回 []。
 
-    网络层：eltdx >= 3.2.0 官方客户端（IPv4-first，见 _fetch_plan_rows）。
-    **硬性要求 eltdx >= 3.2.0**（旧版裸 urlopen 在本机 IPv6 不通时每次卡 8~12s，
-    不做旧版回退——依赖以 requirements 明确，避免双路径难排查）。
+    网络层：eltdx 官方客户端（IPv4-first，见 _fetch_plan_rows）。
+    **F10 的 IPv4-first 自 eltdx 3.2.0 起；本模块整体下界是 3.3.2**
+    （批量接口需要 on_missing，见 requirements.txt / _check_eltdx_api_compat）。
+    旧版裸 urlopen 在本机 IPv6 不通时每次卡 8~12s，不做旧版回退——依赖以
+    requirements 明确，避免双路径难排查。
     """
     if market.lower() not in ('sh', 'sz', 'bj'):
         return []
