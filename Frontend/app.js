@@ -6792,22 +6792,42 @@
             for (var i = 0; i < cbs.length; i++) { cbs[i].checked = false; }
         };
 
+        // 买卖点类型 → 现役主类型分段（0/1/2/3）
+        //   `type` 是引擎 `BSP_TYPE.type2str()` 下发的**逗号复合串**：`BS_Point.type`
+        //   是 list，同一笔同一 K 线位置可合并多个类型（`BuySellPoint/BSPointList.py`
+        //   的 add_bs → add_another_bsp_prop），所以真实取值形如 "1"、"3"、"1,3"、
+        //   "1,11"。去尾部 psab 变体后只留 0/1/2/3 —— 与后端
+        //   `App/AppTPSL.py::_type_hits_0123`、`Trading/Engine/Engine.py::_bsp_type_allowed`
+        //   **同一口径**（11/11p/22/22s/33a/33b 已废弃：默认 bs_type="0,1,2,3" 下不
+        //   产出、不进自动下单、不进统计；它们只会作为复合串的尾巴出现）。
+        //   历史缺陷（2026-10-31 前）：整串与 "0"/"1"/"2"/"3" 全等比较 ⇒ 复合串一律
+        //   判不中，"1,11" 的买点行**标签区全空**、排序还垫底（typeKey=99）。
+        function _bspMainTypes(p) {
+            var segs = String((p && p.type) || "").replace(/\s/g, "").split(",");
+            var out = [];
+            for (var i = 0; i < segs.length; i++) {
+                var t = segs[i].replace(/[psab]+$/, "");
+                if ((t === "0" || t === "1" || t === "2" || t === "3") && out.indexOf(t) < 0) {
+                    out.push(t);
+                }
+            }
+            return out;
+        }
+
         // 生成买卖点标签HTML（最多显示6个，超出显示+N）
+        //   复合串按分量各出一个标签（"1,3" → 两个标签：1 类、3 类）。
         function buildBspTagsHtml(buyPoints, sellPoints) {
             var MAX_TAGS = 6;
             var allTags = [];
-            (buyPoints || []).forEach(function(bp) {
-                var tp = bp.type.replace(/\s/g, "");
-                if (tp === "0" || tp === "1" || tp === "2" || tp === "3") {
-                    allTags.push('<span class="scan-bsp-tag buy">' + bp.type + '</span>');
-                }
-            });
-            (sellPoints || []).forEach(function(sp) {
-                var tp = sp.type.replace(/\s/g, "");
-                if (tp === "0" || tp === "1" || tp === "2" || tp === "3") {
-                    allTags.push('<span class="scan-bsp-tag sell">' + sp.type + '</span>');
-                }
-            });
+            function pushTags(points, side) {
+                (points || []).forEach(function(p) {
+                    _bspMainTypes(p).forEach(function(t) {
+                        allTags.push('<span class="scan-bsp-tag ' + side + '">' + t + '</span>');
+                    });
+                });
+            }
+            pushTags(buyPoints, "buy");
+            pushTags(sellPoints, "sell");
             var html = '<div class="scan-bsp-tags">';
             if (allTags.length <= MAX_TAGS) {
                 html += allTags.join('');
@@ -6834,7 +6854,7 @@
         //   成交额柱：收阳(close>open) → 红柱 #FF3C3C；收阴 → 青绿柱 #00F0F0（见 drawVolume）
         function buildFangliangTagHtml(data) {
             var isRise = !!(data.a_is_rise);
-            var cls = isRise ? "fl-rise" : "fl-fall";
+            var cls = isRise ? "scan-tag-up" : "scan-tag-down";
             return '<span class="scan-bsp-tag ' + cls + '">放量</span>';
         }
 
@@ -6883,27 +6903,38 @@
             doStartScan();
         };
 
+        // 面板标题：**两套风格**（2026-10-31 定案，用户拍板）
+        //   ① 判据里带「最新 N 根」的 4 个模式（放量/连涨/RSI/买-卖点）：
+        //        `周期 · 最新 N 根 · 模式名`  —— N 是判据的一部分，必须上标题，
+        //        否则同一张图换个 N 重扫，标题一模一样、结果不同。
+        //   ② 判据与 N 无关的 3 个模式（均线/底分型/回测）：`周期 · 模式名`
+        //   ③ 标注：查的是全周期标注库、与当前周期无关，**不套上面两套**，保持原文案。
+        // 历史形态（2026-10-31 前）：8 个模式 8 种写法 —— 买/卖点用 innerHTML 拼
+        //   13px/11px 混排，连涨写成 "日K 3连涨"、RSI 写成 "日K 3根RSI"、放量却
+        //   不带 N，均线/底分型/回测各一套。同一块标题区出现 4 种字号与 5 种语序。
+        var _SCAN_TITLE = {
+            bsp:       { name: "买/卖点", window: true },
+            fangliang: { name: "放量",   window: true },
+            lianzhang: { name: "连涨",   window: true },
+            rsi:       { name: "RSI",    window: true },
+            ma:        { name: "均线",   window: false },
+            fx_d:      { name: "底分型", window: false },
+            backtest:  { name: "回测",   window: false }
+        };
+
         function updateScanTitle() {
+            var el = document.getElementById("scan-title");
+            if (_scanMode === "ann") {
+                // 标注扫描：全周期，不显示当前周期
+                el.textContent = "全周期 标注";
+                return;
+            }
             var freqLabels = {"d": "日K", "w": "周K", "30m": "30分", "15m": "15分", "5m": "5分"};
             var freqLabel = freqLabels[_scanFreq] || _scanFreq;
-            if (_scanMode === "bsp") {
-                document.getElementById("scan-title").innerHTML = freqLabel + '<span style="font-size:11px;font-weight:400;color:#a8b2d1">[最近</span><b style="font-size:11px;color:#e94560">' + _scanRecentDays + '</b><span style="font-size:11px;font-weight:400;color:#a8b2d1">根]</span> 买/卖点';
-            } else if (_scanMode === "ma") {
-                document.getElementById("scan-title").textContent = freqLabel + " 均线";
-            } else if (_scanMode === "fangliang") {
-                document.getElementById("scan-title").textContent = freqLabel + " 放量";
-            } else if (_scanMode === "fx_d") {
-                document.getElementById("scan-title").textContent = freqLabel + " 底分型";
-            } else if (_scanMode === "backtest") {
-                document.getElementById("scan-title").textContent = freqLabel + " 回测";
-            } else if (_scanMode === "lianzhang") {
-                document.getElementById("scan-title").textContent = freqLabel + " " + _scanRecentDays + "连涨";
-            } else if (_scanMode === "rsi") {
-                document.getElementById("scan-title").textContent = freqLabel + " " + _scanRecentDays + "根RSI";
-            } else {
-                // 标注扫描：显示全周期，不再显示当前周期
-                document.getElementById("scan-title").textContent = "全周期 标注";
-            }
+            var spec = _SCAN_TITLE[_scanMode] || _SCAN_TITLE.bsp;
+            el.textContent = spec.window
+                ? (freqLabel + " · 最新 " + _scanRecentDays + " 根 · " + spec.name)
+                : (freqLabel + " · " + spec.name);
         }
 
         window.startScanZxg = function() {
@@ -7149,8 +7180,93 @@
         }
 
         // 实际执行扫描（由对话框确认后调用）
-        // 辅助：市场分布摘要（上海/深圳/北京/香港 计数），**全部 6 个扫描模式共用**
-        //   （fx_d / fangliang / bsp / lianzhang / rsi / backtest）。
+        // ══════════════════════════════════════════════════════════════
+        // 扫描面板的两条契约（8 个模式共用；改这里 = 改全部）
+        // ──────────────────────────────────────────────────────────────
+        // ① 列序：[勾选][名称][代码][流通市值][模式专属列…][标签]
+        //    名称/代码/市值三列由 `_scanRowHtml` 统一产出，模式只提供「专属列」与
+        //    「标签」，所以新增一列不必再逐个模式改（历史：这四列曾在 8 个行循环里
+        //    各写一遍，加列漏一处就是某模式少一列）。
+        // ② 块序：头部行（进度/汇总）→ 口径行 → 市场分布行 → 行列表 | 空态
+        //    进度期与终态走同一个 `_scanPanelHtml`，只换头部行。历史：口径行与
+        //    市场分布行在进度期、终态各写一份，放量/底分型/买卖点的市场分布行
+        //    因此**扫完就消失**（两份副本漂移，2026-10-31 前的老毛病）。
+        // ──────────────────────────────────────────────────────────────
+
+        // 流通市值（亿元）→ 展示文本。契约：后端 `float_mc` 单位为亿，缺值/NULL
+        //   → `--`（不写 0，0 是"真的很小"与"没取到"分不开）。
+        //   取整规则：>=100 亿取整（5 位以上小数没意义），<100 保留 1 位（30.5 亿），
+        //   整数不带 `.0` —— 于是 30.0 显示 `30亿`、30.5 显示 `30.5亿`。
+        function _fmtFloatMc(v) {
+            if (v === null || v === undefined || v === "") return "--";
+            var n = Number(v);
+            if (!isFinite(n) || n <= 0) return "--";
+            n = (n >= 100) ? Math.round(n) : (Math.round(n * 10) / 10);
+            return String(n).replace(/\.0$/, "") + "亿";
+        }
+
+        // 单行渲染 —— 8 个模式的**唯一**行构造函数。
+        //   r: 结果行（含 float_mc）；o: {checked, code, freq, title, cols, tags}
+        //   · code/freq 可覆盖：标注模式的 code 形如 sh600519、freq 取该标注的周期；
+        //   · cols 是模式专属列的 HTML 串（市值列之后、标签之前）；
+        //   · 名称按 HTML 转义（复用 statsEsc，全仓只此一份转义器）。
+        function _scanRowHtml(r, o) {
+            o = o || {};
+            var code = (o.code === undefined ? (r.code || "") : o.code);
+            var freq = o.freq || _scanFreq;
+            var title = o.title || "点击查看K线图";
+            var html = '<div class="scan-stock-row" onclick="loadScanResult(\''
+                + code + '\', \'' + freq + '\')" title="' + statsEsc(title) + '">';
+            html += chkBox(code, !!o.checked);
+            html += '<span class="scan-col-name">' + statsEsc(r.name || code) + '</span>';
+            html += '<span class="scan-col-code">' + code + '</span>';
+            html += '<span class="scan-col-mv">' + _fmtFloatMc(r.float_mc) + '</span>';
+            html += (o.cols || "");
+            html += '<span class="scan-col-tags">' + (o.tags || "") + '</span>';
+            html += '</div>';
+            return html;
+        }
+
+        // 面板装配 —— 块序契约的唯一实现（进度期与终态共用）。
+        //   head：头部行（进度期 = scan-loading，终态 = scan-summary）
+        //   caliber：口径披露行（可空串）；rowsHtml：已渲染好的行（空态时忽略）
+        function _scanPanelHtml(head, caliber, results, rowsHtml, emptyText) {
+            var html = head || "";
+            if (caliber) { html += caliber; }
+            html += _scanMarketSummaryHtml(results);
+            html += results.length
+                ? rowsHtml
+                : '<div class="scan-no-result">' + emptyText + '</div>';
+            return html;
+        }
+
+        // 标注行内文字：取**距今天最近**的一条（不是最后一条 —— 后端返回的
+        //   annotations 按写入序而非日期序，补标一条旧日期就会把行内文字换成旧的）。
+        //   返回**全文**，不在 JS 里按字符数截断：`.scan-col-ann` 已有
+        //   `text-overflow: ellipsis`，溢出由排版引擎加省略号；而 JS 侧任何一个固定
+        //   字数上限都只是"我以为"，必然估错 —— 同一列里"止损位上移至320"是 9 字符
+        //   92px、"止损位上移至32001"是 11 字符 106px，纯汉字 11 字符却是 132px。
+        //   实测（headless Edge + Range 量宽）：131px 列减 8px 内距 = 123px 可用，
+        //   纯汉字 10 个字刚好（120px）、11 个溢出 9px。旧写法把上限写死 11 ⇒
+        //   11 个纯汉字的标注会被 CSS 硬切掉半个字且**不出现省略号**（看着像渲染 bug）。
+        //   全文另存 title，悬停可读，信息不丢。
+        function _closestAnnText(annotations) {
+            var list = annotations || [];
+            var today = new Date();
+            today.setHours(0, 0, 0, 0);
+            var closest = null;
+            var best = Infinity;
+            for (var i = 0; i < list.length; i++) {
+                var d = new Date(String(list[i].date || "").replace(/\//g, "-"));
+                if (isNaN(d.getTime())) { continue; }
+                var diff = Math.abs(d - today);
+                if (diff < best) { best = diff; closest = list[i].text; }
+            }
+            return closest ? String(closest) : "";
+        }
+
+        // 辅助：市场分布摘要（上海/深圳/北京/香港 计数），**全部 7 个扫描模式共用**
+        //   （fx_d / ma / fangliang / bsp / lianzhang / rsi / backtest，外加标注模式）。
         //   code 契约（后端 `App/AppUtils.py::_get_stock_market_code`）：market(小写) + code(数字)、
         //   market 在前、**无任何连接符**（例 sh600519 / sz000001 / hk00700）；扫描链路的 market
         //   由 `AppScan.scan_one` 的 `_PREFIX_MAP` 产出，取值只有 sh / sz / bj / hk 四个。
@@ -7203,46 +7319,41 @@
                     btn.textContent = "股票扫描";
 
                     var codes = annData.codes || [];
-
-                    var html = '<div class="scan-summary">全周期 标注 <b>' + codes.length + '</b> 条</div>';
-                    if (codes.length === 0) {
-                        html += '<div class="scan-no-result">未发现标注股票</div>';
-                    } else {
-                        var freqLabelMap = {"d": "日K", "w": "周K", "30m": "30分", "15m": "15分", "5m": "5分", "60m": "60分", "1m": "1分", "15s": "15秒"};
-                        codes.forEach(function(c) {
-                            var rCode = c.code + "." + c.market;
-                            var rFreqLabel = freqLabelMap[c.freq] || c.freq;
-                            // 取日期最靠近当前日期的标注文字，最多11字
-                            var closestText = "";
-                            if (c.annotations && c.annotations.length > 0) {
-                                var today = new Date();
-                                today.setHours(0, 0, 0, 0);
-                                var closest = null;
-                                var closestDiff = Infinity;
-                                c.annotations.forEach(function(a) {
-                                    var d = new Date(a.date.replace(/\//g, "-"));
-                                    if (isNaN(d.getTime())) return;
-                                    var diff = Math.abs(d - today);
-                                    if (diff < closestDiff) {
-                                        closestDiff = diff;
-                                        closest = a.text;
-                                    }
-                                });
-                                if (closest) {
-                                    closestText = closest.length > 11 ? closest.substring(0, 11) + "..." : closest;
-                                }
-                            }
-                            html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + rCode + '\', \'' + c.freq + '\')" title="点击查看K线图">';
-                            html += chkBox(rCode, false);
-                            html += '<span class="scan-col-name">' + (c.name || rCode) + '</span>';
-                            html += '<span class="scan-col-code">' + rCode + '</span>';
-                            html += '<span class="scan-col-freq">' + rFreqLabel + '</span>';
-                            html += '<span class="scan-col-ann">' + closestText + '</span>';
-                            html += '<span class="scan-col-tags"><span class="scan-bsp-tag buy">' + c.count + '条</span></span>';
-                            html += '</div>';
+                    // 代码形态归一（2026-10-31）：原为 `c.code + "." + c.market`（"600519.sh"），
+                    // 而全链路代码契约是 **market 在前、无连接符**（App/AppUtils.py 的
+                    // `_get_stock_market_code` 明文「点号写法一律拒绝」）—— 点开这种行会把
+                    // 后端解析不出的串塞进输入框，K 线加载失败；顺带让市场分布摘要
+                    // （取 code 前两字符）能正常计数，8 个模式的行形态也因此一致。
+                    var rows = codes.map(function(c) {
+                        return {
+                            code: (c.market || "") + c.code,
+                            name: c.name || "",
+                            freq: c.freq,
+                            count: c.count,
+                            float_mc: c.float_mc,
+                            annotations: c.annotations || []
+                        };
+                    });
+                    var freqLabelMap = {"d": "日K", "w": "周K", "30m": "30分", "15m": "15分", "5m": "5分", "60m": "60分", "1m": "1分", "15s": "15秒"};
+                    var head = '<div class="scan-summary">全周期 标注 <b>' + rows.length + '</b> 只</div>';
+                    var caliber = '<div class="scan-summary" style="font-size:10px;color:#7a8399;">'
+                        + '查全周期标注库 · 与当前周期、扫描来源无关 · 行内文字 = 距今天最近的一条标注</div>';
+                    var rowsHtml = rows.map(function(r) {
+                        var full = _closestAnnText(r.annotations);
+                        return _scanRowHtml(r, {
+                            checked: false,
+                            code: r.code,
+                            freq: r.freq,
+                            // 列宽约放 10 个纯汉字，全文进 title —— 截断因此不再等于
+                            // 信息丢失（悬停即可读全）。列内文字**不截字符数**：见
+                            // `_closestAnnText` 注释（字符预算在 JS 里必然估错）。
+                            title: "点击查看K线图" + (full ? " · 标注：" + full : ""),
+                            cols: '<span class="scan-col-freq">' + (freqLabelMap[r.freq] || r.freq) + '</span>'
+                                + '<span class="scan-col-ann">' + statsEsc(full) + '</span>',
+                            tags: '<span class="scan-bsp-tag buy">' + r.count + '条</span>'
                         });
-                    }
-                    body.innerHTML = html;
+                    }).join("");
+                    body.innerHTML = _scanPanelHtml(head, caliber, rows, rowsHtml, "未发现标注股票");
                     updateScanSaveBtn();
                 })
                 .catch(function(err) {
@@ -7341,11 +7452,14 @@
                             }, 500);
                         }
                         function _doUpdatePanel() {
-                            var html = spec.progressLine(completed, total, preSkipped, skipped, results);
-                            if (results.length > 0) {
-                                html += spec.renderRows(results);
-                            }
-                            body.innerHTML = html;
+                            // 进度期与终态**同一个装配器**（块序只此一份）：
+                            //   头部行不同，其余（口径行 / 市场分布行 / 行列表）同源。
+                            body.innerHTML = _scanPanelHtml(
+                                spec.progressLine(completed, total, preSkipped, skipped, results),
+                                spec.caliber ? spec.caliber(results) : "",
+                                results,
+                                results.length ? spec.renderRows(results) : "",
+                                spec.emptyText);
                             updateScanSaveBtn();
                         }
 
@@ -7408,27 +7522,10 @@
                         return '<div class="scan-loading"><div class="spinner"></div><br>正在扫描 ' + (completed + "/" + total) + '，跳过 ' + (preSkipped + skipped) + ' 只，底分型 ' + fxSummary + '</div>';
                     },
                     classify: function(data) { return !!data.is_fx_d; },
-                    renderRows: function(results) {
-                        var html = _scanMarketSummaryHtml(results);
-                        // 按分型强度降序排序（最强分型→强分型→弱分型）
-                        results.sort(function(a, b) { return b.fx_strength - a.fx_strength; });
-                        for (var i = 0; i < results.length; i++) {
-                            var r = results[i];
-                            var fxLabel = '底分型';
-                            var fxClass = 'fx-d';
-                            var checked = false;
-                            if (r.fx_strength === 2) { fxLabel = '最强分型'; fxClass = 'fx-strongest'; checked = true; }
-                            else if (r.fx_strength === 1) { fxLabel = '强分型'; fxClass = 'fx-strong'; checked = true; }
-                            else { fxLabel = '弱分型'; fxClass = 'fx-weak'; }
-                            html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\', \'' + _scanFreq + '\')" title="点击查看K线图">';
-                            html += chkBox(r.code, checked);
-                            html += '<span class="scan-col-name">' + r.name + '</span>';
-                            html += '<span class="scan-col-code">' + r.code + '</span>';
-                            html += '<span class="scan-col-tags"><span class="scan-bsp-tag ' + fxClass + '">' + fxLabel + '</span></span>';
-                            html += '</div>';
-                        }
-                        return html;
-                    },
+                    // 行与终态共用 `_renderFxDRows`（块序由 _scanPanelHtml 定，这里只给内容）
+                    renderRows: _renderFxDRows,
+                    caliber: _fxdCaliberHtml,
+                    emptyText: "当前周期下未发现底分型股票",
                     renderFinal: function(results, total, skipped, interrupted) {
                         renderFxDScanResults(results, total, skipped, interrupted);
                     }
@@ -7450,36 +7547,14 @@
                     },
                     classify: function(data) { return data.ma_category !== undefined && data.ma_category >= 0; },
                     normalize: function(data) {
-                        return { code: data.code, name: data.name, ma_category: data.ma_category, last_close: data.last_close };
+                        // float_mc 必须一并带上：本模式是唯一做行白名单的模式，
+                        // 漏一个字段就等于该模式少一列（新加列时最容易漏这里）。
+                        return { code: data.code, name: data.name, ma_category: data.ma_category,
+                                 last_close: data.last_close, float_mc: data.float_mc };
                     },
-                    renderRows: function(results) {
-                        var html = '';
-                        var catCounts = {};
-                        for (var i = 0; i < results.length; i++) {
-                            var c = results[i].ma_category;
-                            catCounts[c] = (catCounts[c] || 0) + 1;
-                        }
-                        var catParts = [];
-                        for (var cat = 0; cat <= 8; cat++) {
-                            if (catCounts[cat]) catParts.push("类" + cat + " <b>" + catCounts[cat] + "</b> 只");
-                        }
-                        html += '<div class="scan-summary" style="margin-top:8px;">' + catParts.join("，") + '</div>';
-                        // 按类别升序排序（类1→类9，最强→最弱）
-                        results.sort(function(a, b) { return a.ma_category - b.ma_category; });
-                        for (var i = 0; i < results.length; i++) {
-                            var r = results[i];
-                            var cat = r.ma_category;
-                            var catClass = 'ma-cat' + cat;
-                            var catLabel = '类' + cat;
-                            html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\', \'' + _scanFreq + '\')" title="点击查看K线图">';
-                            html += chkBox(r.code, cat <= 3);
-                            html += '<span class="scan-col-name">' + r.name + '</span>';
-                            html += '<span class="scan-col-code">' + r.code + '</span>';
-                            html += '<span class="scan-col-tags"><span class="scan-bsp-tag ' + catClass + '">' + catLabel + '</span></span>';
-                            html += '</div>';
-                        }
-                        return html;
-                    },
+                    renderRows: _renderMaRows,
+                    caliber: _maCaliberHtml,
+                    emptyText: "当前周期下未发现均线分类结果",
                     renderFinal: function(results, total, skipped, interrupted) {
                         renderMaScanResults(results, total, skipped, interrupted);
                     }
@@ -7510,7 +7585,9 @@
                     // 只收「至少 1 笔成交」的票（用户裁定）：0 笔的票没有期望值可读，
                     // 混在列表里只会稀释信噪比。"跳过"仍按既有口径单列。
                     classify: function(data) { return (data.filled || 0) >= 1; },
-                    renderRows: function(results) { return _renderBacktestRows(results); },
+                    renderRows: _renderBacktestRows,
+                    caliber: _btCaliberHtml,
+                    emptyText: "当前周期下没有股票产生成交",
                     renderFinal: function(results, total, skipped, interrupted) {
                         renderBacktestScanResults(results, total, skipped, interrupted);
                     }
@@ -7534,26 +7611,9 @@
                         return '<div class="scan-loading"><div class="spinner"></div><br>正在扫描 ' + (completed + "/" + total) + '，跳过 ' + (preSkipped + skipped) + ' 只，放量 ' + results.length + ' 只</div>';
                     },
                     classify: function(data) { return !!data.is_fangliang; },
-                    renderRows: function(results) {
-                        var html = _scanMarketSummaryHtml(results);
-                        // 进度期同样挂口径披露：与终态共用 _fangliangCaliberHtml()，
-                        // 两处措辞只可能同源（进度期就能读到判据，不必等扫完）。
-                        html += _fangliangCaliberHtml();
-                        // 动态排序：红色（A为阳线，a_is_rise=true）排前面，绿色排后面；仅红色勾选
-                        results.sort(function(a, b) {
-                            return ((b.a_is_rise ? 1 : 0) - (a.a_is_rise ? 1 : 0));
-                        });
-                        for (var i = 0; i < results.length; i++) {
-                            var r = results[i];
-                            html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\', \'' + _scanFreq + '\')" title="点击查看K线图">';
-                            html += chkBox(r.code, !!r.a_is_rise);
-                            html += '<span class="scan-col-name">' + r.name + '</span>';
-                            html += '<span class="scan-col-code">' + r.code + '</span>';
-                            html += '<span class="scan-col-tags">' + buildFangliangTagHtml(r) + '</span>';
-                            html += '</div>';
-                        }
-                        return html;
-                    },
+                    renderRows: _renderFangliangRows,
+                    caliber: _fangliangCaliberHtml,
+                    emptyText: "当前周期下未发现放量标的",
                     renderFinal: function(results, total, skipped, interrupted) {
                         renderFangliangScanResults(results, total, skipped, interrupted);
                     }
@@ -7575,7 +7635,9 @@
                         return '<div class="scan-loading"><div class="spinner"></div><br>正在扫描 ' + (completed + "/" + total) + '，跳过 ' + (preSkipped + skipped) + ' 只，连涨 ' + results.length + ' 只</div>';
                     },
                     classify: function(data) { return !!data.is_lianzhang; },
-                    renderRows: function(results) { return _renderLianzhangRows(results); },
+                    renderRows: _renderLianzhangRows,
+                    caliber: _lianzhangCaliberHtml,
+                    emptyText: "当前周期下未发现连涨标的",
                     renderFinal: function(results, total, skipped, interrupted) {
                         renderLianzhangScanResults(results, total, skipped, interrupted);
                     }
@@ -7602,7 +7664,9 @@
                         return '<div class="scan-loading"><div class="spinner"></div><br>正在扫描 ' + (completed + "/" + total) + '，跳过 ' + (preSkipped + skipped) + ' 只，超卖 ' + underCount + ' 只，超买 ' + overCount + ' 只</div>';
                     },
                     classify: function(data) { return !!data.is_rsi; },
-                    renderRows: function(results) { return _renderRsiRows(results); },
+                    renderRows: _renderRsiRows,
+                    caliber: _rsiCaliberHtml,
+                    emptyText: "当前周期下未发现 RSI 超买/超卖标的",
                     renderFinal: function(results, total, skipped, interrupted) {
                         renderRsiScanResults(results, total, skipped, interrupted);
                     }
@@ -7634,23 +7698,9 @@
                 classify: function(data) {
                     return (data.buy_points && data.buy_points.length > 0) || (data.sell_points && data.sell_points.length > 0);
                 },
-                renderRows: function(results) {
-                    var html = _scanMarketSummaryHtml(results);
-                    // 按最新买卖点类型排序：先买点后卖点，内部 1→2→3→0
-                    results.sort(function(a, b) { return getLatestBspSortKey(a) - getLatestBspSortKey(b); });
-                    for (var i = 0; i < results.length; i++) {
-                        var r = results[i];
-                        var tagsHtml = buildBspTagsHtml(r.buy_points, r.sell_points);
-                        html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\', \'' + _scanFreq + '\')" title="点击查看K线图">';
-                        html += chkBox(r.code, isLatestBspBuy(r));
-                        html += '<span class="scan-col-name">' + r.name + '</span>';
-                        html += '<span class="scan-col-code">' + r.code + '</span>';
-                        html += buildMa120Html(r);
-                        html += '<span class="scan-col-tags">' + tagsHtml + '</span>';
-                        html += '</div>';
-                    }
-                    return html;
-                },
+                renderRows: _renderBspRows,
+                caliber: _bspCaliberHtml,
+                emptyText: "当前周期下未发现买卖点股票",
                 renderFinal: function(results, total, skipped, interrupted) {
                     renderScanResults(results, total, skipped, interrupted);
                 }
@@ -7717,50 +7767,88 @@
                 });
         }
 
-        function renderScanResults(results, total, skipped, interrupted) {
-            var body = document.getElementById("scan-body");
+        // ── 终态装配：6 个模式共用的一块（头部汇总行 + 口径行 + 市场分布行 + 行/空态）──
+        //   历史（2026-10-31 前）：每个模式一份 `renderXxxScanResults`，各自拼一遍
+        //   这四块，块序还各不相同（有的把口径行摆市场分布行前面，有的后面）；
+        //   行循环更是各写两遍（进度期一份、终态一份）—— 加一列要改 8 处，漏一处
+        //   就是"某个模式少一列"，而市场分布行在放量/底分型/买卖点上**扫完就消失**
+        //   正是两份副本漂移的直接结果。
+        //   现在：行由 `_renderXxxRows` 出（进度/终态同一份），块序由 `_scanPanelHtml` 定。
+        function _scanSummaryLine(countsHtml, total, skipped, interrupted) {
             var label = interrupted ? "（已中断）" : "";
-            var sourceLabel = _scanSourceLabel();
+            return '<div class="scan-summary">' + _scanSourceLabel() + ' <b>' + total
+                + '</b> 只，跳过 <b>' + skipped + '</b> 只，扫描 <b>' + (total - skipped)
+                + '</b> 只' + (countsHtml ? '，' + countsHtml : '') + label + '</div>';
+        }
+
+        // 终态写面板（6 个模式共用）。rowsFn / caliber 按**函数**传入，保证与
+        //   进度期用的是同一份实现（不是同一段文案抄两遍）。
+        function _paintScanFinal(countsHtml, caliber, results, rowsFn, emptyText,
+                                 total, skipped, interrupted) {
+            document.getElementById("scan-body").innerHTML = _scanPanelHtml(
+                _scanSummaryLine(countsHtml, total, skipped, interrupted),
+                caliber, results,
+                results.length ? rowsFn(results) : "",
+                emptyText);
+            updateScanSaveBtn();
+        }
+
+        // ── 买/卖点扫描（默认模式）─────────────────────────────────────
+        // 买卖点类型口径披露：扫描按它做**事前过滤**（后端同一门）。
+        //   不写出来的话，勾选被改过 / 全不勾时用户只会看到"图上有买卖点、扫描却没
+        //   扫到"，然后当成 bug 来查。措辞必须点明「事前」：被拒类型**不参与**
+        //   "最新买卖点是买还是卖"的判定（§4.7.3 定案）—— 说成"结果里过滤掉"是错的。
+        function _bspCaliberHtml() {
+            return '<div class="scan-summary" style="font-size:10px;color:#7a8399;">'
+                + '买卖点类型：' + statsEsc(_btBspTypesLabel(_btBspTypes()))
+                + ' · 未勾选的类型不参与判定（事前过滤，非事后过滤）</div>';
+        }
+
+        // 买卖点结果行（进度期与终态共用一份）
+        //   列：名称 · 代码 · 市值 · 120均线 · 买卖点标签；勾选：最新为买点。
+        function _renderBspRows(results) {
+            results.sort(function(a, b) { return getLatestBspSortKey(a) - getLatestBspSortKey(b); });
+            var html = "";
+            for (var i = 0; i < results.length; i++) {
+                var r = results[i];
+                html += _scanRowHtml(r, {
+                    checked: isLatestBspBuy(r),
+                    cols: buildMa120Html(r),
+                    tags: buildBspTagsHtml(r.buy_points, r.sell_points)
+                });
+            }
+            return html;
+        }
+
+        function renderScanResults(results, total, skipped, interrupted) {
             var buyCount = 0, sellCount = 0;
             for (var i = 0; i < results.length; i++) {
                 if (isLatestBspBuy(results[i])) { buyCount++; } else { sellCount++; }
             }
-            var html = '<div class="scan-summary">' + sourceLabel + ' <b>' + total + '</b> 只，跳过 <b>' + skipped + '</b> 只，扫描 <b>' + (total - skipped) + '</b> 只，买点 <b>' + buyCount + '</b> 只，卖点 <b>' + sellCount + '</b> 只' + label + '</div>';
-            // 买卖点类型口径披露：扫描按它做**事前过滤**（后端同一门）。
-            //   不写出来的话，勾选被改过 / 全不勾时用户只会看到"图上有买卖点、
-            //   扫描却没扫到"，然后当成 bug 来查。
-            //   措辞必须点明「事前」：被拒类型**不参与**"最新买卖点是买还是卖"的
-            //   判定（§4.7.3 定案）—— 说成"结果里过滤掉"是错的，会误导用户以为
-            //   放行类型的命中不受勾选影响。
-            html += '<div class="scan-summary" style="font-size:10px;color:#7a8399;">'
-                + '买卖点类型：' + statsEsc(_btBspTypesLabel(_btBspTypes()))
-                + ' · 未勾选的类型不参与判定（事前过滤，非事后过滤）</div>';
-            if (results.length === 0) {
-                html += '<div class="scan-no-result">当前周期下未发现买卖点股票</div>';
-            } else {
-                // 按最新买卖点类型排序：一类(1)→二类(2)→三类(3)→0类(0)
-                results.sort(function(a, b) { return getLatestBspSortKey(a) - getLatestBspSortKey(b); });
-                for (var i = 0; i < results.length; i++) {
-                    var r = results[i];
-                    var tagsHtml = buildBspTagsHtml(r.buy_points, r.sell_points);
-                    html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\', \'' + _scanFreq + '\')" title="点击查看K线图">';
-                    html += chkBox(r.code, isLatestBspBuy(r));
-                    html += '<span class="scan-col-name">' + r.name + '</span>';
-                    html += '<span class="scan-col-code">' + r.code + '</span>';
-                    html += buildMa120Html(r);
-                    html += '<span class="scan-col-tags">' + tagsHtml + '</span>';
-                    html += '</div>';
-                }
-            }
-            body.innerHTML = html;
-            updateScanSaveBtn();
+            _paintScanFinal('买点 <b>' + buyCount + '</b> 只，卖点 <b>' + sellCount + '</b> 只',
+                _bspCaliberHtml(), results, _renderBspRows,
+                "当前周期下未发现买卖点股票", total, skipped, interrupted);
         }
 
-        // 底分型扫描结果渲染
+        // ── 底分型扫描（fx_d）────────────────────────────────────────
+        // 行：名称 · 代码 · 市值 · 标签（最强/强/弱分型）；勾选：强与最强。
+        function _renderFxDRows(results) {
+            results.sort(function(a, b) { return b.fx_strength - a.fx_strength; });
+            var html = "";
+            for (var i = 0; i < results.length; i++) {
+                var r = results[i];
+                var label = "弱分型", cls = "fx-weak", checked = false;
+                if (r.fx_strength === 2) { label = "最强分型"; cls = "fx-strongest"; checked = true; }
+                else if (r.fx_strength === 1) { label = "强分型"; cls = "fx-strong"; checked = true; }
+                html += _scanRowHtml(r, {
+                    checked: checked,
+                    tags: '<span class="scan-bsp-tag ' + cls + '">' + label + '</span>'
+                });
+            }
+            return html;
+        }
+
         function renderFxDScanResults(results, total, skipped, interrupted) {
-            var body = document.getElementById("scan-body");
-            var label = interrupted ? "（已中断）" : "";
-            var sourceLabel = _scanSourceLabel();
             var strongest = 0, strong = 0, weak = 0;
             for (var i = 0; i < results.length; i++) {
                 var s = results[i].fx_strength;
@@ -7768,38 +7856,36 @@
                 else if (s === 1) { strong++; }
                 else { weak++; }
             }
-            var fxSummary = results.length + ' 只（' + strongest + ' / ' + strong + ' / ' + weak + '）';
-            var html = '<div class="scan-summary">' + sourceLabel + ' <b>' + total + '</b> 只，跳过 <b>' + skipped + '</b> 只，扫描 <b>' + (total - skipped) + '</b> 只，底分型 <b>' + fxSummary + '</b>' + label + '</div>';
-            if (results.length === 0) {
-                html += '<div class="scan-no-result">当前周期下未发现底分型股票</div>';
-            } else {
-                // 按分型强度降序排序（最强分型→强分型→弱分型）
-                results.sort(function(a, b) { return b.fx_strength - a.fx_strength; });
-                for (var i = 0; i < results.length; i++) {
-                    var r = results[i];
-                    var fxLabel = '底分型';
-                    var fxClass = 'fx-d';
-                    var checked = false;
-                    if (r.fx_strength === 2) { fxLabel = '最强分型'; fxClass = 'fx-strongest'; checked = true; }
-                    else if (r.fx_strength === 1) { fxLabel = '强分型'; fxClass = 'fx-strong'; checked = true; }
-                    else { fxLabel = '弱分型'; fxClass = 'fx-weak'; }
-                    html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\', \'' + _scanFreq + '\')" title="点击查看K线图">';
-                    html += chkBox(r.code, checked);
-                    html += '<span class="scan-col-name">' + r.name + '</span>';
-                    html += '<span class="scan-col-code">' + r.code + '</span>';
-                    html += '<span class="scan-col-tags"><span class="scan-bsp-tag ' + fxClass + '">' + fxLabel + '</span></span>';
-                    html += '</div>';
-                }
-            }
-            body.innerHTML = html;
-            updateScanSaveBtn();
+            _paintScanFinal('底分型 <b>' + results.length + '</b> 只（' + strongest + ' / '
+                + strong + ' / ' + weak + '）',
+                _fxdCaliberHtml(), results, _renderFxDRows,
+                "当前周期下未发现底分型股票", total, skipped, interrupted);
         }
 
-        // 均线分类扫描结果渲染
+        // 底分型口径披露行：判据是"最后一笔向下且已确认"，强度取该笔的 fx_strength
+        //   三档 —— 不写出来，用户看到同一根底分型有时算"强"有时算"弱"只会当成 bug。
+        function _fxdCaliberHtml() {
+            return '<div class="scan-summary" style="font-size:10px;color:#7a8399;">'
+                + '判据：最后一笔向下且已确认（is_sure）；强度按该笔分型强度分 最强 / 强 / 弱 三档</div>';
+        }
+
+        // ── 均线分类扫描（ma）────────────────────────────────────────
+        // 行：名称 · 代码 · 市值 · 标签（类0~类8）；勾选：类 ≤ 3（强侧）。
+        function _renderMaRows(results) {
+            results.sort(function(a, b) { return a.ma_category - b.ma_category; });
+            var html = "";
+            for (var i = 0; i < results.length; i++) {
+                var r = results[i];
+                var cat = r.ma_category;
+                html += _scanRowHtml(r, {
+                    checked: cat <= 3,
+                    tags: '<span class="scan-bsp-tag ma-cat' + cat + '">类' + cat + '</span>'
+                });
+            }
+            return html;
+        }
+
         function renderMaScanResults(results, total, skipped, interrupted) {
-            var body = document.getElementById("scan-body");
-            var label = interrupted ? "（已中断）" : "";
-            var sourceLabel = _scanSourceLabel();
             var catCounts = {};
             for (var i = 0; i < results.length; i++) {
                 var c = results[i].ma_category;
@@ -7807,32 +7893,23 @@
             }
             var catParts = [];
             for (var cat = 0; cat <= 8; cat++) {
-                if (catCounts[cat]) catParts.push("类" + cat + " <b>" + catCounts[cat] + "</b> 只");
+                if (catCounts[cat]) { catParts.push("类" + cat + " <b>" + catCounts[cat] + "</b> 只"); }
             }
-            var html = '<div class="scan-summary">' + sourceLabel + ' <b>' + total + '</b> 只，跳过 <b>' + skipped + '</b> 只，扫描 <b>' + (total - skipped) + '</b> 只，' + (catParts.length > 0 ? catParts.join("，") : '无') + label + '</div>';
-            if (results.length === 0) {
-                html += '<div class="scan-no-result">当前周期下未发现均线分类结果</div>';
-            } else {
-                // 按类别升序排序（类1→类9，最强→最弱）
-                results.sort(function(a, b) { return a.ma_category - b.ma_category; });
-                for (var i = 0; i < results.length; i++) {
-                    var r = results[i];
-                    var cat = r.ma_category;
-                    var catClass = 'ma-cat' + cat;
-                    var catLabel = '类' + cat;
-                    var checked = cat <= 3;
-                    html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\', \'' + _scanFreq + '\')" title="点击查看K线图">';
-                    html += chkBox(r.code, checked);
-                    html += '<span class="scan-col-name">' + r.name + '</span>';
-                    html += '<span class="scan-col-code">' + r.code + '</span>';
-                    html += '<span class="scan-col-tags"><span class="scan-bsp-tag ' + catClass + '">' + catLabel + '</span></span>';
-                    html += '</div>';
-                }
-            }
-            body.innerHTML = html;
-            updateScanSaveBtn();
+            _paintScanFinal(catParts.length > 0 ? catParts.join("，") : "无",
+                _maCaliberHtml(), results, _renderMaRows,
+                "当前周期下未发现均线分类结果", total, skipped, interrupted);
         }
 
+        // 均线口径披露行：类 N = 最新收盘价**未攻克**的最小周期均线序号（8 条均线
+        //   5/13/21/34/55/89/144/233，"类0"= 全部攻克 = 最强）。这条不写，面板上的
+        //   "类3" 就只是一串数字 —— 8 个模式里唯独均线的判据完全推不出来。
+        function _maCaliberHtml() {
+            return '<div class="scan-summary" style="font-size:10px;color:#7a8399;">'
+                + '判据：最新收盘价站上 8 条均线（5/13/21/34/55/89/144/233）中的前 K 条，'
+                + '类号 = 8 − K（类0 最强 = 全部站上，类8 最弱 = 一条都没站上）</div>';
+        }
+
+        // ── 放量扫描（fangliang）─────────────────────────────────────
         // 放量扫描口径披露行 —— 与连涨披露行（renderLianzhangScanResults）**同构**：
         //   同一 class（scan-summary）+ 同一字号/颜色，面板上两种模式的解释读起来是一套。
         //
@@ -7855,85 +7932,71 @@
                 + '</div>';
         }
 
-        // 放量扫描结果渲染
-        function renderFangliangScanResults(results, total, skipped, interrupted) {
-            var body = document.getElementById("scan-body");
-            var label = interrupted ? "（已中断）" : "";
-            var sourceLabel = _scanSourceLabel();
-            var html = '<div class="scan-summary">' + sourceLabel + ' <b>' + total + '</b> 只，跳过 <b>' + skipped + '</b> 只，扫描 <b>' + (total - skipped) + '</b> 只，放量 <b>' + results.length + '</b> 只' + label + '</div>';
-            // 口径披露：判据 + 比较窗口根数（SSOT 在后端配置）。
-            //   同连涨披露行一样，把「凭什么算放量」写在脸上，防「明明是巨量柱却没扫到」被当 bug。
-            html += _fangliangCaliberHtml();
-            if (results.length === 0) {
-                html += '<div class="scan-no-result">当前周期下未发现放量标的</div>';
-            } else {
-                // 动态排序：红色（A为阳线，a_is_rise=true）排前面，绿色排后面；仅红色勾选
-                results.sort(function(a, b) {
-                    return ((b.a_is_rise ? 1 : 0) - (a.a_is_rise ? 1 : 0));
-                });
-                for (var i = 0; i < results.length; i++) {
-                    var r = results[i];
-                    html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\', \'' + _scanFreq + '\')" title="点击查看K线图">';
-                    html += chkBox(r.code, !!r.a_is_rise);
-                    html += '<span class="scan-col-name">' + r.name + '</span>';
-                    html += '<span class="scan-col-code">' + r.code + '</span>';
-                    html += '<span class="scan-col-tags">' + buildFangliangTagHtml(r) + '</span>';
-                    html += '</div>';
-                }
-            }
-            body.innerHTML = html;
-            updateScanSaveBtn();
-        }
-
-        // 连涨标签HTML：口径 = K 线红色（close > open），与 K 线图红柱同色
-        function buildLianzhangTagHtml(data) {
-            var n = data.recent_days || 0;
-            return '<span class="scan-bsp-tag fl-rise">' + n + '连涨</span>';
-        }
-
-        // 连涨结果行渲染（进度期与终态共用同一份，避免两处漂移）
-        //   列：股票名 · 代码 ·「N连涨」标签 · 区间涨幅（降序，涨红跌绿）
-        //   涨幅口径 = K 线图底部**十字白框**：悬停窗口首根时的读数（基期 = 首根
-        //   前收，终点 = 末根收盘）—— 与后端 gain_pct 同一口径，**不是**首根开盘。
-        //   勾选：命中即勾 —— 本模式的每一行都已满足判据，不存在「命中但有强弱之分」。
-        function _renderLianzhangRows(results) {
-            var html = _scanMarketSummaryHtml(results);
-            // 按区间累计涨幅降序：涨幅最大的排最前
-            results.sort(function(a, b) { return (b.gain_pct || 0) - (a.gain_pct || 0); });
+        // 放量结果行（进度期与终态共用一份）
+        //   列：名称 · 代码 · 市值 · 标签（阳线红 / 阴线青）；勾选：A 收阳。
+        function _renderFangliangRows(results) {
+            // 动态排序：红色（A为阳线，a_is_rise=true）排前面，绿色排后面；仅红色勾选
+            results.sort(function(a, b) {
+                return ((b.a_is_rise ? 1 : 0) - (a.a_is_rise ? 1 : 0));
+            });
+            var html = "";
             for (var i = 0; i < results.length; i++) {
                 var r = results[i];
-                var g = Number(r.gain_pct || 0);
-                html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\', \'' + _scanFreq + '\')" title="点击查看K线图">';
-                html += chkBox(r.code, true);
-                html += '<span class="scan-col-name">' + r.name + '</span>';
-                html += '<span class="scan-col-code">' + r.code + '</span>';
-                html += '<span class="scan-col-tags">' + buildLianzhangTagHtml(r) + '</span>';
-                html += '<span class="scan-col-expect" style="color:' + _btCol(g) + '">' + _btPct(g) + '</span>';
-                html += '</div>';
+                html += _scanRowHtml(r, {
+                    checked: !!r.a_is_rise,
+                    tags: buildFangliangTagHtml(r)
+                });
             }
             return html;
         }
 
-        // 连涨扫描结果渲染（终态）
-        function renderLianzhangScanResults(results, total, skipped, interrupted) {
-            var body = document.getElementById("scan-body");
-            var label = interrupted ? "（已中断）" : "";
-            var sourceLabel = _scanSourceLabel();
-            var html = '<div class="scan-summary">' + sourceLabel + ' <b>' + total + '</b> 只，跳过 <b>' + skipped + '</b> 只，扫描 <b>' + (total - skipped) + '</b> 只，连涨 <b>' + results.length + '</b> 只' + label + '</div>';
-            // 口径披露：判据与 K 线红色同源（收盘 > 开盘，平盘白线不算）；
-            //   涨幅与 K 线图底部**十字白框**同源 —— 悬停窗口首根时的读数
-            //   （基期 = 首根的前一根收盘，终点 = 末根收盘），**不是**首根开盘。
-            //   不写清楚必被当成「图上明明是红的却没扫到」或「涨幅跟白框对不上」来查。
-            html += '<div class="scan-summary" style="font-size:10px;color:#7a8399;">'
+        function renderFangliangScanResults(results, total, skipped, interrupted) {
+            _paintScanFinal('放量 <b>' + results.length + '</b> 只',
+                _fangliangCaliberHtml(), results, _renderFangliangRows,
+                "当前周期下未发现放量标的", total, skipped, interrupted);
+        }
+
+        // ── 连涨扫描（lianzhang）─────────────────────────────────────
+        // 连涨标签HTML：口径 = K 线红色（close > open），与 K 线图红柱同色
+        function buildLianzhangTagHtml(data) {
+            var n = data.recent_days || 0;
+            return '<span class="scan-bsp-tag scan-tag-up">' + n + '连涨</span>';
+        }
+
+        // 连涨结果行（进度期与终态共用同一份，避免两处漂移）
+        //   列：名称 · 代码 · 市值 ·「N连涨」标签 · 区间涨幅（降序，涨红跌绿）
+        //   涨幅口径 = K 线图底部**十字白框**：悬停窗口首根时的读数（基期 = 首根
+        //   前收，终点 = 末根收盘）—— 与后端 gain_pct 同一口径，**不是**首根开盘。
+        //   勾选：命中即勾 —— 本模式的每一行都已满足判据，不存在「命中但有强弱之分」。
+        function _renderLianzhangRows(results) {
+            results.sort(function(a, b) { return (b.gain_pct || 0) - (a.gain_pct || 0); });
+            var html = "";
+            for (var i = 0; i < results.length; i++) {
+                var r = results[i];
+                var g = Number(r.gain_pct || 0);
+                html += _scanRowHtml(r, {
+                    checked: true,
+                    cols: '<span class="scan-col-expect" style="color:' + _btCol(g) + '">' + _btPct(g) + '</span>',
+                    tags: buildLianzhangTagHtml(r)
+                });
+            }
+            return html;
+        }
+
+        // 连涨口径披露：判据与 K 线红色同源（收盘 > 开盘，平盘白线不算）；
+        //   涨幅与 K 线图底部**十字白框**同源 —— 悬停窗口首根时的读数
+        //   （基期 = 首根的前一根收盘，终点 = 末根收盘），**不是**首根开盘。
+        //   不写清楚必被当成「图上明明是红的却没扫到」或「涨幅跟白框对不上」来查。
+        function _lianzhangCaliberHtml() {
+            return '<div class="scan-summary" style="font-size:10px;color:#7a8399;">'
                 + '最近 ' + _scanRecentDays + ' 根 · 判据：逐根收红（收盘 > 开盘，平盘不算）'
                 + ' · 涨幅 = 首根的前一根收盘 → 末根收盘（同 K 线图底部白框读数，非首根开盘）</div>';
-            if (results.length === 0) {
-                html += '<div class="scan-no-result">当前周期下未发现连涨标的</div>';
-            } else {
-                html += _renderLianzhangRows(results);
-            }
-            body.innerHTML = html;
-            updateScanSaveBtn();
+        }
+
+        function renderLianzhangScanResults(results, total, skipped, interrupted) {
+            _paintScanFinal('连涨 <b>' + results.length + '</b> 只', _lianzhangCaliberHtml(),
+                results, _renderLianzhangRows,
+                "当前周期下未发现连涨标的", total, skipped, interrupted);
         }
 
         // ── RSI 扫描（rsi 模式）─────────────────────────────────────────
@@ -7964,8 +8027,8 @@
         }
 
         // RSI 标签HTML：配色与 K 线图副图 RSI **分段着色**同源（rsiColorOf）——
-        //   超买 → MACD 红（.fl-rise = COLORS.macdUp）、超卖 → MACD 青
-        //   （.fl-fall = COLORS.macdDown），正是副图折线越过上/下沿时的两段取色。
+        //   超买 → MACD 红（.scan-tag-up = COLORS.macdUp）、超卖 → MACD 青
+        //   （.scan-tag-down = COLORS.macdDown），正是副图折线越过上/下沿时的两段取色。
         //   文本 = 组名 + 关键极值（超卖取窗口最小 / 超买取窗口最大，**与排序键
         //   同一取值**，标签与排序不许各算一份）+ 越界根数/窗口根数。
         function buildRsiTagHtml(r) {
@@ -7975,7 +8038,7 @@
             var v = Number(isUnder ? r.rsi_min : r.rsi_max);
             var txt = (isUnder ? "超卖 " : "超买 ") + (isFinite(v) ? v.toFixed(1) : "--");
             if (n > 0) { txt += " (" + hits + "/" + n + ")"; }
-            return '<span class="scan-bsp-tag ' + (isUnder ? "fl-fall" : "fl-rise") + '">' + txt + '</span>';
+            return '<span class="scan-bsp-tag ' + (isUnder ? "scan-tag-down" : "scan-tag-up") + '">' + txt + '</span>';
         }
 
         // RSI 口径披露行 —— 与连涨/放量披露行**同构**（同 class + 同字号/颜色），
@@ -8001,15 +8064,13 @@
         }
 
         // RSI 结果行渲染（进度期与终态共用同一份，避免两处漂移）
-        //   列：股票名 · 代码 ·「超卖/超买 + 极值 + 越界根数」标签
+        //   列：名称 · 代码 · 市值 ·「超卖/超买 + 极值 + 越界根数」标签
         //   组间（用户 2026-10-12 拍板）：**超卖组整体**排在超买组之前。
         //   组内（用户拍板「按极值」）：
         //     超卖组 → 窗口**最小** RSI 升序（跌得最深的排最前）；
         //     超买组 → 窗口**最大** RSI 降序（冲得最高的排最前）。
         //   勾选：命中即勾 —— 每行都已满足判据，与连涨/放量同约定。
         function _renderRsiRows(results) {
-            var html = _scanMarketSummaryHtml(results);
-            html += _rsiCaliberHtml(results);
             results.sort(function(a, b) {
                 var ga = _rsiGroupOf(a), gb = _rsiGroupOf(b);
                 if (ga !== gb) { return ga === "under" ? -1 : 1; }
@@ -8018,37 +8079,22 @@
                 }
                 return (Number(b.rsi_max) || 0) - (Number(a.rsi_max) || 0);
             });
+            var html = "";
             for (var i = 0; i < results.length; i++) {
-                var r = results[i];
-                html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\', \'' + _scanFreq + '\')" title="点击查看K线图">';
-                html += chkBox(r.code, true);
-                html += '<span class="scan-col-name">' + r.name + '</span>';
-                html += '<span class="scan-col-code">' + r.code + '</span>';
-                html += '<span class="scan-col-tags">' + buildRsiTagHtml(r) + '</span>';
-                html += '</div>';
+                html += _scanRowHtml(results[i], { checked: true, tags: buildRsiTagHtml(results[i]) });
             }
             return html;
         }
 
-        // RSI 扫描结果渲染（终态）
         function renderRsiScanResults(results, total, skipped, interrupted) {
-            var body = document.getElementById("scan-body");
-            var label = interrupted ? "（已中断）" : "";
-            var sourceLabel = _scanSourceLabel();
             var underCount = 0, overCount = 0;
             for (var i = 0; i < results.length; i++) {
                 if (_rsiGroupOf(results[i]) === "under") { underCount++; } else { overCount++; }
             }
-            var html = '<div class="scan-summary">' + sourceLabel + ' <b>' + total + '</b> 只，跳过 <b>' + skipped + '</b> 只，扫描 <b>' + (total - skipped) + '</b> 只，超卖 <b>' + underCount + '</b> 只，超买 <b>' + overCount + '</b> 只' + label + '</div>';
-            if (results.length === 0) {
-                // 空结果同样给披露行（口径不该只在有票时才出现）—— 与放量同约定。
-                html += _rsiCaliberHtml(results);
-                html += '<div class="scan-no-result">当前周期下未发现 RSI 超买/超卖标的</div>';
-            } else {
-                html += _renderRsiRows(results);
-            }
-            body.innerHTML = html;
-            updateScanSaveBtn();
+            // 空结果同样给披露行（口径不该只在有票时才出现）—— 与放量同约定。
+            _paintScanFinal('超卖 <b>' + underCount + '</b> 只，超买 <b>' + overCount + '</b> 只',
+                _rsiCaliberHtml(results), results, _renderRsiRows,
+                "当前周期下未发现 RSI 超买/超卖标的", total, skipped, interrupted);
         }
 
         // ── 回测扫描（backtest 模式）────────────────────────────────────
@@ -8071,10 +8117,9 @@
         }
 
         // 结果行渲染（进度期与终态**共用同一份**，避免两处漂移）
-        //   列：股票名 · 代码 · 笔数 · 期望值(%/笔)
+        //   列：名称 · 代码 · 市值 · 笔数 · 期望值(%/笔)
         //   排序：期望值从大到小；`null`（一笔都没平仓）沉底，不混在有值中间。
         function _renderBacktestRows(results) {
-            var html = _scanMarketSummaryHtml(results);
             results.sort(function(a, b) {
                 var x = _btExpect(a), y = _btExpect(b);
                 if (x === null && y === null) return 0;
@@ -8082,6 +8127,7 @@
                 if (y === null) return -1;
                 return y - x;
             });
+            var html = "";
             for (var i = 0; i < results.length; i++) {
                 var r = results[i];
                 var exp = _btExpect(r);
@@ -8090,57 +8136,48 @@
                     ? ("回测区间 " + r.date_from + " ~ " + r.date_to + "（" + r.bars + " 根）"
                        + "，成交 " + r.filled + " 笔（已平 " + r.closed + " / 持仓 " + r.still_open + "）")
                     : "点击查看K线图";
-                html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\', \'' + _scanFreq + '\')" title="' + statsEsc(tip) + '">';
-                // 默认勾选规则（用户裁定）：期望值 > 0 —— 跑完一键把正期望的票存进自选。
-                //   无值（还有未平仓笔）**不勾**：那是"还没结果"，不是"结果为正"。
-                html += chkBox(r.code, exp !== null && exp > 0);
-                html += '<span class="scan-col-name">' + statsEsc(r.name || r.code) + '</span>';
-                html += '<span class="scan-col-code">' + statsEsc(r.code) + '</span>';
-                html += '<span class="scan-col-btcount">' + r.filled + ' 笔</span>';
-                html += '<span class="scan-col-expect" style="color:'
-                    + (exp === null ? "#8b93a7" : _btCol(exp)) + '">'
-                    + (exp === null ? "—" : _btPct(exp)) + '</span>';
-                html += '</div>';
+                html += _scanRowHtml(r, {
+                    // 默认勾选规则（用户裁定）：期望值 > 0 —— 跑完一键把正期望的票存进自选。
+                    //   无值（还有未平仓笔）**不勾**：那是"还没结果"，不是"结果为正"。
+                    checked: exp !== null && exp > 0,
+                    title: tip,
+                    cols: '<span class="scan-col-btcount">' + r.filled + ' 笔</span>'
+                        + '<span class="scan-col-expect" style="color:'
+                        + (exp === null ? "#8b93a7" : _btCol(exp)) + '">'
+                        + (exp === null ? "—" : _btPct(exp)) + '</span>'
+                });
             }
             return html;
         }
 
-        // 回测扫描结果渲染（终态）
         function renderBacktestScanResults(results, total, skipped, interrupted) {
-            var body = document.getElementById("scan-body");
-            var label = interrupted ? "（已中断）" : "";
-            var sourceLabel = _scanSourceLabel();
-            var freqLabels = {"d": "日K", "w": "周K", "30m": "30分", "15m": "15分", "5m": "5分"};
-            var freqLabel = freqLabels[_scanFreq] || _scanFreq;
             var posCount = 0, naCount = 0;
             for (var i = 0; i < results.length; i++) {
                 var e = _btExpect(results[i]);
                 if (e === null) { naCount++; }
                 else if (e > 0) { posCount++; }
             }
-            var html = '<div class="scan-summary">' + sourceLabel + ' <b>' + total
-                + '</b> 只，跳过 <b>' + skipped + '</b> 只，回测 <b>' + (total - skipped)
-                + '</b> 只，有成交 <b>' + results.length + '</b> 只（期望 > 0 <b>' + posCount + '</b> 只'
-                + (naCount > 0 ? '，未平仓 ' + naCount + ' 只' : '') + '）' + label + '</div>';
-            // 口径披露行：**必须披露** —— 扫描回测取的是后端 lookback 的最新 N 根，
-            //   而页面若处「复盘 / 选点」态，单页回测的加载序列会被截断，同一票两处
-            //   数字会不一样；不写清楚，日后必然被当成"回测有 bug"来查。
-            if (results.length > 0) {
-                var r0 = results[0];
-                html += '<div class="scan-summary" style="font-size:10px;color:#7a8399;">'
-                    + freqLabel + ' · 区间：最新 ' + r0.bars + ' 根（截至 '
-                    + statsEsc(r0.date_to || "—") + '）'
-                    + ' · 买卖点类型：' + statsEsc(_btBspTypesLabel(_btBspTypes()))
-                    + '</div>';
-            }
-            if (results.length === 0) {
-                html += '<div class="scan-no-result">当前周期下没有股票产生成交'
-                    + (skipped > 0 ? '（另有 ' + skipped + ' 只被跳过）' : '') + '</div>';
-            } else {
-                html += _renderBacktestRows(results);
-            }
-            body.innerHTML = html;
-            updateScanSaveBtn();
+            var counts = '有成交 <b>' + results.length + '</b> 只（期望 > 0 <b>' + posCount + '</b> 只'
+                + (naCount > 0 ? '，未平仓 ' + naCount + ' 只' : '') + '）';
+            _paintScanFinal(counts, _btCaliberHtml(results), results, _renderBacktestRows,
+                "当前周期下没有股票产生成交" + (skipped > 0 ? '（另有 ' + skipped + ' 只被跳过）' : ''),
+                total, skipped, interrupted);
+        }
+
+        // 回测口径披露行：**必须披露** —— 扫描回测取的是后端 lookback 的最新 N 根，
+        //   而页面若处「复盘 / 选点」态，单页回测的加载序列会被截断，同一票两处
+        //   数字会不一样；不写清楚，日后必然被当成"回测有 bug"来查。
+        //   无命中行时不出版（没有 r0 可读，区间/根数都无从谈起）。
+        function _btCaliberHtml(results) {
+            if (!results || !results.length) { return ""; }
+            var freqLabels = {"d": "日K", "w": "周K", "30m": "30分", "15m": "15分", "5m": "5分"};
+            var freqLabel = freqLabels[_scanFreq] || _scanFreq;
+            var r0 = results[0];
+            return '<div class="scan-summary" style="font-size:10px;color:#7a8399;">'
+                + freqLabel + ' · 区间：最新 ' + r0.bars + ' 根（截至 '
+                + statsEsc(r0.date_to || "—") + '）'
+                + ' · 买卖点类型：' + statsEsc(_btBspTypesLabel(_btBspTypes()))
+                + '</div>';
         }
 
         // 生成复选框HTML
@@ -8173,12 +8210,15 @@
             else if (!lastBuyDate) { latestPoint = sellPoints[sellPoints.length - 1]; isBuy = false; }
             else if (lastBuyDate >= lastSellDate) { latestPoint = buyPoints[buyPoints.length - 1]; isBuy = true; }
             else { latestPoint = sellPoints[sellPoints.length - 1]; isBuy = false; }
-            var tp = (latestPoint.type || "").replace(/\s/g, "");
-            var typeKey = 99;
-            if (tp === "1") typeKey = 1;
-            else if (tp === "2") typeKey = 2;
-            else if (tp === "3") typeKey = 3;
-            else if (tp === "0") typeKey = 4;
+            // 复合串（"1,3"/"1,11"）取**最强**分量：rank 里序号最小者 —— 与「先买点
+            // 后卖点、类内 1→2→3→0」的既有排序语一致，"1,3" 按 1 类排。
+            var rank = {"1": 1, "2": 2, "3": 3, "0": 4};
+            var mains = _bspMainTypes(latestPoint);
+            var typeKey = 99;   // 无现役主类型：理论上不可达（存储层只收 target bsp）
+            for (var i = 0; i < mains.length; i++) {
+                var k = rank[mains[i]];
+                if (k && k < typeKey) { typeKey = k; }
+            }
             return (isBuy ? 0 : 10) + typeKey;
         }
 

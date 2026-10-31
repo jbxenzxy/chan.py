@@ -374,9 +374,9 @@ async def api_stocks_scan_read_candidates(source: str = Query("zxg"),
     A 页选沪深300、B 页选中证500 时，读全局会让两页都按最后设置的
     那个扫，静默扫错一整批成分股。
     scan_min_float_mc：流通市值过滤下限（亿），随本请求传入（前端设置
-    抽屉配置、localStorage 持久化）；None=后端配置默认；<=0=关闭过滤
-    且不做市值取数。freq：扫描周期，全A股候选目录随它切换（周/日→lday，
-    分钟→fzline）。
+    抽屉配置、localStorage 持久化）；None=后端配置默认；<=0=不按市值过滤
+    （仍取数 —— 市值是结果行的展示列，取数与过滤解耦）。freq：扫描周期，
+    全A股候选目录随它切换（周/日→lday，分钟→fzline）。
     """
     if scan_min_float_mc is not None and scan_min_float_mc < 0:
         scan_min_float_mc = 0.0

@@ -254,6 +254,19 @@ def _extract_any_fn(appjs, fn_name):
     raise AssertionError("app.js 花括号不配平: " + fn_name)
 
 
+
+
+def _title_row(appjs, mode, name):
+    """从 `_SCAN_TITLE` 表取某模式的 window 标记（"true"/"false"/""）。
+
+    标题已收归单一表（模式名 + 是否带「最新 N 根」都在那一行），故断言打在表上，
+    而不是像以前那样去搜每个模式各自的字面量拼接（那种写法本身就说明没归一）。
+    """
+    for ln in appjs.split("\n"):
+        if ln.strip().startswith(mode + ":") and ('name: "' + name + '"') in ln:
+            return "true" if "window: true" in ln else "false"
+    return ""
+
 _ROWS = [
     # 故意打乱顺序 + 混入 0，验证「按区间涨幅降序」真的发生（不是顺序透传）
     {"code": "sz000003", "name": "C\u80a1", "recent_days": 3, "gain_pct": -1.5},
@@ -278,6 +291,7 @@ def part3():
         "var _scanFreq = 'd';\n"
         "var _scanRecentDays = 3;\n"
         "function chkBox(code, checked) { return '<chk:' + code + ':' + (checked ? '1' : '0') + '>'; }\n"
+        "function statsEsc(x) { return String(x == null ? '' : x); }\n"
         "function _scanMarketSummaryHtml(rs) { return ''; }\n"
         "function updateScanSaveBtn() {}\n"
         "var DOM = { 'scan-body': { innerHTML: '' } };\n"
@@ -326,7 +340,7 @@ def part3():
         "  return html.slice(i, html.indexOf('</div>', i)); }\n"
         "out.push('TAG=' + JSON.stringify({\n"
         "  lz: _rowHtml('sz000001').indexOf('3\u8fde\u6da8') >= 0,\n"
-        "  cls: _rowHtml('sz000001').indexOf('fl-rise') >= 0 }));\n"
+        "  cls: _rowHtml('sz000001').indexOf('scan-tag-up') >= 0 }));\n"
         "out.push('COLOR=' + JSON.stringify({\n"
         "  pos: _rowHtml('sz000001').indexOf('#FF3C3C') >= 0,\n"
         "  neg: _rowHtml('sz000003').indexOf('#00F0F0') >= 0,\n"
@@ -366,6 +380,12 @@ def part3():
                + _extract_any_fn(appjs, "buildLianzhangTagHtml") + "\n"
                + _extract_any_fn(appjs, "_renderLianzhangRows") + "\n"
                + _extract_any_fn(appjs, "renderLianzhangScanResults") + "\n"
+               + _extract_any_fn(appjs, "_lianzhangCaliberHtml") + "\n"
+               + _extract_any_fn(appjs, "_fmtFloatMc") + "\n"
+               + _extract_any_fn(appjs, "_scanRowHtml") + "\n"
+               + _extract_any_fn(appjs, "_scanSummaryLine") + "\n"
+               + _extract_any_fn(appjs, "_scanPanelHtml") + "\n"
+               + _extract_any_fn(appjs, "_paintScanFinal") + "\n"
                + driver)
 
     jf = tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8")
@@ -402,7 +422,7 @@ def part3():
     order = json.loads(kv["ORDER"])
     check("③b 按区间涨幅降序：6.25 → 2.5 → 0.0 → -1.5", order["ok"], order)
     tag = json.loads(kv["TAG"])
-    check("③b 标签为「N连涨」且用红色样式类 fl-rise（与 K 线红柱同色）",
+    check("③b 标签为「N连涨」且用红色方向语义类 scan-tag-up（与 K 线红柱同色）",
           tag["lz"] and tag["cls"], tag)
     color = json.loads(kv["COLOR"])
     check("③b 涨红跌绿（正 #FF3C3C / 负 #00F0F0 / 0 归非负侧）+ 数值格式",
@@ -444,8 +464,9 @@ def part4():
     appjs = io.open(APPJS, encoding="utf-8").read()
     check("④ localStorage 白名单收 lianzhang（否则重开弹窗回落到标注模式）",
           bool(re.search(r'savedMode === "lianzhang"', appjs)), "白名单未含 lianzhang")
-    check("④ 结果面板标题分支存在",
-          '} else if (_scanMode === "lianzhang") {' in appjs, "缺标题分支")
+    check("④ 标题表收录 lianzhang 且带 window 标记（统一成「最新 N 根」风格）",
+          _title_row(appjs, "lianzhang", "连涨") == "true",
+          "标题表未含 lianzhang / window 标记")
     check("④ 提交 spec 用 mode: \"lianzhang\" 且分类读 is_lianzhang",
           bool(re.search(r'mode:\s*"lianzhang"', appjs))
           and bool(re.search(r'classify: function\(data\) \{ return !!data\.is_lianzhang; \}',

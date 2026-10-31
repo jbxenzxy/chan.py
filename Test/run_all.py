@@ -155,6 +155,18 @@ CI / 迁移每阶段的验收门禁）。
                                                     优先 / 真浏览器：切换后
                                                     直接以目标日为右端加载
                                                     / 方式C 仅提示
+ 42. 扫描面板版式归一 test_scan_panel_layout.py 8 种扫描模式的结果面板共用
+                                                    同一套版式：列序唯一构造
+                                                    （_scanRowHtml，含流通
+                                                    市值列）/ 块序唯一装配
+                                                    （_scanPanelHtml）/
+                                                    终态唯一装配（_paintScan
+                                                    Final）/ 标题表 _SCAN_TITLE
+                                                    两套风格（可设「最新 N
+                                                    根」的 4 个带窗口，不设
+                                                    的 3 个不带）/ 买卖点
+                                                    复合串只认 0-3 / 440 面板
+                                                    列宽预算实测
 每组件独立子进程执行，超时 300s 按失败终止（防死循环挂死）。
 
 登记在 `CLEAN_CREDENTIALS_COMPONENTS` 的组件（当前 p20 / p60）额外**清空凭据
@@ -1000,6 +1012,27 @@ COMPONENTS = [
     #   × 的 computed display（最小化态 === 'none'）。
     ("scan_panel_collapse",
      [sys.executable, os.path.join("Test", "test_scan_panel_collapse.py")]),
+    # 扫描结果面板版式归一（2026-10-31，用户 5 条决策）：
+    #   8 种模式（标注/均线/放量/连涨/RSI/底分型/买·卖点/回测）此前各拼各的行、
+    #   各拼各的口径行、各写各的标题 —— 同一个「结果行」有 8 份实现 ⇒ 加一列要改
+    #   8 处、漏一处就是「有的模式有这列、有的没有」。本次收成四个单点：
+    #     ① 行构造 `_scanRowHtml`（列序唯一实现：勾选 → 名称 → 代码 → **流通市值** →
+    #        `o.cols` 各模式自有列 → 标签）；列序变更只改这一处；
+    #     ② 块序装配 `_scanPanelHtml`（头部 → 口径行 → 市场分布 → 行｜空态），
+    #        进度期与终态共用，不再各拼一份；
+    #     ③ 终态装配 `_paintScanFinal`（7 个模式各调 1 次，参数化 rowsFn / emptyText）；
+    #     ④ 标题表 `_SCAN_TITLE` 两套风格：可设「最新 N 根」的 4 个（放量/连涨/RSI/
+    #        买·卖点）带窗口段，不设的 3 个（均线/底分型/回测）不带；标注固定
+    #        「全周期 标注」。
+    #   判据五段：① 列序与市值格式（node 跑真 `_scanRowHtml` / `_fmtFloatMc`：缺值
+    #   → `--`、≥100 取整、<100 一位、去 `.0`）；② 单点构造/装配计数棘轮
+    #   （`scan-stock-row` 字面量恰 1 处、7 个 `_renderXxxRows` 都调 `_scanRowHtml`、
+    #   `_paintScanFinal` 定义 1 调用 7、`_scanPanelHtml` 定义 1 调用 3）；
+    #   ③ 列宽预算（440 反锚点：改回 420 即红 —— 标注行第 3~5 列被压到截断）；
+    #   ④ 代码形态 `market+code` 与 `float_mc` 出处；⑤ 标题两套风格（node 跑 8 个
+    #   模式 + 表内 `window` 位）。
+    ("scan_panel_layout",
+     [sys.executable, os.path.join("Test", "test_scan_panel_layout.py")]),
     # 未定义全局名静态护栏（2026-10-08 期货选点 NameError 事故防回潮）：
     #   db6f886 把「定位」段的 `config = _make_chan_config()` 换成
     #   `init_chan_symbol(...)`，下方 Step 4 的 `config=config` 遂成孤立引用

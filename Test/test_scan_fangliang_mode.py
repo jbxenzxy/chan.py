@@ -321,6 +321,7 @@ def part3():
         "var _scanRecentDays = 3;\n"
         "var _scanFangliangWindowBars = null;\n"
         "function chkBox(code, checked) { return '<chk:' + code + ':' + (checked ? '1' : '0') + '>'; }\n"
+        "function statsEsc(x) { return String(x == null ? '' : x); }\n"
         "function _scanMarketSummaryHtml(rs) { return ''; }\n"
         "function updateScanSaveBtn() {}\n"
         "function _scanSourceLabel() { return '\u81ea\u9009\u80a1'; }\n"
@@ -365,6 +366,12 @@ def part3():
     harness = (prelude
                + _extract_any_fn(appjs, "_fangliangCaliberHtml") + "\n"
                + _extract_any_fn(appjs, "renderFangliangScanResults") + "\n"
+               + _extract_any_fn(appjs, "_fmtFloatMc") + "\n"
+               + _extract_any_fn(appjs, "_scanRowHtml") + "\n"
+               + _extract_any_fn(appjs, "_scanSummaryLine") + "\n"
+               + _extract_any_fn(appjs, "_scanPanelHtml") + "\n"
+               + _extract_any_fn(appjs, "_paintScanFinal") + "\n"
+               + _extract_any_fn(appjs, "_renderFangliangRows") + "\n"
                + _extract_any_fn(appjs, "buildFangliangTagHtml") + "\n"
                + driver)
 
@@ -428,8 +435,10 @@ def part4():
           "function _fangliangCaliberHtml()" in appjs, "未找到披露函数")
     # 单一来源的实质：进度期与终态都调它，而不是各写一份字面量
     n_call = len(re.findall(r"_fangliangCaliberHtml\(\)", appjs))
-    check("④ 进度期与终态**共用**同一披露函数（调用点 >= 3：定义 + renderRows + "
-          "renderFangliangScanResults）", n_call >= 3, n_call)
+    # 本轮起披露行不再由两条渲染路径各调一次：口径行由装配器 `_scanPanelHtml`
+    # 统一挂（spec.caliber 与终态适配器传的是**同一个函数引用**），故调用点 = 定义 + 1。
+    check("④ 披露函数是单一来源（定义 1 处 + 唯一的引用点 = 模式 spec 的 caliber）",
+          n_call == 2, n_call)
     check("④ 披露文案**不在别处重复门面**（防两处漂移）：全仓搜不到第二处"
           "「成交额最大的一根」字面量",
           appjs.count("\u6210\u4ea4\u989d\u6700\u5927\u7684\u4e00\u6839") == 1,

@@ -356,6 +356,22 @@ def _quick_prefilter_pass(market, code, check_st=True, min_float_mc=None):
         return (True, None, None)
 
 
+def _row_float_mc(code):
+    """流通市值（亿元）—— 扫描结果行第 4 列取值，未命中返回 None。
+
+    与预过滤 `_quick_prefilter_pass` 读的是**同一张缓存、同一个取数口**
+    （`app_data.get_float_mc_from_cache`），所以「筛掉的」与「显示的数字」不可能
+    是两套值。差别只在进程：scan_one 跑在 spawn 出来的 worker 里，app_data 是空壳，
+    故先按需加载本地 JSON（`load_float_mc_cache` 幂等，每进程只读一次盘）。
+    """
+    try:
+        app_data.load_float_mc_cache()
+        return app_data.get_float_mc_from_cache(code)
+    except Exception as e:  # noqa: BLE001 —— 展示字段取数失败不得打断扫描
+        log.info(f"[流通市值] 行字段取数失败 {code}: {type(e).__name__}: {e}")
+        return None
+
+
 def _fetch_float_mc_all(stock_list):
     """批量获取 A 股流通市值（A 股走 eltdx；该口径只覆盖 A 股，无需选源）。
 
@@ -682,7 +698,9 @@ class Scanner:
 
         min_float_mc：流通市值过滤下限（亿），随本请求传入（前端设置抽屉
         配置、localStorage 持久化）。None=用配置默认 app_config.scan_min_float_mc；
-        <=0=关闭市值过滤，且**不做**市值批量取数（省一次 eltdx 全表）。
+        <=0=**不按市值过滤**（候选全保留）。注意：<=0 仍会做市值批量取数 ——
+        市值已是扫描结果行的一列（前端每行显示），取数与过滤自 2026-10-31 起解耦，
+        见下方 `_need_float_mc` 处的说明。
         freq：扫描周期（w/d/30m/15m/5m），全A股候选目录随它切换
         （周/日→lday，分钟→fzline），随本请求传入。
 
@@ -762,13 +780,16 @@ class Scanner:
                         merged[exist_idx]["_source"] = src
 
         # 批量获取流通市值（自选股/成分股/全A股 任一来源都需要；
-        # 板块指数2/3 维持现状不过滤不取数）。阈值 <=0 = 关闭过滤且不取数。
+        # 板块指数2/3 维持现状不过滤不取数）。阈值 <=0 = 关闭过滤。
         _threshold = app_config.scan_min_float_mc if min_float_mc is None else min_float_mc
         _mc_enabled = _threshold > 0
-        _need_float_mc = _mc_enabled and any(
-            s in ("zxg", "page_index", "all_a") for s in sources)
+        # 取数条件与过滤阈值**解耦**（2026-10-31）：流通市值已是结果行的一列
+        # （每个模式每行都显示，见 `_row_float_mc`），所以只要有 A 股来源就必须
+        # 有值。阈值 <=0 的语义是"不按市值筛"，不是"不要这个数字"——旧写法把
+        # 取数绑在 `_mc_enabled` 上，用户一关过滤，面板整列变 `--`，看着像坏了。
+        _need_float_mc = any(s in ("zxg", "page_index", "all_a") for s in sources)
         if not _mc_enabled:
-            log.info(f"[流通市值] 阈值={_threshold:g}（关闭过滤），本次不获取市值")
+            log.info(f"[流通市值] 阈值={_threshold:g}（不按市值过滤，仍取数供展示）")
         if _need_float_mc:
             app_data.load_float_mc_cache()
             if app_data.float_mc_loaded:
@@ -857,6 +878,25 @@ class Scanner:
     # ── 单只扫描 ─────────────────────────────────────────────────────
     def scan_one(self, code, freq="d", prefix="", recent="1", source="zxg", mode="",
                  bsp_types=None, rsi_over=None, rsi_under=None):
+        """扫描单只股票 —— **结果行契约的唯一收口**（调用方：AppScanPool._worker_scan_one）。
+
+        本方法只做一件事：调业务分支 `_scan_one`，再给命中的行补上跨模式共用字段。
+        目前补一个 `float_mc`（流通市值，亿元）：它是面板每行都显示的一列，与模式
+        无关。放在这里而非各 `return` 上，是因为 `_scan_one` 有 10 处 return、且
+        每个新模式都会再加一处 —— 逐处补等于给"漏一处就是一列空白"留门（历史
+        同型事故：市场分布行在进度期与终态各写一份，扫完就消失）。
+        取数口径见 `_row_float_mc`；失败/未命中返回 None（前端显示 `--`），
+        不影响命中判定 —— 市值不参与任何模式的判据。
+        """
+        resp = self._scan_one(code, freq=freq, prefix=prefix, recent=recent,
+                              source=source, mode=mode, bsp_types=bsp_types,
+                              rsi_over=rsi_over, rsi_under=rsi_under)
+        if isinstance(resp, dict) and "error" not in resp:
+            resp["float_mc"] = _row_float_mc(code)
+        return resp
+
+    def _scan_one(self, code, freq="d", prefix="", recent="1", source="zxg", mode="",
+                  bsp_types=None, rsi_over=None, rsi_under=None):
         """扫描单只股票（唯一调用方：AppScanPool._worker_scan_one，worker 进程内）
 
         并发安全不依赖锁，而是三层隔离：

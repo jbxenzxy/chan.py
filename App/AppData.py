@@ -1769,6 +1769,10 @@ class AppData:
         #     的**就地追加** → 只拷 dict 不够，须逐键拷 list。
         # 删除类操作是整体替换列表（`_annotations[key] = [...]`），不会
         # 就地改写，故浅拷贝两层即等价于不可变快照。
+        # 市值缓存先加载（**必须在取锁之前**：load_float_mc_cache 自己要拿
+        # _user_store_lock，放锁内就是同锁自锁死）。标注模式不经过扫描池，
+        # 没有扫描前置那段取数，只能在这里按需读本地 JSON（幂等、只读一次）。
+        self.load_float_mc_cache()
         with self._user_store_lock:
             self.load_annotations()
             self.load_stock_names_from_cache_file()
@@ -1804,12 +1808,17 @@ class AppData:
                 elif info:
                     name = str(info)
 
+            # 流通市值（亿元）：面板第 4 列展示，字段名/单位与扫描模式的行契约
+            # 一致（`AppScan._row_float_mc`）。未命中返回 None ⇒ 前端显示 `--`。
+            float_mc = self.get_float_mc_from_cache(bare_code) if (market and bare_code) else None
+
             result.append({
                 "code": bare_code,
                 "market": market,
                 "name": name,
                 "freq": key_freq,
                 "count": len(anns),
+                "float_mc": float_mc,
                 "annotations": [{"date": a.get("date", ""), "text": a.get("text", "")} for a in anns if a.get("text")]
             })
         return result

@@ -397,6 +397,19 @@ def _extract_any_fn(appjs, fn_name):
 # 混合样本：3 超卖 + 2 超买 + 1 条缺 rsi_group（兜底：15.0 <= 当前生效 20 ⇒ under，
 #   与该行 rsi_hit_under=1 同向）。
 #   期望顺序（组间 + 组内极值）：C(0.0) → A(8.1) → F(15.0) → E(15.4) → D(92.5) → B(86.0)
+
+
+def _title_row(appjs, mode, name):
+    """从 `_SCAN_TITLE` 表取某模式的 window 标记（"true"/"false"/""）。
+
+    标题已收归单一表（模式名 + 是否带「最新 N 根」都在那一行），故断言打在表上，
+    而不是像以前那样去搜每个模式各自的字面量拼接（那种写法本身就说明没归一）。
+    """
+    for ln in appjs.split("\n"):
+        if ln.strip().startswith(mode + ":") and ('name: "' + name + '"') in ln:
+            return "true" if "window: true" in ln else "false"
+    return ""
+
 _ROWS = [
     {"code": "sz000001", "name": "A", "is_rsi": True, "recent_days": 3,
      "rsi_group": "under", "rsi_last": 10.0, "rsi_min": 8.1, "rsi_max": 25.0,
@@ -451,6 +464,7 @@ def part3():
         "var _scanRecentDays = 3;\n"
         "var _scanSources = ['zxg'];\n"
         "function chkBox(code, checked) { return '<chk:' + code + '>'; }\n"
+        "function statsEsc(x) { return String(x == null ? '' : x); }\n"
         "function _scanMarketSummaryHtml(rs) { return '<mkt:' + rs.length + '>'; }\n"
         "function updateScanSaveBtn() {}\n"
         "function _scanSourceLabel() { return '\u81ea\u9009\u80a1'; }\n"
@@ -496,7 +510,9 @@ def part3():
     harness = (prelude
                + "\n".join(_extract_any_fn(appjs, n) for n in
                            ("_rsiGroupOf", "buildRsiTagHtml", "_rsiCaliberHtml",
-                            "_renderRsiRows", "renderRsiScanResults")) + "\n"
+                            "_renderRsiRows", "renderRsiScanResults",
+                            "_fmtFloatMc", "_scanRowHtml", "_scanSummaryLine",
+                            "_scanPanelHtml", "_paintScanFinal")) + "\n"
                + driver)
 
     jf = tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8")
@@ -545,11 +561,11 @@ def part3():
 
     tag_u = json.loads(kv["TAGU"])
     tag_o = json.loads(kv["TAGO"])
-    check("③ 标签（超卖）：绿色系 fl-fall（= 副图 macdDown 同源类）+「超卖 15.4 (2/3)」",
-          "scan-bsp-tag" in tag_u and "fl-fall" in tag_u
+    check("③ 标签（超卖）：青色系 scan-tag-down（= 副图 macdDown 同源类）+「超卖 15.4 (2/3)」",
+          "scan-bsp-tag" in tag_u and "scan-tag-down" in tag_u
           and "\u8d85\u5356 15.4" in tag_u and "(2/3)" in tag_u, tag_u)
-    check("③ 标签（超买）：红色系 fl-rise（= 副图 macdUp 同源类）+「超买 92.5 (3/3)」",
-          "scan-bsp-tag" in tag_o and "fl-rise" in tag_o
+    check("③ 标签（超买）：红色系 scan-tag-up（= 副图 macdUp 同源类）+「超买 92.5 (3/3)」",
+          "scan-bsp-tag" in tag_o and "scan-tag-up" in tag_o
           and "\u8d85\u4e70 92.5" in tag_o and "(3/3)" in tag_o, tag_o)
 
     cal = json.loads(kv["CAL"])
@@ -579,9 +595,12 @@ def part3():
           and "#7a8399" in cal, cal)
 
     rows_html = json.loads(kv["ROWS"])
-    check("③ renderRows：市场分布 + 披露行 + 6 行数据共存（披露不挤掉结果）",
-          "<mkt:6>" in rows_html and _CAL_MARK in rows_html
-          and rows_html.count("scan-stock-row") == 6, rows_html[:200])
+    # 本轮起「行函数只出行」：市场分布行与口径行由装配器 `_scanPanelHtml` 统一挂，
+    #   行函数里再出现 scan-summary 就是两处又要漂移了（放量/底分型曾经的病）。
+    check("③ renderRows 只产出数据行（6 行），**不含**市场分布 / 口径行",
+          rows_html.count("scan-stock-row") == 6
+          and "scan-summary" not in rows_html and _CAL_MARK not in rows_html,
+          rows_html[:200])
 
     fin = json.loads(kv["FIN"])
     check("③ 终态：摘要按**组**计数「超卖 4 只，超买 2 只」",
@@ -597,9 +616,11 @@ def part3():
           _CAL_MARK in empty and "scan-stock-row" not in empty
           and "\u672a\u53d1\u73b0 RSI" in empty, empty[:300])
 
-    check("③ 进度期与终态**共用** _renderRsiRows（防两处漂移）",
-          "renderRows: function(results) { return _renderRsiRows(results); }" in appjs
-          and "html += _renderRsiRows(results);" in appjs,
+    # 本轮起"共用"不再靠两处各写一行调用，而是**同一个函数引用**：
+    #   spec.renderRows 与 renderRsiScanResults 传给 _paintScanFinal 的 rowsFn 是它。
+    check("③ 进度期与终态共用同一份行渲染（两个入口传的是同一个函数引用）",
+          "renderRows: _renderRsiRows," in appjs
+          and "results, _renderRsiRows," in appjs,
           "\u4e24\u5904\u672a\u5171\u7528")
 
 
@@ -630,8 +651,9 @@ def part4():
           "\u81ea\u52a8\u8865 3 \u672a\u63a5")
     check("④ 「最近N根」灰化名单**不含** rsi（ann/ma/fx_d/backtest 才灰）",
           "if (isAnn || isMa || isFxD || isBacktest) {" in appjs, "\u7070\u5316\u5224\u636e\u5df2\u53d8")
-    check("④ 面板标题分支：freq + N + 根RSI",
-          '_scanRecentDays + "\u6839RSI"' in appjs, "\u6807\u9898\u5206\u652f\u672a\u52a0")
+    check("④ 标题表收录 rsi 且带 window 标记（统一成「最新 N 根」风格）",
+          _title_row(appjs, "rsi", "RSI") == "true",
+          "标题表未含 rsi / window 标记")
 
     check("④ runScan 分支存在且 mode 传 \"rsi\"",
           'if (_scanMode === "rsi") {' in appjs and 'mode: "rsi",' in appjs,

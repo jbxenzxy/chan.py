@@ -13,7 +13,12 @@
      末段 end_date = 序列末根（§3.8 T1/T2/T3 直接搬为用例）；
   ⑥ 离场 R 数含负（T2「保本止盈」净亏 −0.10R）；
   ⑦ 卖点对称（side=short，零分支）；
-  ⑧ 校验 4xx：非股票 / 空 klines / 缺字段 / 纯变体 type（"11"）/ date 不在 klines；
+  ⑧ 校验 4xx：非股票 / 空 klines / 缺字段 / type 空串 / date 不在 klines；
+  ⑧a 类型白名单 = 现役四类 0/1/2/3（`_TPSL_MAIN_TYPES`）：11/22/33 及 psab
+     变体已于 2026-10-05 用户确认废弃（Common/CEnum.py 的 BSP_TYPE 注释），
+     引擎默认 `bs_type="0,1,2,3"` 下不产出 ⇒ **不再为它们造样本**（旧版本用
+     `type="11"` 造过 4xx 样本，等于把已废弃取值当真实输入，已改）；改用白名单
+     常量钉住口径，并正向钉住「引擎下发的是逗号复合串，按分量判定」；
   ⑨ 跨日 ATR 连续（P2-4，Q5）：跨多日 bar 序列 ATR 累计不断档 —— 钉死
      「移除 Exit.on_bar 跨日清空」的新口径，防将来被"顺手恢复"而无红灯；
   ⑩ 前端分段标签口径（2026-09-27 用户三/四/五/六改）：从 Frontend/app.js 抽
@@ -166,8 +171,8 @@ def main():
     cases = [
         ("非股票代码", {"code": "CFFEX.IF2509", "freq": "d", "klines": [_ENTRY], "bsp": bsp}),
         ("空 klines", {"code": "sh600519", "freq": "d", "klines": [], "bsp": bsp}),
-        ("纯变体 type '11'", {"code": "sh600519", "freq": "d", "klines": [_ENTRY],
-                              "bsp": dict(bsp, type="11")}),
+        ("type 为空串（无任何类型分量）", {"code": "sh600519", "freq": "d",
+                                          "klines": [_ENTRY], "bsp": dict(bsp, type="")}),
         ("缺 fractal_low", {"code": "sh600519", "freq": "d", "klines": [_ENTRY],
                             "bsp": {k: v for k, v in bsp.items() if k != "fractal_low"}}),
         ("bsp.date 不在 klines", {"code": "sh600519", "freq": "d", "klines": [_ENTRY],
@@ -179,6 +184,24 @@ def main():
             check("{} → 400".format(tag), False, "未抛 BadRequestError")
         except BadRequestError:
             check("{} → 400".format(tag), True)
+
+    # ⑧a 类型白名单口径。**不为 11/22/33 造样本**：它们已在 2026-10-05 由用户
+    #     确认废弃（Common/CEnum.py 的 BSP_TYPE 注释、BSPointList.cal 的 store 条件
+    #     三处一致），引擎在默认 `bs_type="0,1,2,3"` 下根本不产出 —— 拿它当输入样本
+    #     等于把不存在的数据形态写进用例。改为钉两件真事：①白名单常量就是四类
+    #     （防止有人"兼容"地把 '11' 加回来）；②引擎实际下发的 `type2str()` 是逗号
+    #     复合串（同根 K 线合并多类型），按**分量**判定即放行。
+    print("══ ⑧a 类型白名单 = 现役四类（复合串按分量判定）══")
+    from App.AppTPSL import _TPSL_MAIN_TYPES
+    check("白名单 = ('0','1','2','3')（11/22/33 与 psab 变体已废弃，不得回归）",
+          tuple(_TPSL_MAIN_TYPES) == ("0", "1", "2", "3"), repr(_TPSL_MAIN_TYPES))
+    for _t in ("0", "1", "2", "3", "1,2", "3,0"):
+        try:
+            _rt = compute_stock_tpsl("sh600519", _payload([_ENTRY], dict(bsp, type=_t)))
+            check("type={!r} 放行（复合串任一分量命中即收）".format(_t),
+                  _rt["entry"]["price"] == 10.0, _rt.get("entry"))
+        except BadRequestError as _e:
+            check("type={!r} 放行（复合串任一分量命中即收）".format(_t), False, str(_e))
 
     # ⑧b **正向**白名单：只钉「坏代码被拒」是不够的 —— 把白名单缩成 ("sh",)
     #     照样全绿，而 ds 扩展指数（中证2000）就是被这么漏掉的：页面能打开它、

@@ -346,6 +346,19 @@ def _extract_any_fn(appjs, fn_name):
     raise AssertionError("app.js 花括号不配平: " + fn_name)
 
 
+
+
+def _title_row(appjs, mode, name):
+    """从 `_SCAN_TITLE` 表取某模式的 window 标记（"true"/"false"/""）。
+
+    标题已收归单一表（模式名 + 是否带「最新 N 根」都在那一行），故断言打在表上，
+    而不是像以前那样去搜每个模式各自的字面量拼接（那种写法本身就说明没归一）。
+    """
+    for ln in appjs.split("\n"):
+        if ln.strip().startswith(mode + ":") and ('name: "' + name + '"') in ln:
+            return "true" if "window: true" in ln else "false"
+    return ""
+
 _ROWS = [
     # 故意打乱输入顺序 + 混入 null，验证"排序"真的发生（不是顺序透传）
     {"code": "sz000003", "name": "C股", "filled": 3, "closed": 2, "still_open": 1,
@@ -489,6 +502,12 @@ def part5():
                + _extract_any_fn(appjs, "_scanSubmitBody") + "\n"
                + _extract_any_fn(appjs, "_renderBacktestRows") + "\n"
                + _extract_any_fn(appjs, "renderBacktestScanResults") + "\n"
+               + _extract_any_fn(appjs, "_btCaliberHtml") + "\n"
+               + _extract_any_fn(appjs, "_fmtFloatMc") + "\n"
+               + _extract_any_fn(appjs, "_scanRowHtml") + "\n"
+               + _extract_any_fn(appjs, "_scanSummaryLine") + "\n"
+               + _extract_any_fn(appjs, "_scanPanelHtml") + "\n"
+               + _extract_any_fn(appjs, "_paintScanFinal") + "\n"
                + driver)
 
     jf = tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8")
@@ -603,8 +622,9 @@ def part6():
     check("⑥ localStorage 白名单收 backtest（否则重开弹窗回落到标注模式）",
           "backtest" in _whitelist,
           "白名单未含 backtest，实际=" + str(_whitelist))
-    check("⑥ 结果面板标题分支存在（日K 回测）",
-          'freqLabel + " 回测"' in appjs, "缺标题分支")
+    check("⑥ 标题表收录 backtest 且 window=false（无「最近N根」设置）",
+          _title_row(appjs, "backtest", "回测") == "false",
+          "标题表未含 backtest / window 标记")
 
     css = io.open(APPCSS, encoding="utf-8").read()
     check("⑥ CSS 有笔数与期望值两列（期望值右对齐 + 等宽数字）",

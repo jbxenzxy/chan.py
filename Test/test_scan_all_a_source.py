@@ -20,7 +20,9 @@
 锁定契约：
   [1] read_all_a_stocks：vipdoc 合成目录下只收个股段（60/68/00/30），
       剔除指数（sh000/399）、B股、ETF/债券；bj 目录不收。
-  [2] 阈值 0：不调 fetch_float_mc_all（省一次 eltdx 全表）、候选全保留。
+  [2] 阈值 0：**不按市值过滤**（候选全保留），但**仍取一次市值** ——
+      2026-10-31 起市值是结果行的展示列，取数与过滤解耦（旧契约「阈值 0
+      省一次 eltdx 全表」作废：面板每行都显示市值，不取数就整列 `--`）。
   [3] 阈值 >0：自选股来源也按阈值过滤（低于跳过、高于保留）。
   [4] _SOURCE_READERS 登记 all_a →「全A股」。
   [5] ST/退市过滤对自选股同样生效（与成分股口径一致，不再是成分股独有）。
@@ -429,16 +431,16 @@ def test_gate_off_skips_disk_read(failures):
 
 
 def test_threshold_zero_disables(failures):
-    """[2] 阈值 0：不取市值、候选全保留。"""
+    """[2] 阈值 0：不按市值过滤、候选全保留，但仍取一次市值（展示列需要）。"""
     result, n = _run_stock_list(min_float_mc=0)
-    if n != 0:
-        failures.append(f"[2] 阈值 0 仍调用了 {n} 次市值取数（期望 0）")
+    if n != 1:
+        failures.append(f"[2] 阈值 0 应仍取 1 次市值（结果行展示列），实际 {n} 次")
         print(f"[FAIL] [2] 阈值 0 市值取数次数: {n}")
     elif result.get("total") != 1 or result.get("pre_skipped") != 0:
         failures.append(f"[2] 阈值 0 候选应全保留，实际 total={result.get('total')} pre_skipped={result.get('pre_skipped')}")
         print(f"[FAIL] [2] 阈值 0 结果: {result.get('total')}/{result.get('pre_skipped')}")
     else:
-        print("[PASS] [2] 阈值 0：市值取数 0 次，候选全保留")
+        print("[PASS] [2] 阈值 0：不过滤（候选全保留），市值仍取 1 次供展示")
 
 
 def test_zxg_filtered_by_threshold(failures):

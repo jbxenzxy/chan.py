@@ -441,7 +441,10 @@
         }
         .scan-panel {
             position: fixed; bottom: 40px; left: 10px;
-            width: 420px; max-height: calc(100vh - 120px);
+            /* 440 = 420（2026-10-31 前的原宽）+ 20：结果行新增「流通市值」列后，
+               420 下标注模式的「标注文字」会被截掉约 3 个汉字、「N条」标签被压到
+               18px（实测见 Test/test_scan_panel_layout.py 的宽度预算断言）。 */
+            width: 440px; max-height: calc(100vh - 120px);
             background: rgba(22, 33, 62, 0.97);
             border: 1px solid #0f3460; border-radius: 8px;
             z-index: 200; display: none;
@@ -538,25 +541,35 @@
             color: #8892b0 !important; font-weight: 400 !important;
         }
         .scan-col-freq {
-            width: 40px !important; flex-shrink: 0 !important;
+            width: 34px !important; flex-shrink: 0 !important;
             text-align: left !important; color: #e94560 !important;
             font-size: 11px !important; white-space: nowrap !important;
             padding-left: 6px !important;
         }
+        /* 代码列 72：code 契约固定为 market(2 字符) + 代码(≤6 字符)，最长
+           "hkHSTECH"/"ds932000" 实测 ~64px；85 是点号形态（600519.sh，已废弃）留下的余量。 */
         .scan-col-code {
-            width: 85px !important; flex-shrink: 0 !important;
+            width: 72px !important; flex-shrink: 0 !important;
             text-align: left !important; color: #8892b0 !important;
             overflow: hidden !important; text-overflow: ellipsis !important;
             white-space: nowrap !important; padding-left: 4px !important;
         }
+        /* 流通市值（亿）。44px 容纳 "1234亿"；后端缺值时前端出 "--"，不写 0。 */
         .scan-col-mv {
             width: 44px !important; flex-shrink: 0 !important;
             text-align: left !important; color: #8892b0 !important;
+            font-size: 11px !important; white-space: nowrap !important;
+            overflow: hidden !important; text-overflow: ellipsis !important;
+            padding-left: 2px !important;
         }
         .scan-col-ma {
             width: 56px !important; flex-shrink: 0 !important;
             text-align: left !important; color: #8892b0 !important;
             font-size: 11px !important; white-space: nowrap !important;
+            /* 与前一列（流通市值）之间留 4px：市值列 width 是 content-box 且无右
+               内距，不留缝时 "20150亿↑1480.5" 会粘成一串。56px 减 4px 仍容得下
+               7 字符（↑1480.5 ≈ 43px）。 */
+            padding-left: 4px !important;
         }
         .scan-col-ma.warn {
             color: #e94560 !important; font-weight: 600 !important;
@@ -582,8 +595,15 @@
             overflow: hidden !important; text-overflow: ellipsis !important;
             white-space: nowrap !important; padding: 0 4px 0 4px !important;
         }
+        /* 标签列：可收缩但**不收到一个标签以下**（原 min-width:0 会被旁边的
+           标注文字列一路挤到 18px，标签只剩个色块）。让位由 .scan-col-ann 承担。
+           margin-left:auto 把自由空间全推到标签左边 ⇒ 7 个没有可伸缩列的模式
+           （均线/放量/连涨/RSI/底分型/买-卖点/回测）标签**贴行尾右对齐**，
+           各行右边缘对齐；标注模式里自由空间已被 .scan-col-ann 吃干，
+           auto 边距自然为 0，标注文字宽度不受影响。 */
         .scan-col-tags {
-            flex: 1 1 auto !important; min-width: 0 !important;
+            flex: 0 1 auto !important; min-width: 33px !important;
+            margin-left: auto !important;
             text-align: right !important;
             display: flex !important; justify-content: flex-end !important;
             gap: 2px !important; flex-wrap: nowrap !important;
@@ -608,8 +628,12 @@
         .scan-bsp-tag.fx-weak { background: rgba(180, 180, 180, 0.2); color: #b0b0b0; }
         .scan-bsp-tag.fx-strong { background: rgba(255, 165, 0, 0.2); color: #ffa500; }
         .scan-bsp-tag.fx-strongest { background: rgba(255, 68, 68, 0.3); color: #ff4444; font-weight: 600; }
-        .scan-bsp-tag.fl-rise { background: rgba(255, 60, 60, 0.25); color: #FF3C3C; font-weight: 600; }
-        .scan-bsp-tag.fl-fall { background: rgba(0, 240, 240, 0.2); color: #00F0F0; font-weight: 600; }
+        /* 方向语义标签（红 = 涨/强，青 = 跌/弱）。原类名 fl-rise / fl-fall 是
+           "放量-阳线/阴线" 的缩写，后来被连涨与 RSI 超买/超卖原样复用 —— 一个
+           颜色类名同时代表三件事，改放量标签的配色会顺手改掉另两个模式。
+           改成语义名后，任何一处取色都只表达"方向"，各模式各自决定用哪个方向。 */
+        .scan-bsp-tag.scan-tag-up { background: rgba(255, 60, 60, 0.25); color: #FF3C3C; font-weight: 600; }
+        .scan-bsp-tag.scan-tag-down { background: rgba(0, 240, 240, 0.2); color: #00F0F0; font-weight: 600; }
         .scan-bsp-tag.scan-bsp-more { background: rgba(255,255,255,0.1); color: #8892b0; font-weight: 400; }
         /* 均线分类标签：类0(最强,红) → 类8(最弱,绿) */
         .scan-bsp-tag.ma-cat0 { background: rgba(244, 67, 54, 0.25); color: #F44336; font-weight: 600; }

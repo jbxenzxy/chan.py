@@ -231,32 +231,39 @@ def part3(appjs):
 # ④ 六模式接线
 # ══════════════════════════════════════════════════════════════════════
 def part4(appjs):
-    print("══ ④ 接线：全部 6 个扫描模式都拿到市场摘要 ══")
+    print("══ ④ 接线：8 个模式都拿到市场摘要（装配器单点）══")
+    # 2026-10-31 重构后：市场分布行由**装配器** `_scanPanelHtml` 统一产出，
+    # 各模式不再各调一次 —— 原先 6 处调用点（外加 3 个内联 renderRows 首行）
+    # 正是"进度期/终态各拼一份"的温床，放量/底分型/买卖点的市场分布行因此
+    # 扫完就消失。现在只要保证：①摘要只在装配器里出现一次；②所有模式都经过装配器。
     n_call = appjs.count("_scanMarketSummaryHtml(") - appjs.count(
         "function _scanMarketSummaryHtml(")
-    check("④a 调用点恰好 6 处（fx_d / fangliang / bsp / lianzhang / rsi / backtest）",
-          n_call == 6, "实测 %d 处" % n_call)
+    check("④a 调用点恰好 1 处（唯一实现在装配器 _scanPanelHtml 内）",
+          n_call == 1, "实测 %d 处" % n_call)
 
-    for fn in ("_renderLianzhangRows", "_renderRsiRows", "_renderBacktestRows"):
+    panel = _extract_fn(appjs, "_scanPanelHtml")
+    check("④b 装配器内调用一次市场摘要，且夹在口径行与行列表之间（块序单点）",
+          panel.count("_scanMarketSummaryHtml(results)") == 1
+          and panel.index("_scanMarketSummaryHtml(results)") < panel.index('class="scan-no-result"'),
+          panel[:220])
+
+    # 各模式的行函数**不再**自己挂摘要（否则又回到两份副本）
+    for fn in ("_renderLianzhangRows", "_renderRsiRows", "_renderBacktestRows",
+               "_renderBspRows", "_renderFxDRows", "_renderMaRows", "_renderFangliangRows"):
         body = _extract_fn(appjs, fn)
-        check("④b `%s` 内调用一次市场摘要" % fn,
-              body.count("_scanMarketSummaryHtml(results)") == 1,
-              body.count("_scanMarketSummaryHtml(results)"))
+        check("④c `%s` 内不得再挂市场摘要（块序归装配器）" % fn,
+              "_scanMarketSummaryHtml" not in body, "仍自行挂摘要")
 
-    # fx_d / fangliang / bsp 三个 spec 走内联 renderRows，且**首行**即取市场摘要
-    blocks = re.findall(
-        r'renderRows: function\(results\) \{\s*\n\s*var html = _scanMarketSummaryHtml\(results\);',
-        appjs)
-    check("④c fx_d / fangliang / bsp 三个内联 spec 的 renderRows **首行**即取市场摘要",
-          len(blocks) == 3, "匹配 %d 处" % len(blocks))
-
-    # 调用点行号必须与「每个模式各自的 renderRows / _render*Rows」一一对应（防漏接线）
-    #   匹配 `= _scanMarketSummaryHtml(results)` 而非裸函数名 —— 后者会把**定义行**也计入。
-    lines = appjs.split("\n")
-    call_lines = [i for i, ln in enumerate(lines)
-                  if "= _scanMarketSummaryHtml(results)" in ln]
-    check("④d 6 个调用点行号互不相同且递增",
-          len(call_lines) == 6 and call_lines == sorted(call_lines), call_lines)
+    # 所有模式的终态都经 _paintScanFinal → _scanPanelHtml；进度期经 _doUpdatePanel → _scanPanelHtml
+    n_paint = len([ln for ln in appjs.split("\n")
+                   if "_paintScanFinal(" in ln and "function " not in ln])
+    check("④d 7 个模式的终态渲染都经 `_paintScanFinal`", n_paint == 7, n_paint)
+    upd = _extract_fn(appjs, "_doUpdatePanel")
+    check("④e 进度期面板经同一个装配器（`_doUpdatePanel` 内调 `_scanPanelHtml`）",
+          "_scanPanelHtml(" in upd, "进度期另拼了一份")
+    check("④f 标注模式也经装配器（三处调用点：装配器自身 + 进度期 + 终态 + 标注）",
+          appjs.count("_scanPanelHtml(") - appjs.count("function _scanPanelHtml(") == 3,
+          appjs.count("_scanPanelHtml("))
 
 
 def main():
