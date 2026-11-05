@@ -21,7 +21,8 @@ App」，都不审某个 DataAPI 模块自身的顶层 import 清单 ⇒ 谁把 
      `_ak()` 调用**恰好 1 次**、必须就是绑定 `ak` 的那一次，且函数内不存在
      `__import__()` / `*.import_module()` / `sys.modules` / `import akshare`，也没有
      `from importlib import import_module [as x]` 后再调 x()、`exec()` / `eval()`
-     字面量里带导入语义串（`exec('ak = __import__("akshare")')`）这类绕过；
+     字面量里带导入语义串（`exec('ak = __import__("akshare")')`）这类绕过
+     —— 字面量按其 AST 判定、不做裸子串匹配（第六轮收窄，见下）；
   ④ `create_item_dict` 的 pandas 是函数内 import（局部依赖，不靠模块全局 pd）；
   ⑤ 运行时硬证据：全新子进程 `import DataAPI.AkshareAPI` 后 `akshare` 不在
      `sys.modules`。未装 akshare 的环境**降级为 SKIP**：那时根本没有东西可加载，
@@ -56,6 +57,14 @@ import_module as _im` 再调 `_im("akshare")`（别名绕开 `.import_module()` 
 `exec("ak = __import__('akshare')")`（导入语义在字符串里，AST 只见字面量）。
 两类的判别口径仍是「有绕过能力」而非「名字难看」：只 import 不调用、
 `exec("print(1)")` 这类照旧放行。
+
+③ 第六轮再收窄 exec/eval 的字面量判据（评审 P3-1）：第五轮是「字面量含
+import / akshare / modules 任一子串就判红」，于是 `exec("do_import()")` 这种
+合规写法被误伤（夹具 S1）。现在把字面量 `ast.parse` 后看节点 —— 只认
+Import / ImportFrom、以 `__import__` 或 `*.import_module` 为被调者的 Call、
+`sys.modules` 属性；字面量语法不完整、解析不了，才退回词边界正则。夹具
+Q2（`__import__` 二次绑定）、Q4（`exec("import akshare")`）仍 ③ 红；
+S1、S1b（合规字符串；后者含全部关键词但不构成导入）全绿。
 
 判据之间的分工（六项判据合起来也不是完备性证明）：①②③④ 只看 AST 形态，
 ⑤ 只看「import 后 akshare 是否进了 sys.modules」，⑥ 才真跑消费方。前四轮
@@ -99,11 +108,20 @@ import_module as _im` 再调 `_im("akshare")`（别名绕开 `.import_module()` 
   Q1 消费方 import importlib 但不调用     → （全绿；不得误伤合规写法）
   Q2 exec("ak = __import__('akshare')")  → ③
   Q3 from importlib import import_module 别名调用 → ③
+  Q4 exec("import akshare")（字符串里就是 import 语句）→ ③
+  S1 exec("do_import()")（合规字符串，第五轮曾误伤）→ （全绿）
+  S1b exec("print('akshare modules import')")（含全部关键词、无导入语义）→（全绿）
   R1 取数旁路藏进辅助函数（消费方仍写 ak = _ak()）→ ⑥（桩被直接访问 > 0）
   R2 额外用反射直连桩取一次（主路径仍走代理）→ ⑥（只有 direct 计数能咬）
-逐组注入 → 单跑护栏 → 比对红集 → 逐字节还原并校验 sha256。
-本护栏按「仓库根」定位目标文件，可用环境变量 `AKSHARE_GUARD_TREE` 指向别的树
-（`--self-check` 的隔离模式就是这么复用的）。
+逐组注入 → 单跑护栏 → 比对红集 → 逐字节还原并校验 sha256；末尾再做一组
+**接线自证**（注入 M1 后把 `AKSHARE_GUARD_TREE` 指向干净影子树，护栏必须仍
+按本树判红；显式加 `--allow-external-tree` 才改审外部树）。
+
+被审树 = 本护栏所在的树（`__file__/..`），**不由环境变量决定**：
+`AKSHARE_GUARD_TREE` 单独出现时只打印 [WARN] 并被忽略，确需审计别处的拷贝
+须再加 `--allow-external-tree`（评审第五轮 P3-3：此前该变量能悄悄把审查对象
+换成干净副本，同一份回潮代码照样 6/6 全绿）。`--self-check` 不依赖它 —— 隔离
+模式是把本文件复制进临时树后**从那里启动**，`__file__` 天然指向被审树。
 """
 import ast
 import hashlib
@@ -117,8 +135,34 @@ import tempfile
 
 _DEFAULT_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 _TREE_ENV = "AKSHARE_GUARD_TREE"
-# 允许把本护栏指向另一棵树（自证隔离模式 / 手工核对某份拷贝）
-_REPO_ROOT = os.path.abspath(os.environ.get(_TREE_ENV) or _DEFAULT_ROOT)
+# 显式开关：只有命令行带这个参数，环境变量才允许把审查对象指向另一棵树
+_EXTERNAL_TREE_FLAG = "--allow-external-tree"
+_EXTERNAL_ROOT = _EXTERNAL_TREE_FLAG in sys.argv[1:]
+
+
+def _resolve_root():
+    """被审树 = 本护栏所在的树。返回 (root, 被忽略的环境变量说明 | None)。
+
+    环境变量 `AKSHARE_GUARD_TREE` 单独出现时**不生效**：它此前能悄悄把审查
+    对象换成另一棵树（评审第五轮 P3-3 实测：同一份回潮代码在指向干净副本后
+    6/6 全绿），等于给护栏留了一个「指向别处」的开关。自证/隔离模式不依赖它
+    —— `--self-check` 是把本文件复制进临时树后从那里启动，`__file__` 天然指向
+    被审树。
+    """
+    env = os.environ.get(_TREE_ENV)
+    if not env:
+        return _DEFAULT_ROOT, None
+    env_abs = os.path.abspath(env)
+    if os.path.realpath(env_abs) == os.path.realpath(_DEFAULT_ROOT):
+        return _DEFAULT_ROOT, None
+    if _EXTERNAL_ROOT:
+        return env_abs, f"按 {_EXTERNAL_TREE_FLAG} 显式审计外部树 {env_abs}"
+    return _DEFAULT_ROOT, (
+        f"忽略 {_TREE_ENV}={env_abs}"
+        f"（与本护栏所在树不一致；确需审计外部树请加 {_EXTERNAL_TREE_FLAG}）")
+
+
+_REPO_ROOT, _ROOT_NOTE = _resolve_root()
 _TARGET_REL = os.path.join("DataAPI", "AkshareAPI.py")
 _TARGET = os.path.join(_REPO_ROOT, _TARGET_REL)
 _INIT_REL = os.path.join("DataAPI", "__init__.py")
@@ -132,17 +176,27 @@ _AK_CONSUMERS = ("fetch_index_cons", "get_kl_data", "do_init")
 # ③ 已知绕过动态导入的**语义形态**（不是名字黑名单：名字可随便起，形如
 #    `importlib.import_module(...)` / `__import__(...)` / `sys.modules` 才有绕过能力）
 _DYNAMIC_IMPORT_ATTRS = {"import_module", "__import__"}
-# ③ 导入语义藏在字符串里的形态：exec / eval 的字面量参数含这些词就判红
+# ③ 导入语义藏在字符串里的形态：exec / eval 的字面量参数**解析成 AST 后**确有
+#    导入语义才判红（见 _exec_str_has_import）。字面量语法不完整、解析不了时退回
+#    词边界匹配下面几条 —— 只认真正有绕过能力的名字，不再拿 "import" 裸子串当
+#    信号（`exec("do_import()")` 这种合规写法曾因此被误伤，评审 P3-1）。
 _EXEC_CALLS = {"exec", "eval"}
-_EXEC_NEEDLES = ("import", "akshare", "modules")
+_EXEC_FALLBACK_PATTERNS = (
+    r"\b__import__\b",
+    r"\bimport_module\b",
+    r"\bsys\s*\.\s*modules\b",
+    r"(?:^|[\s;])import\s+[A-Za-z_.]",
+    r"(?:^|[\s;])from\s+[A-Za-z_.]+\s+import\b",
+)
 
 # ⑥ 桩数据与期望值（桩是确定的，故断言可精确到字段）
 _RUNTIME_EXPECT_CODES = ["600000", "000001"]
 _RUNTIME_EXPECT_CLOSE = [10.5, 11.0]
 # 绑定关系：「三个消费方各调一次」——fetch_index_cons / get_kl_data / do_init。
-# 改了取数结构（例如给 _ak() 加模块级缓存、三处共用一次取数）必须同步改这个
-# 数字 **以及** _MUTATIONS 里各组的期望红集，否则 ⑥ 会把「实现变了但链路正确」
-# 判成红（评审 P3-4 的口径提醒）。
+# 这个数字数的是**消费方调用 _ak() 的次数**，与「真正 import akshare 几次」无关：
+# 给 _ak() 加模块级缓存不改变它（夹具 S6 实测仍全绿）。只有把三处取数**合并**成
+# 一处（消费方不再各调一次）才需要同步改这个数字 **以及** _MUTATIONS 各组的期望
+# 红集，否则 ⑥ 会把「实现变了但链路正确」判成红（评审第五轮 P3-5 的口径修正）。
 _RUNTIME_EXPECT_AK_CALLS = 3
 # 取数必须发生在 `_ak()` 返回的代理上：桩自身被直接访问次数 = 0
 _RUNTIME_EXPECT_VIA = {"index_stock_cons_csindex": 1, "stock_zh_a_hist": 1}
@@ -380,14 +434,39 @@ def _import_module_aliases(fn):
     return out
 
 
+def _exec_str_has_import(src):
+    """字符串字面量里是否有**真的**导入语义：先解析成 AST 看节点，解析不了再看词。
+
+    只认三类节点：`import x` / `from x import y`（Import / ImportFrom）、以
+    `__import__` 或 `*.import_module` 为被调者的 Call、`sys.modules` 属性。
+    `exec("do_import()")` 解析后只是个普通函数调用 ⇒ 放行（评审 P3-1 的误伤面）。
+    """
+    try:
+        sub = ast.parse(src)
+    except SyntaxError:
+        return any(re.search(p, src) for p in _EXEC_FALLBACK_PATTERNS)
+    for n in ast.walk(sub):
+        if isinstance(n, (ast.Import, ast.ImportFrom)):
+            return True
+        if isinstance(n, ast.Call):
+            f = n.func
+            if isinstance(f, ast.Name) and f.id == "__import__":
+                return True
+            if isinstance(f, ast.Attribute) and f.attr in _DYNAMIC_IMPORT_ATTRS:
+                return True
+        if isinstance(n, ast.Attribute) and n.attr == "modules" \
+                and isinstance(n.value, ast.Name) and n.value.id == "sys":
+            return True
+    return False
+
+
 def _exec_has_import(call):
     """exec()/eval() 的字面量参数里是否带导入语义（拼接串看不见，见 docstring 边界）。"""
     args = list(call.args) + [k.value for k in call.keywords]
     for a in args:
-        if isinstance(a, ast.Constant) and isinstance(a.value, str):
-            low = a.value.lower()
-            if any(nd in low for nd in _EXEC_NEEDLES):
-                return True
+        if isinstance(a, ast.Constant) and isinstance(a.value, str) \
+                and _exec_str_has_import(a.value):
+            return True
     return False
 
 
@@ -438,7 +517,9 @@ def _child_env(root):
     env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
     env["PYTHONPATH"] = root
     env["PYTHONIOENCODING"] = "utf-8"
-    env[_TREE_ENV] = root
+    # 子进程按「自己所在树」定位被审对象（cwd + PYTHONPATH 已足够），不再把
+    # AKSHARE_GUARD_TREE 传下去 —— 审查对象不该由环境变量决定。
+    env.pop(_TREE_ENV, None)
     return env
 
 
@@ -508,6 +589,8 @@ def main():
     print("=" * 68)
     print(f"目标文件：{_TARGET_REL}")
     print(f"仓库根：{_REPO_ROOT}")
+    if _ROOT_NOTE:
+        print(f"[WARN] {_ROOT_NOTE}")
 
     if not os.path.isfile(_TARGET):
         rec("①", "目标文件存在", False, _TARGET)
@@ -758,6 +841,24 @@ _MUTATIONS = [
         "red": ("③",),
     },
     {
+        "id": "Q4",
+        "label": "exec(\"import akshare\")：字符串里就是 import 语句",
+        "edits": [_dead_stmt('exec("import akshare")', "Q4")],
+        "red": ("③",),
+    },
+    {
+        "id": "S1",
+        "label": "exec(\"do_import()\")：合规字符串，第五轮曾误伤",
+        "edits": [_dead_stmt('exec("do_import()")', "S1")],
+        "red": (),
+    },
+    {
+        "id": "S1b",
+        "label": "exec(\"print('akshare modules import')\")：含全部关键词无导入语义",
+        "edits": [_dead_stmt("exec(\"print('akshare modules import')\")", "S1b")],
+        "red": (),
+    },
+    {
         "id": "R1",
         "label": "取数旁路藏进辅助函数（③ 只扫消费方，靠 ⑥ 的 direct 计数抓）",
         "edits": [
@@ -834,11 +935,13 @@ def _apply(root, rel, old, new):
     _drop_pyc(root, rel)
 
 
-def _run_guard(root):
+def _run_guard(root, extra_args=(), env_override=None):
     env = _child_env(root)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    if env_override:
+        env.update(env_override)
     guard = os.path.join(root, "Test", os.path.basename(os.path.abspath(__file__)))
-    proc = subprocess.run([sys.executable, guard], cwd=root, env=env,
+    proc = subprocess.run([sys.executable, guard] + list(extra_args), cwd=root, env=env,
                           capture_output=True, text=True, timeout=300)
     out = (proc.stdout or "") + "\n" + (proc.stderr or "")
     red = tuple(sorted(set(re.findall(r"\[FAIL\]\s*([①②③④⑤⑥])", out))))
@@ -858,8 +961,8 @@ def _make_isolated_tree():
 
 def _self_check(isolated=True, allow_skip=False):
     import importlib.util
-    print("AKShare 护栏变异自证（M1~M9 + N5~N10 + Q1~Q3 + R1/R2，"
-          "逐组注入 → 单跑 → 逐字节还原）")
+    print("AKShare 护栏变异自证（M1~M9 + N5~N10 + Q1~Q4 + S1/S1b + R1/R2，"
+          "逐组注入 → 单跑 → 逐字节还原；末尾接线自证）")
     print("=" * 68)
 
     for mod, why in (("akshare", "M1/M5/M8/M9 期望 ⑤ 变红"),
@@ -894,6 +997,36 @@ def _self_check(isolated=True, allow_skip=False):
     finally:
         if isolated:
             shutil.rmtree(root, ignore_errors=True)
+
+
+def _env_wiring_check(root, backup):
+    """接线自证：AKSHARE_GUARD_TREE 不得替换被审树（评审第五轮 P3-3）。
+
+    在 root 里注入 M1（顶层 import akshare 回潮），另造一棵**干净**影子树，把
+    环境变量指向影子树再跑护栏：默认必须仍然按 root 判红；显式加
+    --allow-external-tree 才转去审影子树（那时应全绿，证明开关本身可用）。
+    """
+    out = []
+    m1 = next(m for m in _MUTATIONS if m["id"] == "M1")   # 顶层 import 回潮
+    shadow = _make_isolated_tree()
+    try:
+        for rel, old, new in m1["edits"]:
+            _apply(root, rel, old, new)
+        try:
+            rc, red, _t = _run_guard(root, env_override={_TREE_ENV: shadow})
+            out.append(("默认忽略环境变量，仍按本树判红",
+                        rc != 0 and red == m1["red"], rc, red))
+            rc, red, _t = _run_guard(root, extra_args=(_EXTERNAL_TREE_FLAG,),
+                                     env_override={_TREE_ENV: shadow})
+            out.append(("显式 --allow-external-tree 才改审外部树（转全绿）",
+                        rc == 0 and not red, rc, red))
+        finally:
+            for rel in _MUTATION_FILES:
+                _write_bytes(root, rel, backup[rel])
+                _drop_pyc(root, rel)
+    finally:
+        shutil.rmtree(shadow, ignore_errors=True)
+    return out
 
 
 def _run_self_check(root):
@@ -941,6 +1074,12 @@ def _run_self_check(root):
               f"期望 {'+'.join(want) if want else '(全绿)':<10} "
               f"实测 {'+'.join(got) if isinstance(got, tuple) else got}")
     print("-" * 68)
+    for label, ok, rc, red in _env_wiring_check(root, backup):
+        print(f"  {'OK  ' if ok else 'BAD '} E    {label:<40} "
+              f"rc={rc} 实测红集={list(red)}")
+        if not ok:
+            bad.append(f"E 接线自证 {label} rc={rc} 红集={list(red)}")
+    print("-" * 68)
 
     same = all(hashlib.sha256(_read_bytes(root, rel)).hexdigest() == sha0[rel]
                for rel in _MUTATION_FILES)
@@ -949,7 +1088,7 @@ def _run_self_check(root):
 
     ok_all = not bad and same and rc == 0 and not red
     print(f"合计 {len(rows)} 组变异，符合预期 {sum(1 for r in rows if r[4])} 组，"
-          f"不符 {len(bad)} 组")
+          f"不符 {len(bad)} 组（含接线自证）")
     for b in bad:
         print(f"  BAD {b}")
     print("自证通过" if ok_all else f"自证失败：{tail}")

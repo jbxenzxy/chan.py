@@ -1079,8 +1079,10 @@ COMPONENTS = [
     #   覆盖：① 模块级 import 恰为白名单；② 全文件 ``import akshare`` 只在 _ak()
     #   内且仅 1 处；③ fetch_index_cons / get_kl_data / do_init 一律 ``ak = _ak()``
     #   （恰好一次绑定；只认 sys.modules / __import__() / *.import_module() /
-    #   ``from importlib import import_module`` 别名调用 / exec 字面量带导入语义
-    #   这几种绕过形态，无关的 ``.modules`` 属性不再误伤）；④ create_item_dict 的
+    #   ``from importlib import import_module`` 别名调用 / exec 字面量**解析成 AST
+    #   后**带导入语义 这几种绕过形态，无关的 ``.modules`` 属性不再误伤；exec 字面量
+    #   不再做裸子串匹配 —— ``exec("do_import()")`` 这类合规写法定为全绿，见夹具
+    #   S1/S1b）；④ create_item_dict 的
     #   pandas 是函数内 import；⑤ 全新子进程 import 后 akshare 不在 sys.modules
     #   （静态判据抓不到「被别人带进来」；未装 akshare 时降级 SKIP）；⑥ 全新子
     #   进程把 ``sys.modules["akshare"]`` 换成桩、把 ``_ak()`` 包成「取桩 → 返回带
@@ -1089,10 +1091,13 @@ COMPONENTS = [
     #   消费方的盲区（``_ak`` 挪进类体 / 返回 None / 绑定进 except 分支这三类「静态
     #   全绿但生产链路已断」），最后一条补「消费方老实写 ``ak = _ak()``、取数却从
     #   另一条路走」的旁路（静态判据只扫三个消费方，看不见辅助函数里的事）。
-    #   自证 20/20：``--self-check`` 注入 M1~M9 + N5~N10 + Q1~Q3 + R1/R2 逐组比对
-    #   红集并逐字节还原（N6/N7/N8 必须变 ⑥ 红；N5、Q1 必须仍全绿，N9/N10、Q2/Q3
-    #   必须仍 ③ 红 —— 证明 ③ 收窄/加严既没误伤也没失守；R1/R2 必须只有 ⑥ 红 ——
-    #   证明「对象身份」判据不是摆设：停用 direct 判据后 R2 立刻转绿、自证报 BAD）。
+    #   自证 23/23：``--self-check`` 注入 M1~M9 + N5~N10 + Q1~Q4 + S1/S1b + R1/R2
+    #   逐组比对红集并逐字节还原（N6/N7/N8 必须变 ⑥ 红；N5、Q1、S1、S1b 必须仍
+    #   全绿，N9/N10、Q2/Q3/Q4 必须仍 ③ 红 —— 证明 ③ 收窄/加严既没误伤也没失守；
+    #   R1/R2 必须只有 ⑥ 红 —— 证明「对象身份」判据不是摆设：停用 direct 判据后
+    #   R2 立刻转绿、自证报 BAD）。末尾还有一组**接线自证**：注入 M1 后把
+    #   ``AKSHARE_GUARD_TREE`` 指向干净影子树，护栏必须仍按本树判红（显式加
+    #   ``--allow-external-tree`` 才改审外部树）—— 钉住「审查对象不由环境变量决定」。
     #   自证默认在**临时副本树**里跑（``_make_isolated_tree``），
     #   不碰工作树，因此可以作为常规组件注册；缺 akshare / pandas 的环境带
     #   ``--allow-skip`` 降级为 SKIP（rc=0），不把「验不了」当成「验过了」。
