@@ -1077,11 +1077,16 @@ COMPONENTS = [
     #   以及扫描池每个 spawn worker 的首次任务都要白付一次导入代价（样本值：启动链
     #   1537ms 里 561ms、worker 1.60~1.80s → 1.09~1.15s、+509 模块 / +20MB）。
     #   覆盖：① 模块级 import 恰为白名单；② 全文件 ``import akshare`` 只在 _ak()
-    #   内且仅 1 处；③ fetch_index_cons / get_kl_data / do_init 都经 _ak()；
-    #   ④ create_item_dict 的 pandas 是函数内 import；⑤ 全新子进程 import 后
-    #   akshare 不在 sys.modules（静态判据抓不到「被别人带进来」，这条盯症状）。
-    #   变异实证 4/4：加回顶层 akshare → ①②⑤；fetch 改回直连 → ②③；
-    #   删局部 pandas → ④；顶层加 pandas → ①。
+    #   内且仅 1 处；③ fetch_index_cons / get_kl_data / do_init 一律 ``ak = _ak()``
+    #   （恰好一次绑定，且无 __import__ / importlib / sys.modules 绕过）；④
+    #   create_item_dict 的 pandas 是函数内 import；⑤ 全新子进程 import 后 akshare
+    #   不在 sys.modules（静态判据抓不到「被别人带进来」，这条盯症状；未装 akshare
+    #   的环境降级为 SKIP，不把「没东西可加载」读成「惰性生效」）。
+    #   自证 9/9：``Test/test_akshare_import_lazy.py --self-check`` 逐组注入 M1~M9
+    #   （顶层 / 类体 / try 容错 / 消费方 __import__ 绕过 / _ak 改名 / 被 __init__
+    #   带进来）比对红集并逐字节还原。其中「__import__ 绕过 + 死 _ak() 调用」是
+    #   ③ 只判「出现过即通过」时的真实漏网形态，收紧后必须红；--self-check 会临时
+    #   改写源文件，故只在手工核对时用，不进门禁。
     ("akshare_import_lazy",
      [sys.executable, os.path.join("Test", "test_akshare_import_lazy.py")]),
     # ── 暂不注册（注册即恒红 / 无拦截力，注册了门禁形同虚设）──────────
