@@ -1078,17 +1078,24 @@ COMPONENTS = [
     #   1537ms 里 561ms、worker 1.60~1.80s → 1.09~1.15s、+509 模块 / +20MB）。
     #   覆盖：① 模块级 import 恰为白名单；② 全文件 ``import akshare`` 只在 _ak()
     #   内且仅 1 处；③ fetch_index_cons / get_kl_data / do_init 一律 ``ak = _ak()``
-    #   （恰好一次绑定，且无 __import__ / importlib / sys.modules 绕过）；④
-    #   create_item_dict 的 pandas 是函数内 import；⑤ 全新子进程 import 后 akshare
-    #   不在 sys.modules（静态判据抓不到「被别人带进来」，这条盯症状；未装 akshare
-    #   的环境降级为 SKIP，不把「没东西可加载」读成「惰性生效」）。
-    #   自证 9/9：``Test/test_akshare_import_lazy.py --self-check`` 逐组注入 M1~M9
-    #   （顶层 / 类体 / try 容错 / 消费方 __import__ 绕过 / _ak 改名 / 被 __init__
-    #   带进来）比对红集并逐字节还原。其中「__import__ 绕过 + 死 _ak() 调用」是
-    #   ③ 只判「出现过即通过」时的真实漏网形态，收紧后必须红；--self-check 会临时
-    #   改写源文件，故只在手工核对时用，不进门禁。
+    #   （恰好一次绑定；只认 sys.modules / __import__() / *.import_module() 三种语义
+    #   绕过形态，无关的 ``.modules`` 属性不再误伤）；④ create_item_dict 的 pandas
+    #   是函数内 import；⑤ 全新子进程 import 后 akshare 不在 sys.modules（静态判据
+    #   抓不到「被别人带进来」；未装 akshare 时降级 SKIP）；⑥ 全新子进程把
+    #   ``sys.modules["akshare"]`` 换成桩后**真跑**三个消费方：成分股 2 项、K 线 2 根、
+    #   do_init 通过、``_ak()`` 恰好被调 3 次 —— 补 ①②③④ 不执行消费方的盲区
+    #   （``_ak`` 挪进类体 / 返回 None / 绑定进 except 分支这三类「静态全绿但生产
+    #   链路已断」只有它能咬住）。
+    #   自证 15/15：``--self-check`` 注入 M1~M9 + N5~N10 逐组比对红集并逐字节还原
+    #   （N6/N7/N8 必须变 ⑥ 红；N5 必须仍全绿、N9/N10 必须仍 ③ 红 —— 证明 ③ 收窄
+    #   既没误伤也没失守）。自证默认在**临时副本树**里跑（``_make_isolated_tree``），
+    #   不碰工作树，因此可以作为常规组件注册；缺 akshare / pandas 的环境带
+    #   ``--allow-skip`` 降级为 SKIP（rc=0），不把「验不了」当成「验过了」。
     ("akshare_import_lazy",
      [sys.executable, os.path.join("Test", "test_akshare_import_lazy.py")]),
+    ("akshare_import_lazy_selfcheck",
+     [sys.executable, os.path.join("Test", "test_akshare_import_lazy.py"),
+      "--self-check", "--allow-skip"]),
     # ── 暂不注册（注册即恒红 / 无拦截力，注册了门禁形同虚设）──────────
     #   Test/repro_n4_cleanup_race.py          N4 未修，且脚本只有 return 0
     #                                          （恒通过、无拦截力，须先改成

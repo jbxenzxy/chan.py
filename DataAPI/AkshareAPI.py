@@ -16,7 +16,8 @@ DataAPI/AkshareAPI.py —— AKShare 数据源适配器
     （fetch_index_cons / get_kl_data / do_init）一律写 `ak = _ak()` 且只绑这一次，
     不得用 __import__ / importlib / sys.modules 绕过去自己取 —— 否则「以后加版本
     校验 / 缓存 / 遥测只改一处」的约定就失效。该约定由
-    Test/test_akshare_import_lazy.py ③ 钉住。
+    Test/test_akshare_import_lazy.py ③（静态形态）与 ⑥（打桩后真跑三个消费方）
+    共同钉住：③ 只认已知绕过形态，作用域 / 返回值 / 绑定分支三类断链由 ⑥ 兜。
     样本值（作者机器 2026-11-05，Python 3.14.7 / akshare 1.20.27，暖盘；非 SLA）：
     本模块导入 1.37s → 0.05s、启动链省 0.56s，且扫描池每个 spawn worker 再各付一次。
     必须留在顶层的是「类创建期就要用」的两项：CCommonStockApi（CAkshare 基类）
