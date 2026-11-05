@@ -19,17 +19,21 @@ App」，都不审某个 DataAPI 模块自身的顶层 import 清单 ⇒ 谁把 
   ② 全文件 `import akshare` **恰好 1 处**，且只在 `_ak()` 函数体内；
   ③ 三个消费方 `fetch_index_cons` / `get_kl_data` / `do_init` 一律 `ak = _ak()`：
      `_ak()` 调用**恰好 1 次**、必须就是绑定 `ak` 的那一次，且函数内不存在
-     `__import__()` / `*.import_module()` / `sys.modules` / `import akshare` 等绕过；
+     `__import__()` / `*.import_module()` / `sys.modules` / `import akshare`，也没有
+     `from importlib import import_module [as x]` 后再调 x()、`exec()` / `eval()`
+     字面量里带导入语义串（`exec('ak = __import__("akshare")')`）这类绕过；
   ④ `create_item_dict` 的 pandas 是函数内 import（局部依赖，不靠模块全局 pd）；
   ⑤ 运行时硬证据：全新子进程 `import DataAPI.AkshareAPI` 后 `akshare` 不在
      `sys.modules`。未装 akshare 的环境**降级为 SKIP**：那时根本没有东西可加载，
      不能把 `AK_LOADED=False` 读成「惰性生效」；①②③④ 静态判据仍生效。
-  ⑥ 运行时连线：全新子进程先把 `sys.modules["akshare"]` 换成桩模块，再
-     `import DataAPI.AkshareAPI`，给模块级 `_ak` 包一层计数器，然后**真实调用**
-     三个消费方 —— `fetch_index_cons("000300")` 必须返回桩里那两只成分股、
-     `CAkshare("sh600000").get_kl_data()` 必须产出 2 根 K 线（close 10.5 / 11.0）、
-     `CAkshare.do_init()` 必须通过，且计数器恰好 3（三个消费方各一次）。
-     未装 pandas 时降级 SKIP（桩的夹具是真实 DataFrame）。
+  ⑥ 运行时连线 + **对象身份**：全新子进程把 `sys.modules["akshare"]` 换成桩，
+     `_ak` 被包成「取桩 → 返回带唯一标记的代理」，然后**真实调用**三个消费方 ——
+     `fetch_index_cons("000300")` 必须返回桩里那两只成分股、`CAkshare("sh600000")
+     .get_kl_data()` 必须产出 2 根 K 线（close 10.5 / 11.0）、`CAkshare.do_init()`
+     必须通过。身份判据三条：`_ak()` 恰好被调 3 次；每次返回的代理都带同一标记
+     （即三个消费方拿到的是同一个 `_ak()` 返回值）；**桩自身被直接访问 0 次** ——
+     后者是「绕过唯一入口自己取数」的运行期硬证据（桩的每个属性都记账，不靠
+     AST 形态）。未装 pandas 时降级 SKIP（桩的夹具是真实 DataFrame）。
 
 「模块级」的判定口径：`ast` 中未被 `FunctionDef / AsyncFunctionDef / Lambda`
 包住的 `Import` / `ImportFrom` 都算 —— 含 `try:` / `if:` 块内的，以及类体内的
@@ -47,17 +51,31 @@ except ImportError: ak = None` 正是靠这个口径才抓得到。
 `*.import_module()` 三种**确属动态导入**的形态；`importlib` 这个名字本身不再
 单独判红（`import importlib` 而不调用没有任何绕过能力）。
 
-静态判据的边界（六项判据合起来也不是完备性证明）：①②③④ 只看 AST 形态，
-⑤ 只看「import 后 akshare 是否进了 sys.modules」，它们都不执行消费方，因此
-下面四类改动可以「护栏全绿而生产链路已断」——
+③ 第五轮补的两类形态（评审 Q2/Q3 实测放行后补）：`from importlib import
+import_module as _im` 再调 `_im("akshare")`（别名绕开 `.import_module()` 属性判据）、
+`exec("ak = __import__('akshare')")`（导入语义在字符串里，AST 只见字面量）。
+两类的判别口径仍是「有绕过能力」而非「名字难看」：只 import 不调用、
+`exec("print(1)")` 这类照旧放行。
+
+判据之间的分工（六项判据合起来也不是完备性证明）：①②③④ 只看 AST 形态，
+⑤ 只看「import 后 akshare 是否进了 sys.modules」，⑥ 才真跑消费方。前四轮
+靠 ⑥ 咬住的三类断链是 ——
   · 作用域：`_ak()` 被挪进类体、模块级消失 → 消费方 NameError；
   · 返回值契约：`_ak()` 保留 `import akshare` 但 `return None` → `fetch_index_cons`
     静默返回 []、`get_kl_data` AttributeError；
   · 绑定分支：`ak = _ak()` 挪进 `except ImportError` 分支 → 正常路径根本不执行
-    那一行，`fetch_index_cons` 静默返回 []（③ 仍判「恰好一次绑定」而放行）；
-  · 反射：`globals()["__bui" + "ltins"]` 一类拼接，静态黑名单无法穷尽。
-⑥ 用「真跑一遍」覆盖前三类（N6/N7/N8 已固化为自证夹具并要求必须变 ⑥ 红）；
-反射类只能靠 ③ 的已知形态清单兜，属于明示的剩余风险。
+    那一行，`fetch_index_cons` 静默返回 []（③ 仍判「恰好一次绑定」而放行）。
+第五轮补的第四类更隐蔽：**取数旁路藏在辅助函数里**（消费方老实写 `ak = _ak()`
+却让另一条路径去取数，③ 只扫三个消费方故全绿、输出也正确）—— 只有 ⑥ 的
+「桩被直接访问次数 = 0」能咬住（夹具 R1）。
+
+仍然不受静态判据保护的：用拼接/编码构造的动态导入串（`exec("__im" + "port__…")`）
+与 `builtins.__dict__["__import__"]` 一类反射（夹具 R1/R2 走的就是这条路径：
+`import builtins` + 下标取 `__import__`，③ 的三条形态一条都不命中）。它们的
+**取数行为**仍落在 ⑥ 的记账口径里（任何直接访问桩的调用都会记一笔；R2 那种
+「主路径照旧走代理、只多打一发直连」也照样红）；真正漏掉的只有
+「反射取到 akshare 但没有调用本文件用到的三个接口」—— 例如只读
+`akshare.__version__`，无语义影响，故不再为它加判据。
 
 变异自证：`python Test/test_akshare_import_lazy.py --self-check`
   默认在**临时副本树**里做（不碰工作树），`--in-place` 才就地改源文件；
@@ -78,6 +96,11 @@ except ImportError: ak = None` 正是靠这个口径才抓得到。
   N8 ak = _ak() 挪进 except 分支（绑定分支断）→ ⑥
   N9 死代码里 sys.modules["akshare"]     → ③（收窄后仍咬得住语义绕过）
   N10 死代码里 importlib.import_module   → ③
+  Q1 消费方 import importlib 但不调用     → （全绿；不得误伤合规写法）
+  Q2 exec("ak = __import__('akshare')")  → ③
+  Q3 from importlib import import_module 别名调用 → ③
+  R1 取数旁路藏进辅助函数（消费方仍写 ak = _ak()）→ ⑥（桩被直接访问 > 0）
+  R2 额外用反射直连桩取一次（主路径仍走代理）→ ⑥（只有 direct 计数能咬）
 逐组注入 → 单跑护栏 → 比对红集 → 逐字节还原并校验 sha256。
 本护栏按「仓库根」定位目标文件，可用环境变量 `AKSHARE_GUARD_TREE` 指向别的树
 （`--self-check` 的隔离模式就是这么复用的）。
@@ -109,11 +132,20 @@ _AK_CONSUMERS = ("fetch_index_cons", "get_kl_data", "do_init")
 # ③ 已知绕过动态导入的**语义形态**（不是名字黑名单：名字可随便起，形如
 #    `importlib.import_module(...)` / `__import__(...)` / `sys.modules` 才有绕过能力）
 _DYNAMIC_IMPORT_ATTRS = {"import_module", "__import__"}
+# ③ 导入语义藏在字符串里的形态：exec / eval 的字面量参数含这些词就判红
+_EXEC_CALLS = {"exec", "eval"}
+_EXEC_NEEDLES = ("import", "akshare", "modules")
 
 # ⑥ 桩数据与期望值（桩是确定的，故断言可精确到字段）
 _RUNTIME_EXPECT_CODES = ["600000", "000001"]
 _RUNTIME_EXPECT_CLOSE = [10.5, 11.0]
+# 绑定关系：「三个消费方各调一次」——fetch_index_cons / get_kl_data / do_init。
+# 改了取数结构（例如给 _ak() 加模块级缓存、三处共用一次取数）必须同步改这个
+# 数字 **以及** _MUTATIONS 里各组的期望红集，否则 ⑥ 会把「实现变了但链路正确」
+# 判成红（评审 P3-4 的口径提醒）。
 _RUNTIME_EXPECT_AK_CALLS = 3
+# 取数必须发生在 `_ak()` 返回的代理上：桩自身被直接访问次数 = 0
+_RUNTIME_EXPECT_VIA = {"index_stock_cons_csindex": 1, "stock_zh_a_hist": 1}
 
 _RUNTIME_PROBE = r'''
 import json
@@ -136,24 +168,65 @@ cons_rows = [
     {"成分券代码": "600000.SH", "交易所": "上海证券交易所"},
     {"成分券代码": "000001.SZ", "交易所": "深圳证券交易所"},
 ]
+FX = {
+    "stock_zh_a_hist": lambda **kw: pd.DataFrame(rows),
+    "stock_zh_index_daily": lambda **kw: pd.DataFrame(rows),
+    "index_stock_cons_csindex": lambda **kw: pd.DataFrame(cons_rows),
+}
+MARK = "akshare-proxy-2026-11-05"
+via, direct = [], []
+
+
+def _caller(name, bucket):
+    def _call(**kw):
+        bucket.append(name)
+        return FX[name](**kw)
+    return _call
+
+
+class _Proxy(object):
+    """_ak() 的返回值：带唯一标记。刻意与 sys.modules["akshare"] 不是同一对象。"""
+
+    __akshare_proxy__ = MARK
+
+    def __getattr__(self, name):
+        if name in FX:
+            return _caller(name, via)
+        raise AttributeError(name)
+
+
+proxy = _Proxy()
+
 fake = types.ModuleType("akshare")
-fake.stock_zh_a_hist = lambda **kw: pd.DataFrame(rows)
-fake.stock_zh_index_daily = lambda **kw: pd.DataFrame(rows)
-fake.index_stock_cons_csindex = lambda **kw: pd.DataFrame(cons_rows)
+
+
+def _stub_getattr(name):
+    # 模块级 __getattr__：任何绕过 _ak() 的直接取数都会在这里记一笔
+    if name in FX:
+        return _caller(name, direct)
+    raise AttributeError(name)
+
+
+fake.__getattr__ = _stub_getattr
 sys.modules["akshare"] = fake
 
 import DataAPI.AkshareAPI as M
 
-out = {"ak_attr": hasattr(M, "_ak")}
-calls = []
+out = {"ak_attr": hasattr(M, "_ak"), "mark": MARK}
+calls, marks = [], []
 if out["ak_attr"]:
     _orig = M._ak
 
-    def _counting():
+    def _wrapped():
         calls.append(1)
-        return _orig()
+        got = _orig()
+        if got is not fake:      # 契约被改（None / 别的对象）：原样透出，让断链显形
+            marks.append("<not-stub:%s>" % type(got).__name__)
+            return got
+        marks.append(MARK)
+        return proxy
 
-    M._ak = _counting
+    M._ak = _wrapped
 try:
     cons = M.fetch_index_cons("000300")
     out["fetch"] = cons if isinstance(cons, list) else repr(cons)[:120]
@@ -170,6 +243,9 @@ try:
 except Exception as e:
     out["do_init"] = type(e).__name__ + ": " + str(e)[:160]
 out["ak_calls"] = len(calls)
+out["marks"] = marks
+out["via"] = via
+out["direct"] = direct
 print("RUNTIME_JSON " + json.dumps(out, ensure_ascii=False, sort_keys=True))
 '''
 
@@ -293,14 +369,41 @@ def _ak_calls(fn, callee="_ak"):
             and n.func.id == callee]
 
 
+def _import_module_aliases(fn):
+    """`from importlib import import_module [as x]` 在函数内绑定的本地名。"""
+    out = set()
+    for n in ast.walk(fn):
+        if isinstance(n, ast.ImportFrom) and (n.module or "").split(".")[0] == "importlib":
+            for a in n.names:
+                if a.name == "import_module":
+                    out.add(a.asname or a.name)
+    return out
+
+
+def _exec_has_import(call):
+    """exec()/eval() 的字面量参数里是否带导入语义（拼接串看不见，见 docstring 边界）。"""
+    args = list(call.args) + [k.value for k in call.keywords]
+    for a in args:
+        if isinstance(a, ast.Constant) and isinstance(a.value, str):
+            low = a.value.lower()
+            if any(nd in low for nd in _EXEC_NEEDLES):
+                return True
+    return False
+
+
 def _dynamic_hits(fn):
     """函数体内的动态导入 / 反射取模块痕迹（只认语义形态，见模块 docstring）。"""
     hits = []
+    aliases = _import_module_aliases(fn)
     for n in ast.walk(fn):
         if isinstance(n, ast.Call):
             f = n.func
             if isinstance(f, ast.Name) and f.id == "__import__":
                 hits.append(f"__import__()@{n.lineno}")
+            elif isinstance(f, ast.Name) and f.id in aliases:
+                hits.append(f"import_module 别名 {f.id}()@{n.lineno}")
+            elif isinstance(f, ast.Name) and f.id in _EXEC_CALLS and _exec_has_import(n):
+                hits.append(f"{f.id}(含导入语义的字符串)@{n.lineno}")
             elif isinstance(f, ast.Attribute) and f.attr in _DYNAMIC_IMPORT_ATTRS:
                 hits.append(f".{f.attr}()@{n.lineno}")
         elif isinstance(n, ast.Attribute) and n.attr == "modules" \
@@ -382,6 +485,21 @@ def _check_runtime(r):
     if r.get("ak_calls") != _RUNTIME_EXPECT_AK_CALLS:
         bad.append(f"_ak() 实际被调 {r.get('ak_calls')} 次（要求 "
                    f"{_RUNTIME_EXPECT_AK_CALLS}：三个消费方各一次）")
+    # ── 对象身份：三个消费方必须拿到 _ak() 返回的那个代理，而不是自己去取桩 ──
+    marks = r.get("marks")
+    mark = r.get("mark")
+    if isinstance(marks, list) and any(m != mark for m in marks):
+        bad.append(f"消费方拿到的不是 _ak() 返回的代理对象：marks={marks}")
+    direct = r.get("direct")
+    if direct:
+        bad.append(f"有取数绕过了 _ak() 返回的对象：桩被直接访问 {direct}"
+                   "（这些调用没经过唯一入口）")
+    via = r.get("via")
+    got_via = {}
+    for name in (via if isinstance(via, list) else [repr(via)]):
+        got_via[name] = got_via.get(name, 0) + 1
+    if got_via != _RUNTIME_EXPECT_VIA:
+        bad.append(f"经代理的取数次数不符：{got_via}（期望 {_RUNTIME_EXPECT_VIA}）")
     return bad
 
 
@@ -461,8 +579,7 @@ def main():
             False, f"{type(e).__name__}: {e}")
 
     # ── ⑥ 运行时连线：打桩后三个消费方真实走 _ak() 且取数成功 ────────
-    title6 = ("打桩 akshare 后 fetch_index_cons / get_kl_data / do_init 真实走 _ak()"
-              " 且取数成功")
+    title6 = ("打桩 akshare 后三个消费方真实走 _ak() 返回的对象（取数成功、桩零直接访问）")
     payload, why, skip = _runtime_probe()
     if skip:
         rec_skip("⑥", title6, why)
@@ -493,6 +610,7 @@ _FETCH_TRY = ('    try:\n        ak = _ak()\n    except ImportError:\n'
               '        log.info("[AKShare] 未安装')
 _FETCH_DOC_TAIL = ('    各自持有超时策略，这里只做纯取数、不再 import akshare 于调用方。\n'
                    '    """\n    try:')
+_FETCH_BODY = '        df = ak.index_stock_cons_csindex(symbol=index_code)\n'
 _CLS_HEAD = 'class CAkshare(CCommonStockApi):\n    """使用 akshare 获取A股数据"""\n'
 
 
@@ -617,6 +735,55 @@ _MUTATIONS = [
         "edits": [_dead_stmt('_unrelated = importlib.import_module("akshare")', "N10")],
         "red": ("③",),
     },
+    {
+        "id": "Q1",
+        "label": "消费方 import importlib 但不调用（合规写法，不得误伤）",
+        "edits": [_dead_stmt("import importlib", "Q1")],
+        "red": (),
+    },
+    {
+        "id": "Q2",
+        "label": "exec 字面量里 __import__ 二次绑定（导入语义藏在字符串里）",
+        "edits": [(_TARGET_REL, _FETCH_TRY,
+                   '    try:\n        ak = _ak()\n'
+                   '        exec("ak = __import__(\'akshare\')")  # MUTATION-Q2\n'
+                   '    except ImportError:\n        log.info("[AKShare] 未安装')],
+        "red": ("③",),
+    },
+    {
+        "id": "Q3",
+        "label": "from importlib import import_module as _im 再调 _im()",
+        "edits": [_dead_stmt('from importlib import import_module as _im\n'
+                             '        _unrelated = _im("akshare")', "Q3")],
+        "red": ("③",),
+    },
+    {
+        "id": "R1",
+        "label": "取数旁路藏进辅助函数（③ 只扫消费方，靠 ⑥ 的 direct 计数抓）",
+        "edits": [
+            (_TARGET_REL, "def fetch_index_cons(index_code):",
+             'def _fetch_cons_direct(symbol):\n'
+             '    import builtins  # MUTATION-R1\n'
+             '    _b = builtins.__dict__["__import__"]  # MUTATION-R1\n'
+             '    return _b("akshare").index_stock_cons_csindex(symbol=symbol)\n\n\n'
+             'def fetch_index_cons(index_code):'),
+            (_TARGET_REL, _FETCH_BODY,
+             '        df = _fetch_cons_direct(index_code)  # MUTATION-R1\n'),
+        ],
+        "red": ("⑥",),
+    },
+    {
+        "id": "R2",
+        "label": "消费方额外用反射直连桩取一次（主路径仍走代理 ⇒ 只有 direct 能咬）",
+        "edits": [(_TARGET_REL, _FETCH_TRY,
+                   '    try:\n        ak = _ak()\n'
+                   '        import builtins  # MUTATION-R2\n'
+                   '        _b = builtins.__dict__["__import__"]  # MUTATION-R2\n'
+                   '        _warm = _b("akshare").index_stock_cons_csindex('
+                   'symbol=index_code)  # MUTATION-R2\n'
+                   '    except ImportError:\n        log.info("[AKShare] 未安装')],
+        "red": ("⑥",),
+    },
 ]
 
 _MUTATION_FILES = sorted({e[0] for m in _MUTATIONS for e in m["edits"]})
@@ -691,7 +858,8 @@ def _make_isolated_tree():
 
 def _self_check(isolated=True, allow_skip=False):
     import importlib.util
-    print("AKShare 护栏变异自证（M1~M9 + N5~N10，逐组注入 → 单跑 → 逐字节还原）")
+    print("AKShare 护栏变异自证（M1~M9 + N5~N10 + Q1~Q3 + R1/R2，"
+          "逐组注入 → 单跑 → 逐字节还原）")
     print("=" * 68)
 
     for mod, why in (("akshare", "M1/M5/M8/M9 期望 ⑤ 变红"),
