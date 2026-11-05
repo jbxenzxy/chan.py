@@ -11,11 +11,14 @@ DataAPI/AkshareAPI.py —— AKShare 数据源适配器
 导入开销约定（改本文件前必读）：
     启动链 FrontAPI → App/AppOrch → AppRefresh / TdxAPI 只消费 fetch_index_cons
     与两个映射常量，故**模块顶层不得 import akshare / pandas** —— akshare 会连带
-    拉起约 500 个模块（实测 +20MB 常驻、暖盘 0.56s、占启动 import 总耗时 36%，
-    且扫描池每个 spawn worker 再付一次），而服务日常走通达信，多数会话根本不碰
-    akshare。akshare 一律经 _ak() 惰性获取。
+    拉起约 500 个模块，而服务日常走通达信，多数会话根本不碰它。akshare 一律经
+    _ak() 惰性获取（本文件内 `import akshare` 只允许出现在 _ak() 里）。
+    样本值（作者机器 2026-11-05，Python 3.14.7 / akshare 1.20.27，暖盘；非 SLA）：
+    本模块导入 1.37s → 0.05s、启动链省 0.56s，且扫描池每个 spawn worker 再各付一次。
     必须留在顶层的是「类创建期就要用」的两项：CCommonStockApi（CAkshare 基类）
-    与 AUTYPE / KL_TYPE（CAkshare.__init__ 的默认值），二者合计 < 5ms。
+    与 AUTYPE / KL_TYPE（CAkshare.__init__ 的默认值）—— 它们会顺带拉起
+    Common.CTime / KLine.KLine_Unit，但这两者在启动链上早被别的模块加载，
+    实测边际成本 ≈ 0（本模块导入耗时几乎全在 akshare 一侧）。
 """
 import logging
 
@@ -27,7 +30,7 @@ log = logging.getLogger(__name__)
 
 
 def _ak():
-    """惰性获取 akshare（仅 CAkshare 使用；未安装时抛 ImportError，由调用方处置）"""
+    """惰性获取 akshare（本文件唯一入口；未安装时抛 ImportError，由调用方处置）"""
     import akshare
     return akshare
 
@@ -56,7 +59,7 @@ def fetch_index_cons(index_code):
     各自持有超时策略，这里只做纯取数、不再 import akshare 于调用方。
     """
     try:
-        import akshare as ak
+        ak = _ak()
     except ImportError:
         log.info("[AKShare] 未安装，跳过在线获取（pip install akshare）")
         return []
