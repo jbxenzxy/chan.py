@@ -1,20 +1,36 @@
-try:
-    import akshare as ak
-except ImportError:
-    # 惰性容错：不 import 本模块即强制要求 akshare（TdxAPI 等仅用 fetch_index_cons，
-    # 该函数内部自带惰性 import）；CAkshare 作为 akshare 数据源时才真正需要 akshare。
-    ak = None
-import pandas as pd
+# -*- coding: utf-8 -*-
+"""
+DataAPI/AkshareAPI.py —— AKShare 数据源适配器
+=========================================================================
+收口两件事：
+  - K 线适配（CAkshare）：A股 / 指数历史行情，对应 akshare 的
+    stock_zh_a_hist / stock_zh_index_daily
+  - 指数成分（fetch_index_cons）：中证指数成分股清单，也是服务启动链
+    唯一的消费点
+
+导入开销约定（改本文件前必读）：
+    启动链 FrontAPI → App/AppOrch → AppRefresh / TdxAPI 只消费 fetch_index_cons
+    与两个映射常量，故**模块顶层不得 import akshare / pandas** —— akshare 会连带
+    拉起约 500 个模块（实测 +20MB 常驻、暖盘 0.56s、占启动 import 总耗时 36%，
+    且扫描池每个 spawn worker 再付一次），而服务日常走通达信，多数会话根本不碰
+    akshare。akshare 一律经 _ak() 惰性获取。
+    必须留在顶层的是「类创建期就要用」的两项：CCommonStockApi（CAkshare 基类）
+    与 AUTYPE / KL_TYPE（CAkshare.__init__ 的默认值），二者合计 < 5ms。
+"""
+import logging
 
 from Common.CEnum import AUTYPE, DATA_FIELD, KL_TYPE
-from Common.CTime import CTime
-from Common.func_util import str2float
-from KLine.KLine_Unit import CKLine_Unit
 
 from .CommonStockAPI import CCommonStockApi
 
-import logging
 log = logging.getLogger(__name__)
+
+
+def _ak():
+    """惰性获取 akshare（仅 CAkshare 使用；未安装时抛 ImportError，由调用方处置）"""
+    import akshare
+    return akshare
+
 
 # AKShare 交易所中文名 → 市场代码
 AKSHARE_EXCHANGE_MAP = {
@@ -73,6 +89,10 @@ def fetch_index_cons(index_code):
 
 def create_item_dict(row, autype):
     """将DataFrame行转换为K线单元所需的字典格式"""
+    import pandas as pd
+    from Common.CTime import CTime
+    from Common.func_util import str2float
+
     item = {}
     # 解析日期 - 处理多种格式
     date_val = row['日期']
@@ -118,6 +138,8 @@ class CAkshare(CCommonStockApi):
 
     def get_kl_data(self):
         """获取K线数据"""
+        from KLine.KLine_Unit import CKLine_Unit
+        ak = _ak()
         # 转换复权类型
         adjust_dict = {
             AUTYPE.QFQ: "qfq",
@@ -188,6 +210,10 @@ class CAkshare(CCommonStockApi):
             "stock_zh_a_hist": "A股历史行情",
             "stock_zh_index_daily": "指数历史行情",
         }
+        try:
+            ak = _ak()
+        except ImportError:
+            raise RuntimeError("[akshare 未安装] 请先 pip install akshare")
         _missing = [f"ak.{k}（{v}）" for k, v in _required.items() if not hasattr(ak, k)]
         if _missing:
             raise RuntimeError(
