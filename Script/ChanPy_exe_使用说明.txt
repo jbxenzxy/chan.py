@@ -1,0 +1,106 @@
+﻿ChanPy 一键启动器
+==================
+
+【怎么用】
+双击 D:\CChan\Script\ChanPy.exe 即可启动，不用再打开 PyCharm。
+启动后会弹出一个黑色控制台窗口显示运行日志，并保持打开（可最小化）；
+浏览器会自动打开 http://127.0.0.1:18081/ 。
+关闭该窗口，或在窗口里按 Ctrl+C，即停止服务。
+
+【本目录只有两个文件】
+ChanPy.exe       启动器
+使用说明.txt     本文件
+
+没有 config.json，没有 chanpy\ 代码副本，也没有随包附带 .env。
+启动器直接复用 D:\CChan 里现成的一切：
+  · 代码          FrontAPI.py 及整个代码树（Bi/、Trading/、Frontend/ 等）
+  · 解释器        D:\CChan\.venv\Scripts\python.exe（含 requirements.txt 全部依赖）
+  · 配置          D:\CChan\.env（凭据、交易链路参数）
+  · 监听地址/端口 D:\CChan\App\AppConfig.py 的 _FIELD_DEFAULTS
+                  （HOST=127.0.0.1 / PORT=18081）
+  · 数据          D:\CChan\App 下的股票名称、手动选点、扫描任务、
+                  流通市值、指数归属、上次代码周期、托管记录
+  · 交易状态      D:\CChan\Trading\State\
+都是你 PyCharm 里那同一份，不存在第二套，也无需复制或回灌。
+
+【启动后第一屏】
+  [信息] 代码目录：D:\CChan
+  [信息] 解释器  ：D:\CChan\.venv\Scripts\python.exe
+  [信息] 服务地址：http://127.0.0.1:18081/
+  [信息] 地址/端口来源：App\AppConfig.py 的 _FIELD_DEFAULTS（.env 未设置 HOST/PORT）
+  [信息] App 数据：D:\CChan\App（与代码目录同源，直接共用，不复制）
+  [信息]   在位 7 个：double_click_dt.csv、last_code_freq.json、scan_tasks.db、
+                      stock_float_mc.json、stock_index_belong.json、
+                      stock_names.json、trader_launch_record.json
+  [就绪] 服务已启动：http://127.0.0.1:18081/
+
+看到「在位 7 个」就说明股票名称缓存、手动选点、扫描任务、流通市值、
+指数归属、上次代码周期、托管记录都是日常那份在起作用，界面左上角
+输入代码会正常显示中文名。若某项显示「暂无」，说明那个文件还没生成，
+点界面上的刷新即可。启动器只做清单提示，绝不复制或改写这些文件。
+
+【怎么改配置】不新建任何配置文件，按优先级从低到高有四处：
+1) 代码默认值：App\AppConfig.py 的 _FIELD_DEFAULTS（HOST / PORT）。
+   这是地址端口的唯一事实源，启动器与服务端共用，改一处两边都变。
+   启动器只读其中 HOST/PORT 两个键，不读也不打印账号密码。
+2) .env：在 D:\CChan\.env 里写 HOST=... / PORT=... 即可覆盖代码默认值。
+   例：把 PORT=18082 加进去，下次双击 exe，服务与浏览器就都走 18082。
+   凭据（TRADING_ 前缀那些键）也在这份 .env 里，启动器原样继承环境变量，
+   不会去读、复制或另存它们。
+3) 环境变量：HOST / PORT 优先级高于 .env；另可用
+   CHANPY_PYTHON    指定另一个装齐依赖的解释器
+   CHANPY_CODE_DIR  把 exe 放到别处时，指向仓库根 D:\CChan
+   CHANPY_BROWSER   指定 Chrome/Edge 的完整路径
+   CHANPY_NO_BROWSER=1  只起服务、不开浏览器
+   CHANPY_TIMEOUT   就绪等待秒数（默认 120）
+4) 命令行参数（最高优先级）：
+   --port N          临时换端口，同时注入给服务端，探测地址同步变化
+   --no-browser      不自动打开浏览器
+   --code-dir PATH   指定代码目录
+   --python PATH     指定解释器
+   --entry NAME      指定入口脚本（默认 FrontAPI.py）
+
+【端口已被占用时】
+18081 上已经有 chan.py 服务在跑（例如 PyCharm 里还开着）时，双击 exe
+不会重复拉起，只会直接打开浏览器复用那个实例，并打印该实例的代码目录：
+
+  [信息] 检测到 chan.py 服务已在运行，直接打开界面。
+  [信息]   该实例用的是：D:\CChan
+
+如果这行显示的目录不是你想要的，说明浏览器连的是旧实例，先把它停掉
+再双击本 exe。想让 exe 独立启动：用 --port 换端口，或在 .env 里改 PORT。
+
+【数据与凭据（重要）】
+· D:\CChan\.env 就是日常那一份，不需要手动复制。其中的
+  TRADING_BROKER=simnow、TQ_MARKET=创元期货、
+  TRADING_BROKER_PARAMS__CONFIRM_LIVE_TRADING=true 会让界面「实盘」选项可选；
+  真正下实盘单还需 LIVE_ACCOUNT / LIVE_PASSWORD 环境变量，缺任一
+  SimNow.py 会拒绝启动。默认链路仍是模拟（simnow）。
+· 本目录不含任何账号密码。天勤 / SimNow 凭据走系统环境变量，启动器原样继承。
+· 默认模式下 .env / App/ / Trading/State/ 都是日常那一份，exe 与 PyCharm
+  的读写行为完全一致；关窗时 Job Object 会连带回收交易子进程，不留孤儿进程。
+
+【Win11 首次双击可能遇到的三件事】
+1. exe 未签名，Windows SmartScreen 可能弹「Windows 已保护你的电脑」：
+   点「更多信息」->「仍要运行」。若文件属性页底部有「解除锁定」，勾上再确定。
+2. 单文件 exe 首次启动要先把运行时解压到 %TEMP%\_MEIxxxx，比之后每次慢几秒，
+   属正常现象；每次启动都会释放一份，关机自动清理。
+3. 个别杀软会把 PyInstaller 单文件误报，加白名单即可。
+
+【依赖与摆放】
+· 本目录不含 Python 运行时，需要本机保留 D:\CChan\.venv，或用
+  --python / CHANPY_PYTHON 指向另一个装齐 requirements.txt 的解释器。
+  因此不能只把 exe 单独拷到没装环境的新电脑使用。
+· exe 默认按「自身所在目录的父目录」定位仓库根，所以请把它留在
+  D:\CChan\Script\ 下，不要移动到桌面或其它盘。确实要挪走，
+  用 CHANPY_CODE_DIR=D:\CChan 环境变量或 --code-dir 指回来即可。
+· 想固定跑某个历史版本，用 --code-dir 指向那份代码树；但那份树里的
+  App/ 数据需要自己准备，启动器不会从 D:\CChan\App 复制过去。
+
+【代码基线】
+github.com/jbxenzxy/chan.py  branch custom-dev
+commit  430eed18976bbf2526ef7a509aa76f8fc6175638
+时间    2026-11-05 19:34:31 +0800
+入口    FrontAPI.py（FastAPI + Frontend/，127.0.0.1:18081）
+默认 code_dir 指向 D:\CChan 工作树，跑的就是你当前的工作代码；
+你改了工作树，exe 下次启动就跑改后的版本。
