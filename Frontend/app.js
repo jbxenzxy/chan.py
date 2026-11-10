@@ -50,8 +50,8 @@
 
         // 会话态显示覆盖：某槽存储值在当前图表不可用（个股图上的两融余额）时，
         // chip 点出来的显示值只存在这里，不写回 _bottomSlots / _subBottomSlots，
-        // 也不落盘。key = 'main'|'sub' + 槽序；存储值一旦重新可用即自动失效，
-        // 切回上证指数日K 原配置原样恢复。
+        // 也不落盘。key = 'main'|'sub' + 槽序；存储值可用时覆盖被遮蔽、不参与显示，
+        // 覆盖值保留到页面刷新（切回个股图会重新生效），切回上证指数日K 原配置原样恢复。
         let _slotFallbackOverrides = {};
 
         // 成交额/量的显示模式：'bar'=柱状图（默认，与既有行为一致）；
@@ -1501,8 +1501,9 @@
         let _marginMacdMap = null;      // Map<K线对象, {dif, dea, macd}>
         let _marginFetching = false;
         let _marginLoadError = "";
-        // 失败重试：不用空对象当「已尝试」标记，改计数上限 + 指数退避（2s/4s/8s），
-        // 三次耗尽后停止；重新切到两融余额槽会重置计数，作为手动重试入口。
+        // 失败重试：不用空对象当「已尝试」标记，改计数上限 + 指数退避。
+        // 上限按请求总次数计：首发 1 + 重试 2，生效间隔 2s / 4s；
+        // 耗尽后不再排空转定时器。重新切到两融余额槽会重置计数，作为手动重试入口。
         const _MARGIN_MAX_RETRIES = 3;
         const _MARGIN_RETRY_BASE_MS = 2000;
         let _marginRetryCount = 0;
@@ -1582,7 +1583,7 @@
 
         // 全历史一次取足（eltdx 本就单次返回全历史），EMA 从序列起点预热，
         // 当前视口内不会出现「前 26 根种子未收敛」的伪值。成功只取一次；
-        // 失败保留 null 并安排退避重试（上限 3 次），不再把空对象当已尝试标记。
+        // 失败保留 null 并安排退避重试（最多 3 次请求，间隔 2s / 4s），不再把空对象当已尝试标记。
         function _ensureMarginSeries() {
             if (!_hasBottomSlot('margin') || !marginIndicatorAvailable()) return;
             if (_marginMacdByDate || _marginFetching || _marginRetryTimer) return;
@@ -1604,8 +1605,10 @@
                 .catch(function(err) {
                     _marginLoadError = "两融余额数据加载失败";
                     _marginMacdByDate = null;   // 不冒充「已取到」，交给退避重试
+                    // 计数先自增：上限按「请求总次数」计（首发 1 + 重试 2），
+                    // 耗尽后不再排空转定时器（旧写法第 3 次失败仍排 8s 档，会被首部守卫挡回）。
+                    _marginRetryCount += 1;
                     if (_marginRetryCount < _MARGIN_MAX_RETRIES) {
-                        _marginRetryCount += 1;
                         const delay = _MARGIN_RETRY_BASE_MS * Math.pow(2, _marginRetryCount - 1);
                         _marginRetryTimer = setTimeout(function() {
                             _marginRetryTimer = null;

@@ -9,7 +9,7 @@
   MACD(12,26,9)，画成与「成交额/量 类MACD」同形态的红绿柱 + 白橙线。
   口径由用户拍板：仅上证指数日K可用、一次取全历史做 EMA 预热、支持翻转视图。
 
-四层守护：
+五层守护：
 
   ① 静态契约：注册表 / 循环顺序 / 五个钩子 / 单一 MACD 核心 / 单一可用性 SSOT /
      翻转视图分支 / REST 复用 / 门禁登记。
@@ -25,7 +25,11 @@
   ⑤ 真浏览器绘制覆盖（无头 Chrome，浏览器不在位降级 SKIP）：起本地静态服务 +
      桩 /api/health / analyze / /api/margin/read → 点 chip 循环到「两融余额」→
      断言请求发出、标签行 DIF/DEA/BAR 带亿元、底部区红/青 MACD 柱真上屏。
-  另：① 里「失败只取一次」的旧契约已改为「失败计数 + 指数退避重试（上限 3 次）」。
+  ⑥ 失败重试行为探针（node 虚拟时钟，不依赖浏览器）：抽 _ensureMarginSeries 真函数体，
+     桩 fetch / setTimeout / clearTimeout / render，实跑「始终失败 / 第 2 次成功 / 等待期防抖」
+     三场景，断言请求次数、delay 序列、末态计数与定时器、成功后归零。
+  另：① 里「失败只取一次」的旧契约已改为「失败计数 + 指数退避重试」；
+     上限按请求总次数计（首发 1 + 重试 2），生效间隔 2s / 4s，耗尽后不排空转定时器。
 
 运行：python Test/test_margin_macd_indicator.py       （run_all 组件）
 """
@@ -162,10 +166,8 @@ def test_static():
           "① 全历史只取一次（防每帧重连）；失败不再用空对象冒充已取到")
     check("_marginMacdByDate = null;" in ensure
           and "_marginMacdByDate = {}" not in ensure
-          and "_MARGIN_MAX_RETRIES" in ensure
-          and "_MARGIN_RETRY_BASE_MS * Math.pow(2, _marginRetryCount - 1)" in ensure
           and "_marginRetryCount >= _MARGIN_MAX_RETRIES" in ensure,
-          "① 失败计数 + 指数退避重试（上限 3 次，间隔 2/4/8s），耗尽后不每帧重连")
+          "① 失败不冒充已取到 + 上限守卫在位（请求次数 / 退避间隔 / 空转定时器由 ⑥ 行为探针验收）")
     check("_marginRetryCount = 0;" in ensure and "buildMarginMacdByDate(data);" in ensure,
           "① 成功后重置重试计数（下一次失败重新享有完整退避窗口）")
     check("_marginRetryCount = 0;" in (_extract_fn(js, "cycleBottomSlot") or ""),
@@ -633,13 +635,215 @@ def test_real_browser_margin_slot():
         browser.close()
     httpd.shutdown()
 
+# ═══════════════════════════════════════════════════════════════════════
+# ⑥ 失败重试行为探针（node 虚拟时钟，抽 _ensureMarginSeries 真函数体）
+# 不依赖浏览器：桩 fetch / setTimeout / clearTimeout / render，用虚拟时钟推进。
+# 验收「请求次数 / delay 序列 / 末态计数与定时器 / 成功后归零 / 等待期防抖」，
+# 替代 ① 段里对退避表达式与上限常量的字面串断言（换等价实现不再误判红）。
+# ═══════════════════════════════════════════════════════════════════════
+RETRY_HARNESS = r"""
+const BODY = %BODY%;
+const CFG = %CFG%;
+
+function advance(st, to) {
+    st.now = to;
+    const due = st.timers.filter(function (t) { return t.at <= to; })
+                         .sort(function (a, b) { return a.at - b.at; });
+    st.timers = st.timers.filter(function (t) { return t.at > to; });
+    return due;
+}
+
+function makeHarness(opts) {
+    const st = {now: 0, timers: [], nextId: 1, calls: [], delays: [], renders: 0};
+    const H = {
+        st: st,
+        _hasBottomSlot: function () { return opts.hasSlot !== false; },
+        marginIndicatorAvailable: function () { return true; },
+        buildMarginMacdByDate: function () {
+            return {'2025-01-01': {dif: 1, dea: 2, macd: 3}};
+        },
+        render: function () { st.renders += 1; },
+        fetch: function (url) {
+            st.calls.push({t: st.now, url: String(url)});
+            const i = st.calls.length;
+            return Promise.resolve().then(function () {
+                if (!(opts.okOn || []).includes(i)) throw new Error('HTTP 500');
+                return {ok: true, json: function () { return Promise.resolve({}); }};
+            });
+        },
+        setTimeout: function (f, delay) {
+            const id = st.nextId++;
+            st.delays.push({at: st.now, delay: delay});
+            st.timers.push({id: id, at: st.now + delay, f: f});
+            return id;
+        },
+        clearTimeout: function (id) {
+            st.timers = st.timers.filter(function (t) { return t.id !== id; });
+        },
+    };
+    const code = `
+      return (function (H, CFG) {
+        const st = H.st;
+        const _MARGIN_MAX_RETRIES = CFG.max;
+        const _MARGIN_RETRY_BASE_MS = CFG.base;
+        const _MARGIN_FULL_START = CFG.start;
+        const _MARGIN_FULL_END = CFG.end;
+        let _marginMacdByDate = null;
+        let _marginFetching = false;
+        let _marginRetryCount = 0;
+        let _marginRetryTimer = null;
+        let _marginLoadError = "";
+        const _hasBottomSlot = H._hasBottomSlot;
+        const marginIndicatorAvailable = H.marginIndicatorAvailable;
+        const buildMarginMacdByDate = H.buildMarginMacdByDate;
+        const render = H.render;
+        const fetch = H.fetch;
+        const setTimeout = H.setTimeout;
+        const clearTimeout = H.clearTimeout;
+        ${BODY}
+        return {
+          tick: function () { _ensureMarginSeries(); },
+          flush: function () { return new Promise(function (r) { setImmediate(r); }); },
+          snap: function () {
+            return {count: _marginRetryCount, timer: _marginRetryTimer,
+                    got: _marginMacdByDate !== null, err: _marginLoadError,
+                    fetching: _marginFetching};
+          },
+        };
+      })(H, CFG);
+    `;
+    const api = new Function('H', 'CFG', code)(H, CFG);
+    return {api: api, st: st};
+}
+
+(async function () {
+    const out = {};
+    {
+        const h = makeHarness({});
+        h.api.tick(); await h.api.flush(); await h.api.flush();
+        for (let g = 0; g < 10; g++) {
+            const due = advance(h.st, h.st.now + 20000);
+            if (!due.length) break;
+            for (const t of due) t.f();
+            await h.api.flush(); await h.api.flush();
+        }
+        const beforeExhaust = h.st.calls.length;
+        for (let i = 0; i < 30; i++) {
+            h.api.tick(); await h.api.flush(); await h.api.flush();
+        }
+        out.A = {calls: h.st.calls.length,
+                 delays: h.st.delays.map(function (d) { return d.delay; }),
+                 last: h.api.snap(), pendingTimers: h.st.timers.length,
+                 extraAfterExhaust: h.st.calls.length - beforeExhaust};
+    }
+    {
+        const h = makeHarness({okOn: [2]});
+        h.api.tick(); await h.api.flush(); await h.api.flush();
+        const due = advance(h.st, 2000);
+        for (const t of due) t.f();
+        await h.api.flush(); await h.api.flush();
+        const afterOk = h.api.snap();
+        const before = h.st.calls.length;
+        h.api.tick(); await h.api.flush();
+        h.api.tick(); await h.api.flush();
+        out.B = {calls: h.st.calls.length,
+                 delays: h.st.delays.map(function (d) { return d.delay; }),
+                 afterOk: afterOk, extraCalls: h.st.calls.length - before,
+                 last: h.api.snap(), pendingTimers: h.st.timers.length};
+    }
+    {
+        const h = makeHarness({});
+        h.api.tick(); await h.api.flush(); await h.api.flush();
+        for (let i = 0; i < 30; i++) h.api.tick();
+        await h.api.flush(); await h.api.flush();
+        out.C = {calls: h.st.calls.length,
+                 delays: h.st.delays.map(function (d) { return d.delay; }),
+                 last: h.api.snap(), pendingTimers: h.st.timers.length};
+    }
+    console.log(JSON.stringify(out));
+})();
+"""
+
+
+def _run_retry_node(src):
+    node = shutil.which("node")
+    if not node:
+        return None, "node 不在位（⑥ 行为探针必须实跑，不降级 SKIP）"
+    body = _extract_fn(src, "_ensureMarginSeries")
+    if body is None:
+        return None, "抽不到真函数 _ensureMarginSeries"
+
+    def const_int(name):
+        m = re.search(r"const\s+" + name + r"\s*=\s*(\d+);", src)
+        return int(m.group(1)) if m else None
+
+    def const_str(name):
+        m = re.search(r'const\s+' + name + r'\s*=\s*"([^"]*)";', src)
+        return m.group(1) if m else None
+
+    cfg = {"max": const_int("_MARGIN_MAX_RETRIES"),
+           "base": const_int("_MARGIN_RETRY_BASE_MS"),
+           "start": const_str("_MARGIN_FULL_START"),
+           "end": const_str("_MARGIN_FULL_END")}
+    if any(v is None for v in cfg.values()):
+        return None, "抽不到重试常量：%r" % (cfg,)
+    code = (RETRY_HARNESS.replace("%BODY%", json.dumps(body, ensure_ascii=False))
+            .replace("%CFG%", json.dumps(cfg, ensure_ascii=False)))
+    tmp = tempfile.mkdtemp(prefix="margin_retry_")
+    try:
+        jf = os.path.join(tmp, "harness.js")
+        with open(jf, "w", encoding="utf-8") as f:
+            f.write(code)
+        proc = subprocess.run([node, jf], capture_output=True, text=True, timeout=90)
+        if proc.returncode != 0:
+            return None, "node rc=%d: %s" % (proc.returncode, proc.stderr[-600:])
+        return json.loads(proc.stdout.strip().splitlines()[-1]), ""
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_retry_behavior():
+    print("\n⑥ 失败重试行为探针（node 虚拟时钟，抽 _ensureMarginSeries 真函数体）")
+    out, err = _run_retry_node(read(APP_JS))
+    if not check(out is not None, "⑥ node 虚拟时钟探针真跑成功", err):
+        return
+    a, b, c = out["A"], out["B"], out["C"]
+    check(a["calls"] == 3,
+          "⑥ 始终失败：最多 3 次请求（首发 1 + 重试 2）", str(a["calls"]))
+    check(a["delays"] == [2000, 4000],
+          "⑥ 生效退避间隔 2s/4s，第 3 次失败后不排 8000ms 空转定时器", str(a["delays"]))
+    check(a["last"]["count"] == 3 and a["last"]["timer"] is None
+          and a["pendingTimers"] == 0,
+          "⑥ 耗尽后计数停在 3、定时器与守卫均不残留",
+          json.dumps(a["last"], ensure_ascii=False))
+    check(a["last"]["got"] is False and bool(a["last"]["err"]),
+          "⑥ 失败不冒充已取到（数据仍为 null、错误文案在位）",
+          json.dumps(a["last"], ensure_ascii=False))
+    check(a["extraAfterExhaust"] == 0,
+          "⑥ 耗尽后连续 30 次 tick 不再发请求（上限守卫仍有效）",
+          str(a["extraAfterExhaust"]))
+    check(b["calls"] == 2 and b["afterOk"]["got"] is True
+          and b["afterOk"]["count"] == 0 and b["afterOk"]["timer"] is None
+          and b["afterOk"]["err"] == "",
+          "⑥ 第 2 次成功：数据到位 + 计数归零 + 错误清空 + 定时器清空",
+          json.dumps(b["afterOk"], ensure_ascii=False))
+    check(b["extraCalls"] == 0,
+          "⑥ 成功后连续 tick 2 次不再发请求", str(b["extraCalls"]))
+    check(c["calls"] == 1 and c["pendingTimers"] == 1,
+          "⑥ 等待期连续 30 次 tick 不叠请求、定时器恰为 1",
+          "calls=%d timers=%d" % (c["calls"], c["pendingTimers"]))
+    check(c["delays"] == [2000],
+          "⑥ 等待期只排一个 2000ms 定时器", str(c["delays"]))
+
+
 def main():
     print("=" * 72)
-    print("两融余额类MACD 指标：静态契约 + node 数值对齐 + canvas 真渲染（含翻转）")
+    print("两融余额类MACD 指标：静态契约 + node 数值对齐 + canvas 真渲染（含翻转） + 重试行为探针")
     print("=" * 72)
     test_static()
     test_node_real_run()
     test_real_browser_margin_slot()
+    test_retry_behavior()
     print("\n" + "=" * 72)
     if _FAILURES:
         print(f"合计 {len(_FAILURES)} 项失败：")

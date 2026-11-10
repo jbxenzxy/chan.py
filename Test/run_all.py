@@ -244,7 +244,7 @@ COMPONENTS = [
      [sys.executable, os.path.join("Test", "test_app_margin.py")]),
     ("margin_panel_guard",
      [sys.executable, os.path.join("Test", "test_margin_panel.py")]),
-    # 两融余额类MACD 指标（静态契约 + node 数值对齐 + canvas 真渲染 + 真浏览器柱子上屏）
+    # 两融余额类MACD 指标（静态契约 + node 数值对齐 + canvas 真渲染 + 真浏览器柱子上屏 + 重试行为探针）
     ("margin_macd_indicator",
      [sys.executable, os.path.join("Test", "test_margin_macd_indicator.py")]),
     ("stocks_dual_algo",
