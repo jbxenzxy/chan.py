@@ -60,7 +60,7 @@ CI / 迁移每阶段的验收门禁）。
 29. 扫描候选归一化 test_scan_pageindex_normalize.py 候选路径 page_index 板块
                                                      代码须在进入成分取数层前归一化
                                                      （spy + 会话 + 静态回潮三防）
- 30. 成交额/量类MACD test_vol_macd_mode.py 设置项入抽屉/数值 ≡ 后端
+ 30. 成交额/量类MACD test_vol_macd_mode.py 绘图窗双击切换/数值 ≡ 后端
                                                      calculate_macd/预览bar继承/
                                                      真渲染像素对照（浏览器不在位降级 SKIP）/
                                                      RSI 槽旧色双守护：无 #22D3EE 核心指纹像素
@@ -91,7 +91,7 @@ CI / 迁移每阶段的验收门禁）。
  34. 底部指标区双槽+RSI test_bottom_slots.py 槽位几何不变式（双窗零回归/四段
                                                      铺满/每槽高与槽数无关）/
                                                      RSI 两份后端实现逐点对齐/
-                                                     chip 单击循环+双击拦截/
+                                                     chip 单击循环+双击绘图窗切模式/
                                                      翻转下 rsiToY 镜像不变式
                                                      （中间档恒 50，非零线 0）/
                                                      值级位置规则（柱色字面量值全文件仅 1 处）
@@ -239,6 +239,14 @@ COMPONENTS = [
      [sys.executable, os.path.join("Test", "test_phase4_guards.py")]),
     ("app_amo_behavior",
      [sys.executable, os.path.join("Test", "test_app_amo.py")]),
+    # 两融余额行为 + 面板展示契约
+    ("app_margin_behavior",
+     [sys.executable, os.path.join("Test", "test_app_margin.py")]),
+    ("margin_panel_guard",
+     [sys.executable, os.path.join("Test", "test_margin_panel.py")]),
+    # 两融余额类MACD 指标（静态契约 + node 数值对齐 + canvas 真渲染 / 翻转视图）
+    ("margin_macd_indicator",
+     [sys.executable, os.path.join("Test", "test_margin_macd_indicator.py")]),
     ("stocks_dual_algo",
      [sys.executable, os.path.join("Test", "test_stocks_dual_algo.py")]),
     ("blk_parsing",
@@ -386,14 +394,15 @@ COMPONENTS = [
      [sys.executable, os.path.join("Test", "test_pe_ttm_live.py")]),
     ("sina_name_pairing",
      [sys.executable, os.path.join("Test", "test_sina_name_pairing.py")]),
-    # 成交额/量「类MACD」显示模式（2026-09-18）：设置项入抽屉 + 数值与后端
+    # 成交额/量「类MACD」显示模式（2026-09-18）：入口为绘图窗双击（抽屉条目全删）
+    # + 数值与后端
     # calculate_macd 逐点对齐（node 抽真实代码段跑真实快照）+ 预览bar继承口径
     # + 真渲染对照（无头 Chrome 截图量像素，浏览器不在位时降级 SKIP）。
     ("vol_macd_mode",
      [sys.executable, os.path.join("Test", "test_vol_macd_mode.py")]),
     # 底部指标区「单窗双槽位 + RSI」（2026-10-09）：槽位几何不变式（双窗零回归 /
     # 四段铺满 / 每槽高与槽数无关）+ RSI 两份**后端**实现逐点对齐 + chip 单击循环与
-    # 双击拦截（不落到底下的"恢复全视图"）+ 翻转视图下 rsiToY 的镜像 / 不动点 /
+    # 双击绘图窗切显示模式、其余仍拦截（不落到底下的"恢复全视图"）+ 翻转视图下 rsiToY 的镜像 / 不动点 /
     # 70·30 互换，以及「纵轴中间档恒 50（不是 MACD 的零线 0）」。
     ("bottom_slots",
      [sys.executable, os.path.join("Test", "test_bottom_slots.py")]),

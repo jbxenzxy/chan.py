@@ -101,6 +101,7 @@
                 <button class="btn" id="btn-seg" onclick="toggleOverlay('seg')">线段</button>
                 <button class="btn active" id="btn-zs" onclick="toggleOverlay('zs')">中枢</button>
                 <button class="btn active" id="btn-bsp" onclick="toggleOverlay('bsp')">买卖点</button>
+            <button class="btn" id="btn-margin" onclick="toggleMarginPanel()" title="两融余额（仅上证指数日K可用）">两融余额</button>
             <button class="btn" id="btn-amo" onclick="toggleAmoPanel()" title="市场量能（仅上证指数日K可用）">市场量能</button>
             <button class="btn" id="btn-scan" onclick="startScanZxg()" title="扫描股票买卖点">股票扫描</button>
             <button class="btn" id="btn-stats" onclick="toggleStats()">统计</button>
@@ -162,6 +163,22 @@
         </div>
         <div class="scan-body" id="scan-body">
             <div class="scan-empty">点击上方"股票扫描"按钮开始</div>
+        </div>
+    </div>
+    <!-- 两融余额面板（与市场量能面板同版式、同一浮层位置，二者互斥） -->
+    <div class="amo-panel" id="margin-panel">
+        <div class="amo-header">
+            <span class="amo-title">两融余额（沪市+深市+北交所）</span>
+            <span class="amo-close" onclick="closeMarginPanel()" title="关闭面板">×</span>
+        </div>
+        <div class="amo-body">
+            <canvas id="margin-chart" width="600" height="220"></canvas>
+            <div class="amo-stats" id="margin-stats">
+                <div class="amo-stat"><span class="amo-label">峰值余额</span><span class="amo-value" id="margin-peak">--</span></div>
+                <div class="amo-stat"><span class="amo-label">当前余额</span><span class="amo-value" id="margin-current">--</span></div>
+                <div class="amo-stat"><span class="amo-label" title="当前两融余额缩至峰值的百分比（当前/峰值，越低代表杠杆水位回落越多）">缩至峰值</span><span class="amo-value" id="margin-shrink">--</span></div>
+            </div>
+            <div class="amo-empty" id="margin-empty" style="display:none;">当前视口区间无两融余额数据</div>
         </div>
     </div>
     <!-- 市场量能面板 -->
@@ -349,17 +366,6 @@
                 <label class="bsp-filter-label">
                     <input type="radio" name="coord-system" value="log" onchange="onCoordSystemChange(this)">
                     对数坐标系 + 等比网格
-                </label>
-            </div>
-            <div style="margin-bottom:8px;font-size:12px;color:#8892b0;">成交额/量显示</div>
-            <div id="vol-display-mode-group" style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px;">
-                <label class="bsp-filter-label">
-                    <input type="radio" name="vol-display-mode" value="bar">
-                    柱状图（默认）
-                </label>
-                <label class="bsp-filter-label">
-                    <input type="radio" name="vol-display-mode" value="macd">
-                    类MACD（用成交额/量替代收盘价）
                 </label>
             </div>
             <div style="margin-bottom:8px;font-size:12px;color:#8892b0;">流通市值过滤（股票扫描）</div>

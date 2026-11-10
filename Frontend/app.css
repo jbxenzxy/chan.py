@@ -707,7 +707,7 @@
             font-size: 12px;
         }
         .amo-chart-wrap { position: relative; }
-        #amo-chart { width: 100%; height: 220px; display: block; }
+        #amo-chart, #margin-chart { width: 100%; height: 220px; display: block; }
         .amo-stats {
             display: flex; justify-content: space-between;
             margin-top: 8px; padding-top: 8px;

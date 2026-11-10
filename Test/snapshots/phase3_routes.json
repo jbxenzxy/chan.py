@@ -3,6 +3,7 @@
  "DELETE /api/stocks/{code}/delete/point",
  "GET /",
  "GET /api/amo/read",
+ "GET /api/margin/read",
  "GET /api/futures/read/config",
  "GET /api/futures/read/status",
  "GET /api/futures/read/stream",

@@ -385,6 +385,11 @@ def _crosshair_driver(js):
         fn_src(js, "_bottomValueAtY"),
         fn_src(js, "_overlayLabelW"),
         object_src(js, "BOTTOM_INDICATORS"),
+        # _slotAt 会经「两融余额仅指数日K可用」的判据回落，node 桩里必须把
+        # 这条真实函数链一并注入（否则 ReferenceError，见 v3 门禁首轮）。
+        fn_src(js, "amoIsAvailable"),
+        fn_src(js, "marginIndicatorAvailable"),
+        fn_src(js, "_bottomIndicatorEnabled"),
         fn_src(js, "_bottomSlotList"),
         fn_src(js, "_slotAt"),
         fn_src(js, "drawCrosshair"),

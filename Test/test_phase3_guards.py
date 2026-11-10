@@ -46,6 +46,8 @@ EXPECTED_ROUTES = {
     ("GET", "/api/health"),
     ("GET", "/api/search"),
     ("GET", "/api/amo/read"),
+    # 两融余额：全 A 股（沪深北三市）融资融券余额面板
+    ("GET", "/api/margin/read"),
     ("GET", "/api/stocks/{code}/analyze"),
     ("GET", "/api/stocks/{code}/red-range"),
     ("GET", "/api/stocks/{code}/read/annotation"),

@@ -491,6 +491,33 @@ async def api_stocks_scan_cancel_task(task_id: str = Path(...)):
     return _json_response(result)
 
 
+# ── 路由 — 两融余额 ──────────────────────────────────────────────────
+
+@router.get("/api/margin/read")
+async def api_margin_read(
+    start_date: str = Query(...),
+    end_date: str = Query(...),
+):
+    """获取全 A 股两融余额数据（orch.call_margin）
+
+    数据源为 eltdx F10「大盘两融日序列汇总」：按日期把沪 / 深 / 北三市
+    N005（融资 + 融券余额，元）分行求和，对外换算为亿元，无本地兜底；
+    start_date/end_date 为 K 线页面「视口」左右边界日期。
+    """
+    if not start_date or not end_date:
+        raise HTTPException(status_code=400, detail="参数错误: start_date/end_date 不能为空")
+    try:
+        result = await run_in_threadpool(orch.call_margin, start_date, end_date)
+    except AppError:
+        raise  # 领域异常：交给统一异常处理器
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"服务器内部错误: {exc}")
+    if "error" in result:
+        return _json_response(result, 400)
+    return _json_response(result)
+
+
 # ── 路由 — 市场量能 ──────────────────────────────────────────────────
 
 @router.get("/api/amo/read")

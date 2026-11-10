@@ -1,21 +1,21 @@
 # -*- coding: utf-8 -*-
 """
-成交额/量「类MACD」显示模式 —— 设置项契约 + 数值对齐 + 真渲染对照
+成交额/量「类MACD」显示模式 —— 双击契约 + 数值对齐 + 真渲染对照
 =====================================================================
-被守护的功能（2026-09-18 新增）：
+被守护的功能（2026-09-18 新增，2026-11-10 v4 改入口）：
 
   底部指标区是**多槽位**（单窗 2 槽 / 双窗 1 槽；2026-10-09 改造），每槽由标签行
-  最左的 chip 点击在 成交额/量 → MACD → RSI(12) 之间循环（BOTTOM_ORDER）。其中
-  「成交额（股票）/ 成交量（期货）」槽除柱状图外，可切为「类MACD」——借用传统
+  最左的 chip 点击在 成交额/量 → MACD → RSI(12) → 两融余额 之间循环（BOTTOM_ORDER）。
+  其中「成交额（股票）/ 成交量（期货）」槽除柱状图外，可切为「类MACD」——借用传统
   MACD(12,26,9) 算法，把收盘价换成成交额/量，得到黄白线（DIF/DEA）与红绿柱
-  （BAR）。该「柱状图 / 类MACD」仍由右上角「显示设置」抽屉决定，默认柱状图
-  （与既有行为一致）。
+  （BAR）。v4 起该「柱状图 / 类MACD」由 **vol 槽绘图窗内双击** 切换，设置抽屉里的
+  两个单选项与抽屉里的静态说明一并删除；默认仍是柱状图，选择落 localStorage。
 
 本用例四层守护：
 
-  ① 设置项契约：抽屉里有该项、两个单选项值恰为 bar/macd、默认 bar 语义、
-     且**不带内联 onchange**（内联处理器必须挂 window.*，而 window API 面
-     已冻结，见 test_phase6_guards ③）。
+  ① 展示契约：抽屉里**不再有**成交额/量单选项（DOM-id / name 字面零残留），
+     也不再有该模式的标题与静态说明（源码区块 + 真 DOM 双层判零）；app.js 里
+     也没有第二套单选监听（写入点收敛到 setVolDisplayMode）。
   ② 状态与持久化：`_volDisplayMode` 声明 / localStorage 读写 / AppState
      访问器在位（刷新后仍生效）。
   ③ 数值对齐（真跑）：把 app.js 里 VOL_MACD_CORE 标记区间的**真实代码**
@@ -35,7 +35,8 @@
           #22D3EE 只允许留在 MA_COLORS（MA55 均线色）—— 源码层。
           注：「槽内青像素 = 0」是单色折线时代的口径，分段着色后会误伤合法的
           超卖段青（COLORS.macdDown），已废弃。
-        另：槽位交互（默认双槽 / chip 单击循环 + 落盘 / 双击不切换且不重置视图）
+        另：槽位交互（默认双槽 / chip 单击循环 + 落盘 / 双击绘图窗切模式、
+        双击 chip 不切指标两位且不重置视图）
         与 RSI 槽的自适应纵轴（值域 = 可见窗口 rsi 的 min/max 各留 5%，再夹回
         指标定义域 [0,100]；刻度 = 语义档位 {80,50,20} ∩ 值域；一档都不在窗内时
         退化为值域上下沿）也在本节覆盖；
@@ -109,31 +110,38 @@ def find_playwright():
 
 
 # ═══════════════════════════════════════════════════════════════════
-# ① 设置项契约（app.html）
+# ① 展示契约（app.html：单选项 + 静态说明均零残留）
 # ═══════════════════════════════════════════════════════════════════
 def test_setting_ui(failures):
-    print("\n① 设置项契约（抽屉：成交额/量显示）")
+    print("\n① 展示契约（抽屉：成交额/量条目整段删除）")
     html = read(ENTRY_HTML)
-    group = re.search(r'<div id="vol-display-mode-group"[\s\S]*?</div>', html)
-    check(failures, group is not None,
-          "抽屉内存在 #vol-display-mode-group 分组")
-    if not group:
-        return
-    body = group.group(0)
-    vals = re.findall(r'name="vol-display-mode"\s+value="([^"]+)"', body)
-    check(failures, vals == ["bar", "macd"],
-          "两个单选项取值恰为 [bar, macd]", f"实际 {vals}")
-    check(failures, "柱状图" in body and "类MACD" in body,
-          "两个选项文案含「柱状图」「类MACD」")
-    check(failures, "onchange" not in body and "onclick" not in body,
-          "单选项不带内联事件（window API 面冻结，须走 addEventListener）",
-          "内联处理器必须挂 window.*，会顶破 phase6 ③ 冻结基线")
-    check(failures, bool(re.search(r'value="bar">\s*\n\s*柱状图（默认）', body)),
-          "明确标注柱状图为默认值")
-    tip = html[group.end():group.end() + 400]
-    check(failures, "借用传统" not in tip and "得到黄白线" not in tip and "双击" not in tip,
-          "分组下方不再有长篇说明文案（含义与双击语义不写进抽屉）",
-          repr(tip[:80]))
+    js = read(APP_JS)
+    check(failures, 'id="vol-display-mode-group"' not in html
+          and 'name="vol-display-mode"' not in html
+          and 'type="radio" name="vol-display-mode"' not in html,
+          "抽屉里不再有成交额/量的两个单选项（DOM-id / name 零残留）")
+    check(failures, html.count('value="bar"') == 0 and html.count('value="macd"') == 0,
+          "旧单选项取值字面在 HTML 里零残留",
+          "bar=%d macd=%d" % (html.count('value="bar"'), html.count('value="macd"')))
+    # 用户后续要求：抽屉里连标题与静态说明也不留。取「坐标系设置 → 流通市值过滤」
+    # 之间的抽屉设置区切片逐串判零；切片长度兜底防锚点失效导致护栏静默恒绿。
+    _a = '<input type="radio" name="coord-system" value="linear"'
+    _b = 'id="scan-min-float-mc"'
+    check(failures, _a in html and _b in html and html.index(_a) < html.index(_b),
+          "抽屉设置区切片锚点都在位")
+    drawer_block = html[html.index(_a):html.index(_b)]
+    check(failures, len(drawer_block) > 200,
+          "抽屉设置区切片长度足够（护栏未静默失效）", "len=%d" % len(drawer_block))
+    for dead in ("成交额/量显示", "在图表下方", "选择会自动记住"):
+        check(failures, dead not in drawer_block,
+              "抽屉设置区里被删文案零残留：%s" % dead)
+    check(failures, "volDisplayMode" not in html,
+          "HTML 不预置选中态（单一事实源在 _volDisplayMode）")
+    # 旧入口的 JS 实现也一并删除：写入点只剩 setVolDisplayMode 一个
+    for dead in ("initVolDisplayModeRadio", "onVolDisplayModeRadioChange",
+                 "data-bound", 'input[name="vol-display-mode"]'):
+        check(failures, dead not in js,
+              "app.js 里旧单选链路零残留：%s" % dead)
     # 缓存契约（2026-10-09 拍板）：?v= 人工版本号废除，缓存由 FrontAPI no-cache 头接管
     check(failures, "app.js?v=" not in html and 'src="app.js"' in html,
           "app.html 裸引 app.js（?v= 已废除）",
@@ -158,19 +166,37 @@ def test_state_and_persist(failures):
           re.search(r"_volDisplayMode: \{ get: function\(\)\{ return _volDisplayMode; \}, "
                     r"set: function\(v\)\{ _volDisplayMode = v; \} \},", js) is not None,
           "AppState 访问层暴露 _volDisplayMode（getter/setter 同源）")
-    # 单选项同步 + 监听挂载（幂等）
-    check(failures, "function initVolDisplayModeRadio()" in js
-          and "function onVolDisplayModeRadioChange(ev)" in js,
-          "存在抽屉单选项的同步/回调实现")
-    check(failures, "radios[i].addEventListener('change', onVolDisplayModeRadioChange);" in js
-          and "getAttribute('data-bound')" in js,
-          "监听用 addEventListener 且 data-bound 幂等（重复开抽屉不叠加）")
-    check(failures, re.search(r"initCoordSystemRadio\(\);\s*\n\s*initVolDisplayModeRadio\(\);", js)
-          is not None,
-          "openBspSettings 里随抽屉打开同步选中态")
-    # 快捷键之外的入口：默认值必须与"未设置"一致
-    check(failures, "volDisplayMode" not in read(ENTRY_HTML).split("vol-display-mode-group")[0],
-          "HTML 未预置 checked（选中态由 JS 依 _volDisplayMode 同步，单一事实源）")
+    # v4：唯一写入点 + 双击分派（抽屉单选项链路已删除）
+    m_set = re.search(r"function setVolDisplayMode\(mode\) \{([\s\S]*?)\n        \}", js)
+    setter = m_set.group(1) if m_set else ""
+    check(failures, bool(setter) and "_volDisplayMode = next;" in setter,
+          "setVolDisplayMode 内赋值 _volDisplayMode = next（唯一写入点）")
+    check(failures, bool(setter) and "saveOverlaySettings();" in setter,
+          "setVolDisplayMode 内落盘（刷新后仍生效）")
+    check(failures, bool(setter) and "render();" in setter,
+          "setVolDisplayMode 内即时重绘（不重开页面）")
+    check(failures, bool(setter) and "if (next === _volDisplayMode) return;" in setter,
+          "setVolDisplayMode 同值不重绘（避免无谓 render）")
+    check(failures, js.count("_volDisplayMode = next;") == 1
+          and "_volDisplayMode = (el.value === 'macd')" not in js,
+          "除 load 回填外只有 setter 一处赋值（旧单选回调零残留）",
+          "setter 赋值处=%d" % js.count("_volDisplayMode = next;"))
+    check(failures, "function toggleVolDisplayMode()" in js
+          and "setVolDisplayMode(_volDisplayMode === 'macd' ? 'bar' : 'macd');" in js,
+          "双击走 toggle → setter（不直接改状态）")
+    m_h = re.search(r"function handleBottomAreaDblClick\(clickX, clickY, area\) "
+                    r"\{([\s\S]*?)\n        \}", js)
+    handler = m_h.group(1) if m_h else ""
+    check(failures, bool(handler) and "getBottomSlotPlotArea(i)" in handler
+          and "_slotAt(i) !== 'vol'" in handler
+          and "toggleVolDisplayMode();" in handler
+          and "hitBottomSlotChip" not in handler and "cycleBottomSlot" not in handler,
+          "双击命中区 = vol 槽绘图窗（不含标签行/chip，不切槽位）")
+    check(failures, js.count("if (handleBottomAreaDblClick(clickX, clickY, area)) return;") == 2,
+          "单窗 + 双窗下窗两处 dblclick 都走同一个分派函数",
+          "命中=%d" % js.count("if (handleBottomAreaDblClick(clickX, clickY, area)) return;"))
+    check(failures, "initVolDisplayModeRadio();" not in js,
+          "openBspSettings 不再同步已删除的单选项")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -320,13 +346,18 @@ def test_render_dispatch(failures):
     check(failures, "calcVolMacdMap(data.klines" in js and
                     js.count("_volMacdMap = (_hasBottomSlot('vol') && _volDisplayMode === 'macd')") == 1,
           "类MACD 只在启用该模式时计算（柱状图模式零额外开销）")
-    # 双击切换已废除：切换入口改为标签行 chip 单击循环（BOTTOM_ORDER）
+    # v4：双击不再切槽位，只切 vol 槽的显示模式；chip 单击循环仍是切指标的唯一入口
     check(failures, "_showVolume = !_showVolume" not in js
           and "_subShowVolume = !_subShowVolume" not in js,
-          "双击切换已移除（不得残留 _showVolume / _subShowVolume 的翻转赋值）")
-    check(failures, "const BOTTOM_ORDER = ['vol', 'macd', 'rsi'];" in js
-          and "const next = BOTTOM_ORDER[(BOTTOM_ORDER.indexOf(_slotAt(i)) + 1) % BOTTOM_ORDER.length];" in js,
-          "chip 单击按 BOTTOM_ORDER 循环切换该槽指标（替代双击）")
+          "双击不切槽位（不得残留 _showVolume / _subShowVolume 的翻转赋值）")
+    check(failures, "function handleBottomAreaDblClick(clickX, clickY, area) {" in js
+          and "getBottomSlotPlotArea(i)" in js
+          and js.count("if (handleBottomAreaDblClick(clickX, clickY, area)) return;") == 2,
+          "双击分派函数存在且两处 handler 都调用它（不是只改了一处）")
+    check(failures, "const BOTTOM_ORDER = ['vol', 'macd', 'rsi', 'margin'];" in js
+          and "let next = BOTTOM_ORDER[(BOTTOM_ORDER.indexOf(_slotAt(i)) + 1) % BOTTOM_ORDER.length];" in js
+          and "_bottomIndicatorEnabled(next)" in js,
+          "chip 单击按 BOTTOM_ORDER 循环（4 项）且跳过不可用的两融余额指标（替代双击）")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -740,6 +771,8 @@ def test_real_render(failures):
         checks.append(("双击 chip：不触发「恢复全视图」（viewOffset/viewCount 不变）",
                        view_after == view_before, f"{view_before} → {view_after}"))
         checks.append(("双击 chip 不影响槽 1（仍为 rsi）", list(s2)[1] == "rsi", str(s2)))
+        checks.append(("双击 chip 不切显示模式（标签行不在命中区）",
+                       page.evaluate("() => window.ChanApp.state._volDisplayMode") == "bar", ""))
 
         # 鼠标移出画布后重渲染，让标签取"最后一根"（否则标签跟随 hover 的K线）
         page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] + 60)
@@ -748,23 +781,56 @@ def test_real_render(failures):
         bar_stats = page.evaluate(PIXEL_STATS_JS, region0)
         page.locator("#chart-container canvas").screenshot(
             path=os.path.join(shot_dir, "1_bar.png"))
-        # ── 2) 打开设置抽屉（走真实齿轮按钮）→ 选「类MACD」 ──
+        # ── 2) 抽屉里该模式条目全删；真双击 vol 槽绘图窗 → 切到类MACD ──
         page.click("#btn-settings")
         page.wait_for_timeout(150)
-        radios = page.evaluate("() => Array.from("
-                               "document.querySelectorAll('input[name=\"vol-display-mode\"]'))"
-                               ".map(el => [el.value, el.checked])")
-        checks.append(("抽屉打开后单选项与当前模式同步（bar 选中）",
-                       radios == [["bar", True], ["macd", False]], str(radios)))
-        # 真实点击（走 addEventListener 的生产路径）→ 立即生效
+        drawer = page.evaluate("""() => ({
+            radios: document.querySelectorAll('input[name="vol-display-mode"]').length,
+            tip: (document.getElementById('bsp-filter-dialog').innerText || '')
+        })""")
+        checks.append(("抽屉里成交额/量单选项已删除（真 DOM 里 0 个）",
+                       drawer["radios"] == 0, str(drawer["radios"])))
+        checks.append(("抽屉里静态说明已删除（真 DOM 里 0 处文案）",
+                       all(s not in drawer["tip"] for s in
+                           ("成交额/量显示", "在图表下方", "选择会自动记住")),
+                       repr(drawer["tip"][-160:])))
+        # 双击坐标与前端几何同源：槽 0 绘图窗中心（标签行 / chip 不在命中区）
+        dbl_x = box["x"] + area_x + area_w * 0.4
+        dbl_y = box["y"] + (s0_plot_top + s0_plot_bot) / 2
+        page.click("#bsp-filter-dialog .settings-drawer-close")
+        # 抽屉背板有淡出过渡：去掉 .show 之后它仍会盖住画布一小段时间。
+        # 必须等落点顶层元素真的变回 canvas 再双击，否则 dblclick 全被背板吃掉
+        # （坐标对、但一次都不生效，表现为「第二次双击才切」的假滞后）。
+        page.wait_for_function(
+            "([x,y]) => { const e = document.elementFromPoint(x,y);"
+            " return !!e && e.tagName === 'CANVAS'; }",
+            arg=[dbl_x, dbl_y], timeout=5000)
+        slots_before = page.evaluate("() => window.ChanApp.state._bottomSlots")
+        view_dbl_before = page.evaluate("() => ({ off: window.ChanApp.state.viewOffset,"
+                                        " cnt: window.ChanApp.state.viewCount })")
         page.evaluate("() => { window.__drawnTexts.length = 0; window.__drawnTextPos.length = 0; }")
-        page.click('input[name="vol-display-mode"][value="macd"]')
+        page.mouse.dblclick(dbl_x, dbl_y)
         page.wait_for_timeout(250)
         store = page.evaluate("() => JSON.parse(localStorage.getItem('chan_overlay_settings') || '{}')")
-        checks.append(("选中类MACD 后立即落盘 localStorage.volDisplayMode",
+        checks.append(("双击绘图窗后立即落盘 localStorage.volDisplayMode=macd",
                        store.get("volDisplayMode") == "macd", str(store.get("volDisplayMode"))))
-        checks.append(("选中类MACD 后内存态同步",
+        checks.append(("双击绘图窗后内存态同步",
                        page.evaluate("() => window.ChanApp.state._volDisplayMode") == "macd", ""))
+        slots_after = page.evaluate("() => window.ChanApp.state._bottomSlots")
+        checks.append(("双击绘图窗不切槽位（槽位数组原样）",
+                       list(slots_after) == list(slots_before),
+                       "%s → %s" % (slots_before, slots_after)))
+        view_dbl_after = page.evaluate("() => ({ off: window.ChanApp.state.viewOffset,"
+                                       " cnt: window.ChanApp.state.viewCount })")
+        checks.append(("双击绘图窗不触发「恢复全视图」（viewOffset/viewCount 不变）",
+                       view_dbl_after == view_dbl_before,
+                       "%s → %s" % (view_dbl_before, view_dbl_after)))
+        # 双击会把鼠标留在画布内：① 标签会取 hover 的那根K线而不是末根；
+        # ② dblclick 之前的 mousemove 会额外产生一次重绘文字，令刻度/chip 重复计数。
+        # 清记录后移出画布（onMouseLeave → render），只留一次干净重绘，与原用例同源。
+        page.evaluate("() => { window.__drawnTexts.length = 0; window.__drawnTextPos.length = 0; }")
+        page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] + 60)
+        page.wait_for_timeout(250)
 
         page.wait_for_timeout(100)
         macd_texts = page.evaluate("() => window.__drawnTexts.slice()")
@@ -792,14 +858,28 @@ def test_real_render(failures):
         page.evaluate("() => window.toggleMirrorMode()")
         page.wait_for_timeout(150)
 
-        # ── 3) 切回柱状图，证明是"实时双向生效"（不是单向覆盖） ──
+        # ── 3) 再双击一次切回柱状图，证明是"实时双向生效"（不是单向覆盖） ──
         page.evaluate("() => { window.__drawnTexts.length = 0; window.__drawnTextPos.length = 0; }")
-        page.click('input[name="vol-display-mode"][value="bar"]')
+        page.mouse.dblclick(dbl_x, dbl_y)
+        page.wait_for_timeout(250)
+        store_back = page.evaluate("() => JSON.parse(localStorage.getItem('chan_overlay_settings') || '{}')")
+        checks.append(("第二次双击切回柱状图且落盘",
+                       store_back.get("volDisplayMode") == "bar", str(store_back.get("volDisplayMode"))))
+        # 同步骤 2：清掉双击期间的多次重绘文字，再移出画布触发一次干净重绘
+        page.evaluate("() => { window.__drawnTexts.length = 0; window.__drawnTextPos.length = 0; }")
+        page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] + 60)
         page.wait_for_timeout(250)
         bar_texts = page.evaluate("() => window.__drawnTexts.slice()")
         back_stats = page.evaluate(PIXEL_STATS_JS, region0)
         page.locator("#chart-container canvas").screenshot(
             path=os.path.join(shot_dir, "3_back_to_bar.png"))
+
+        # 双击非 vol 槽（槽 1 = rsi）绘图窗：不该切模式
+        page.mouse.dblclick(box["x"] + area_x + area_w * 0.4,
+                            box["y"] + (s1_plot_top + s1_plot_bot) / 2)
+        page.wait_for_timeout(150)
+        checks.append(("双击非 vol 槽（rsi）不切显示模式",
+                       page.evaluate("() => window.ChanApp.state._volDisplayMode") == "bar", ""))
 
         view = page.evaluate("() => ({ off: window.ChanApp.state.viewOffset,"
                              " cnt: window.ChanApp.state.viewCount })")
@@ -807,15 +887,16 @@ def test_real_render(failures):
         # ── 4) 真实 wheel 缩放（要求 ⑥）：放大后 RSI 纵轴值域必须跟着可见窗口变 ──
         # 走生产路径（canvas 的 wheel 监听 → onWheel → 改 viewCount → render），
         # 不用 state 直接赋值，免得绕开缩放分支本身。
-        # ⚠ 先关设置抽屉：其背板 #bsp-filter-overlay（z-index 高于画布）会覆盖整屏，
-        #   不关的话 wheel 落在背板上、canvas 的监听一次都收不到（viewCount 纹丝不动）。
-        #   走生产路径关（抽屉右上角 × 就是 closeBspSettings）—— 不用 evaluate 直接调函数。
-        page.click("#bsp-filter-dialog .settings-drawer-close")
-        page.wait_for_timeout(200)
+        # 抽屉已在步骤 2 关闭：背板不激活，且落点顶层元素确为 canvas
         _ovl = page.evaluate("() => { const o = document.getElementById('bsp-filter-overlay');"
                             " return o ? o.classList.contains('show') : null; }")
-        checks.append(("抽屉关闭后背板不再拦截画布（wheel 能落到 canvas 上）",
-                       _ovl is False, "#bsp-filter-overlay.show = %s" % _ovl))
+        _wheel_x = box["x"] + box["width"] / 2
+        _wheel_y = box["y"] + box["height"] * 0.3
+        _top_el = page.evaluate("([x,y]) => { const e = document.elementFromPoint(x,y);"
+                                " return e ? e.tagName : null; }", [_wheel_x, _wheel_y])
+        checks.append(("抽屉背板未激活且落点顶层是 canvas（wheel 能落到画布上）",
+                       _ovl is False and _top_el == "CANVAS",
+                       "#bsp-filter-overlay.show=%s top=%s" % (_ovl, _top_el)))
         page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] * 0.3)
         page.wait_for_timeout(120)
         for _ in range(5):

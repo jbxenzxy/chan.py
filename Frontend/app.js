@@ -50,8 +50,9 @@
 
         // 成交额/量的显示模式：'bar'=柱状图（默认，与既有行为一致）；
         // 'macd'=类MACD（把成交额/量代入传统 MACD(12,26,9)，替代收盘价）。
-        // 由右上角「显示设置」抽屉的单选项切换；只作用于「选中了 vol 的那个槽」，
-        // 与同屏其他槽（macd / rsi）无关。
+        // 由「成交额/量」槽绘图窗内的双击切换；只作用于「选中了 vol 的那个槽」，
+        // 与同屏其他槽（macd / rsi / 两融余额）无关（两融余额本身就是类MACD）。
+        // 写入点 setVolDisplayMode / 双击分派 handleBottomAreaDblClick 在 KLineChart 区块内。
         let _volDisplayMode = 'bar';
 
         // 频率→秒数映射（后端单一事实源 /api/health 下发，本地常量仅作离线兜底）
@@ -125,9 +126,23 @@
                 // 光标读数：与 rsiToY 互逆；数值形式与纵轴刻度一致（两位小数）。
                 cursorText: (y, area, range) => _bottomValueAtY(y, area, range).toFixed(2),
             },
+            margin: {
+                id: 'margin',
+                // chip 短名即指标名；正文与价格 MACD 同构，由标签行左端给出。
+                tabLabel: () => '两融余额',
+                range: (klines) => getMarginMacdRange(klines),
+                // 画法完全复用 drawMacd（红绿柱 / 白橙线 / 零线 / 金叉箭头 / 翻转视图），
+                // 只换取值来源；与成交额/量类MACD 用同一个注入口，不写第二套画法。
+                draw: (area, range, c) => drawMarginMacd(c.klines, area, range,
+                                                        c.barStep, c.macdBarWidth, c.subPixelOffset),
+                axis: (area, range) => drawMarginMacdAxis(area, range),
+                label: (textArea, c) => drawMarginSlotLabel(textArea, c),
+                // 光标读数：_bottomValueAtY 已处理翻转视图，单位随两融余额（亿元）。
+                cursorText: (y, area, range) => formatMarginMacdVal(_bottomValueAtY(y, area, range)),
+            },
         };
 
-        const BOTTOM_ORDER = ['vol', 'macd', 'rsi'];   // chip 点击的循环顺序
+        const BOTTOM_ORDER = ['vol', 'macd', 'rsi', 'margin'];   // chip 点击的循环顺序（margin 仅指数日K可用）
 
         // 槽数随窗口模式：单窗 2 槽、双窗 1 槽（双窗每窗高度已砍半，放不下第 2 槽）。
         const SLOT_COUNT = () => (isDualWindow ? 1 : 2);
@@ -405,6 +420,21 @@
 
 // ══════════════════════════════════════════════════════════════════
         // [COMPONENT] KLineChart —— K线图表组件（渲染引擎 / 坐标系 / 交互 / 倒计时）
+
+        // 成交额/量显示模式的唯一写入点：赋值 → 落盘 → 重绘一次做完。
+        // 抽屉单选项已移除，当前入口只有 vol 槽绘图窗双击；保留这个收敛点，
+        // 避免以后加第二个入口时把这三行复制一遍。
+        function setVolDisplayMode(mode) {
+            const next = (mode === 'macd') ? 'macd' : 'bar';
+            if (next === _volDisplayMode) return;
+            _volDisplayMode = next;
+            saveOverlaySettings();
+            render();
+        }
+
+        function toggleVolDisplayMode() {
+            setVolDisplayMode(_volDisplayMode === 'macd' ? 'bar' : 'macd');
+        }
 
 // ══════════════════════════════════════════════════════════════════
 
@@ -828,15 +858,11 @@
                 const clickX = e.clientX - rect.left;
                 const clickY = e.clientY - rect.top;
                 const area = getChartArea();
-                // 0. 底部指标区（各槽标签行 + 绘图窗）只做**命中拦截**：
-                //    切换入口已改为标签行 chip（cycleBottomSlot），双击不再切换指标，
+                // 0. 底部指标区：vol 槽绘图窗内双击切显示模式；其余位置仍只做命中拦截。
+                //    单窗与双窗下窗共用 handleBottomAreaDblClick，几何各自同源；
+                //    这一层拦截不能删，否则双击会落到底下的恢复全视图逻辑。
                 //    但这一层拦截必须留着 —— 否则会落到底下的"双击空白处 → 恢复全视图"。
-                const bottomTop = getBottomSlotLabelArea(0).y;
-                const bottomBottom = getBottomAreaBottomY();
-                if (clickX >= area.x && clickX <= area.x + area.w &&
-                    clickY >= bottomTop && clickY <= bottomBottom) {
-                    return;
-                }
+                if (handleBottomAreaDblClick(clickX, clickY, area)) return;
                 // 1. 只在K线主图区域内有效（下沿用 >= ：主图下沿恰好等于底带上沿，
                 //    交给上面那段处理，不让它去参与K线命中测试）
                 if (clickX < area.x || clickX > area.x + area.w ||
@@ -1176,6 +1202,17 @@
 
         // 当前渲染目标用的槽位数组：双窗下窗用 _subBottomSlots，其余（单窗 / 双窗上窗）
         // 用 _bottomSlots。_renderChart 会在渲染下窗时把 chartData 换成 dualSubData。
+        // 两融余额是全市场日频数据，只在上证指数日K页提供 —— 与「两融余额」按钮
+        // 同一判据（AmoPanel），不另写一份条件，避免两处可用性日后漂移。
+        function marginIndicatorAvailable() {
+            return amoIsAvailable();
+        }
+
+        // chip 循环里跳过当前图表不可用的指标；其余三个指标恒可用。
+        function _bottomIndicatorEnabled(id) {
+            return id !== 'margin' || marginIndicatorAvailable();
+        }
+
         function _bottomSlotList() {
             return (chartData && chartData === dualSubData) ? _subBottomSlots : _bottomSlots;
         }
@@ -1184,7 +1221,10 @@
         // 避免"标签行空了、指标窗没内容"的空状态（槽数本身由窗口模式决定，不随内容变）。
         function _slotAt(i) {
             const list = _bottomSlotList();
-            return (list && BOTTOM_INDICATORS[list[i]]) ? list[i] : 'macd';
+            const id = (list && BOTTOM_INDICATORS[list[i]]) ? list[i] : 'macd';
+            // 槽位里存着 margin 但当前图表不可用时，本槽回落 MACD（配置不改写，
+            // 切回指数日K 自动恢复），不出现「选了指标却空白」的空状态。
+            return _bottomIndicatorEnabled(id) ? id : 'macd';
         }
 
         function _setSlotAt(i, id) {
@@ -1202,9 +1242,14 @@
 
         // chip 点击：该槽在 BOTTOM_ORDER 内往后跳一位（macd → rsi → vol → macd）
         function cycleBottomSlot(i) {
-            const next = BOTTOM_ORDER[(BOTTOM_ORDER.indexOf(_slotAt(i)) + 1) % BOTTOM_ORDER.length];
+            let next = BOTTOM_ORDER[(BOTTOM_ORDER.indexOf(_slotAt(i)) + 1) % BOTTOM_ORDER.length];
+            // 两融余额仅指数日K可用：不可用时顺延一项，其它图表上 chip 仍是原来的 3 项循环
+            if (!_bottomIndicatorEnabled(next)) {
+                next = BOTTOM_ORDER[(BOTTOM_ORDER.indexOf(next) + 1) % BOTTOM_ORDER.length];
+            }
             _setSlotAt(i, next);
             saveOverlaySettings();
+            _ensureMarginSeries();
             if (window._isRenderingBottom) renderBottom(); else render();
         }
 
@@ -1231,6 +1276,28 @@
                 if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) return i;
             }
             return -1;
+        }
+
+        // 底部指标区双击：只认「成交额/量」槽的**绘图窗**，在柱状图 ⇄ 类MACD 间切换。
+        // 标签行 / chip 不在命中区（chip 单击是循环指标，归 click handler 管）；
+        // 其它指标槽与标签行仍按原语义拦截，不落到底下的「双击空白 → 恢复全视图」。
+        // 返回 true = 落在底部区且本层已处理，调用方直接 return。
+        function handleBottomAreaDblClick(clickX, clickY, area) {
+            const bottomTop = getBottomSlotLabelArea(0).y;
+            const bottomBottom = getBottomAreaBottomY();
+            if (clickX < area.x || clickX > area.x + area.w ||
+                clickY < bottomTop || clickY > bottomBottom) return false;
+            const n = SLOT_COUNT();
+            for (let i = 0; i < n; i++) {
+                if (_slotAt(i) !== 'vol') continue;
+                const p = getBottomSlotPlotArea(i);
+                if (clickX >= p.x && clickX <= p.x + p.w &&
+                    clickY >= p.y && clickY <= p.y + p.h) {
+                    toggleVolDisplayMode();
+                    break;
+                }
+            }
+            return true;
         }
 
         function getVisibleKlines() {
@@ -1340,6 +1407,26 @@
             return out;
         }
 
+        // 纯数值序列 → MACD(12,26,9)：成交额/量类MACD 与两融余额类MACD **共用**，
+        // 全仓只此一份 EMA 实现。样本不足 slow(26) 根时整窗置 0，与后端
+        // AppUtils.calculate_macd 的 MACD_MIN_BARS 门槛同口径。
+        function calcMacdVals(values) {
+            const out = new Array(values.length);
+            if (values.length < VOL_MACD_PARAMS.slow) {
+                for (let i = 0; i < values.length; i++) out[i] = ZERO_MACD_VALS;
+                return out;
+            }
+            const emaFast = _volMacdEma(values, VOL_MACD_PARAMS.fast);
+            const emaSlow = _volMacdEma(values, VOL_MACD_PARAMS.slow);
+            const dif = new Array(values.length);
+            for (let i = 0; i < values.length; i++) dif[i] = emaFast[i] - emaSlow[i];
+            const dea = _volMacdEma(dif, VOL_MACD_PARAMS.signal);
+            for (let i = 0; i < values.length; i++) {
+                out[i] = { dif: dif[i], dea: dea[i], macd: 2 * (dif[i] - dea[i]) };
+            }
+            return out;
+        }
+
         // 成交额/量 类MACD —— 返回 Map<K线对象, {dif, dea, macd}>
         // 尾部占位K线（未形成的预览bar：成交量/成交额恒为 0，只有 OHLC 被填入）
         // **不参与 EMA**：0 会把 EMA 一路拉向 0，末根出现假的深坑；与后端
@@ -1358,15 +1445,10 @@
             }
             const vals = [];
             for (let i = 0; i < realN; i++) vals.push(metricOf(klines[i]));
-            const emaFast = _volMacdEma(vals, VOL_MACD_PARAMS.fast);
-            const emaSlow = _volMacdEma(vals, VOL_MACD_PARAMS.slow);
-            const dif = [], dea = [];
-            for (let i = 0; i < realN; i++) dif.push(emaFast[i] - emaSlow[i]);
-            const deaRaw = _volMacdEma(dif, VOL_MACD_PARAMS.signal);
-            for (let i = 0; i < realN; i++) dea.push(deaRaw[i]);
+            const macdVals = calcMacdVals(vals);
             let last = ZERO_MACD_VALS;
             for (let i = 0; i < realN; i++) {
-                last = { dif: dif[i], dea: dea[i], macd: 2 * (dif[i] - dea[i]) };
+                last = macdVals[i];
                 out.set(klines[i], last);
             }
             for (let i = realN; i < klines.length; i++) out.set(klines[i], last);
@@ -1377,6 +1459,116 @@
         // 最近一次渲染算出的成交额/量类MACD：键=K线对象（视口切片与全序列共享同一批
         // 对象），绘制 / 标签 / 纵轴三处都从这里取值，保证同源、不会各算各的。
         let _volMacdMap = null;
+        // ══ 两融余额 类MACD（复用成交额/量那一套 MACD 核心与绘制）══════════════
+        // 口径：样本序列 = 全 A 股两融余额的「交易日序列」（每天一个值，单位亿元），
+        // 代入 MACD(12,26,9)，与成交额/量类MACD 共用 calcMacdVals（全仓只一份 EMA）。
+        // 不按K线逐根取样：分钟K 会把同一天余额重复计入 EMA，指标会失真。
+        // 数据来自 /api/margin/read（AppMargin → eltdx F10 全历史），只在
+        // 「某槽选中 margin 且当前是指数日K」时取一次，之后所有视口共用内存缓存；
+        // 不新增 REST 路由、不改后端、不动 SSE 实时链路。
+        const _MARGIN_FULL_START = "1990/01/01";
+        const _MARGIN_FULL_END = "2099/12/31";
+        let _marginMacdByDate = null;   // {'YYYY-MM-DD': {dif, dea, macd}}，null = 未取
+        let _marginMacdMap = null;      // Map<K线对象, {dif, dea, macd}>
+        let _marginFetching = false;
+        let _marginLoadError = "";
+
+        // REST 载荷 → 按交易日算好的 MACD 查表（日期统一为连字符，与 K 线
+        // k.date.slice(0,10) 对齐）。同一天重复行只保留最后一条；坏值只丢该行。
+        function buildMarginMacdByDate(data) {
+            const byDate = {};
+            const dates = (data && data.dates) || [];
+            const balances = (data && data.balances) || [];
+            const pairs = [];
+            const n = Math.min(dates.length, balances.length);
+            for (let i = 0; i < n; i++) {
+                const d = String(dates[i] || "").replace(/\//g, "-").slice(0, 10);
+                const v = Number(balances[i]);
+                if (d.length === 10 && isFinite(v) && v > 0) pairs.push([d, v]);
+            }
+            if (!pairs.length) return byDate;
+            pairs.sort(function(a, b) { return a[0] < b[0] ? -1 : (a[0] > b[0] ? 1 : 0); });
+            const uniqD = [], vals = [];
+            pairs.forEach(function(p) {
+                if (uniqD.length && uniqD[uniqD.length - 1] === p[0]) {
+                    vals[vals.length - 1] = p[1];
+                } else { uniqD.push(p[0]); vals.push(p[1]); }
+            });
+            const macdVals = calcMacdVals(vals);
+            for (let i = 0; i < uniqD.length; i++) byDate[uniqD[i]] = macdVals[i];
+            return byDate;
+        }
+
+        // 交易日序列 → 每根K线：按日期取「不大于该日的最近一个交易日」的值
+        // （当日两融 T+1 披露、非交易日都走这条继承，与预览bar 继承同口径）；
+        // 数据开始前的K线给零值，不参与纵轴放大。
+        function calcMarginMacdMap(klines, byDate) {
+            const out = new Map();
+            if (!klines || !klines.length || !byDate) return out;
+            const days = Object.keys(byDate).sort();
+            let j = 0, last = ZERO_MACD_VALS;
+            for (let i = 0; i < klines.length; i++) {
+                const k = klines[i];
+                const d = String(k.date || "").slice(0, 10).replace(/\//g, "-");
+                while (j < days.length && days[j] <= d) { last = byDate[days[j]]; j++; }
+                out.set(k, j > 0 ? last : ZERO_MACD_VALS);
+            }
+            return out;
+        }
+
+        function marginMacdOf(k) {
+            return (_marginMacdMap && _marginMacdMap.get(k)) || ZERO_MACD_VALS;
+        }
+
+        function getMarginMacdRange(klines) {
+            if (!klines.length) return { min: -1, max: 1 };
+            let min = Infinity, max = -Infinity;
+            klines.forEach(k => {
+                const v = marginMacdOf(k);
+                if (v.macd < min) min = v.macd;
+                if (v.macd > max) max = v.macd;
+                if (v.dif < min) min = v.dif;
+                if (v.dif > max) max = v.dif;
+                if (v.dea < min) min = v.dea;
+                if (v.dea > max) max = v.dea;
+            });
+            if (min === 0 && max === 0) return { min: -1, max: 1 };
+            const margin = Math.max(Math.abs(max), Math.abs(min)) * 0.1;
+            return { min: min - margin, max: max + margin };
+        }
+
+        // 单位跟随两融余额（亿元）；MACD 差值通常几十~几百亿，过万亿再缩位。
+        function formatMarginMacdVal(v) {
+            if (!isFinite(v)) return "-";
+            const a = Math.abs(v);
+            const s = a >= 10000 ? (a / 10000).toFixed(2) + "万亿" : a.toFixed(2) + "亿";
+            return (v < 0 ? "-" : "") + s;
+        }
+
+        // 全历史一次取足（eltdx 本就单次返回全历史），EMA 从序列起点预热，
+        // 当前视口内不会出现「前 26 根种子未收敛」的伪值。失败只取一次，不每帧重试。
+        function _ensureMarginSeries() {
+            if (!_hasBottomSlot('margin') || !marginIndicatorAvailable()) return;
+            if (_marginMacdByDate || _marginFetching) return;
+            _marginFetching = true;
+            fetch("/api/margin/read?start_date=" + encodeURIComponent(_MARGIN_FULL_START)
+                + "&end_date=" + encodeURIComponent(_MARGIN_FULL_END))
+                .then(function(resp) {
+                    if (!resp.ok) throw new Error("HTTP " + resp.status);
+                    return resp.json();
+                })
+                .then(function(data) {
+                    _marginMacdByDate = buildMarginMacdByDate(data);
+                    _marginLoadError = "";
+                    render();
+                })
+                .catch(function(err) {
+                    _marginLoadError = "两融余额数据加载失败";
+                    _marginMacdByDate = {};   // 已尝试：避免每帧重试
+                    render();
+                })
+                .finally(function() { _marginFetching = false; });
+        }
 
         // 取某根K线的成交额/量类MACD值；未算（非本显示模式）时按 0 处理
         function volMacdOf(k) {
@@ -1480,6 +1672,7 @@
 
         function render() {
             if (!chartData) return;
+            _ensureMarginSeries();   // 两融余额类MACD：首次切到该槽时取一次全历史
             // 顶栏「统计」按钮：股票态文案改成「回测」+ 双窗态禁用（§4.1 / §4.4）。
             // 放这里而不是各加载回调里：市场态随标的/周期/复盘切换而变，散在多个
             // 调用点必漏；render() 是这些路径的公共下游。内部有文案缓存，改动为零。
@@ -1556,6 +1749,11 @@
             // 必须先于下面的槽位值域循环赋值：vol.range() 在 macd 模式下会读 _volMacdMap。
             _volMacdMap = (_hasBottomSlot('vol') && _volDisplayMode === 'macd')
                 ? calcVolMacdMap(data.klines, !!(data.meta && data.meta.market === 'futures'))
+                : null;
+            // 两融余额类MACD：与 _volMacdMap 同构，按全序列日期对齐，
+            // 绘制 / 标签 / 纵轴 / 光标读数四处同源取值。
+            _marginMacdMap = (_hasBottomSlot('margin') && _marginMacdByDate)
+                ? calcMarginMacdMap(data.klines, _marginMacdByDate)
                 : null;
             // 槽位：按槽数取绘图窗与值域。值域一律走各指标的 range() 钩子
             // （rsi 固定 [0,100]、vol 与 macd 从数据推），渲染层不再 per-指标 分支。
@@ -2172,6 +2370,12 @@
             drawMacd(klines, volArea, macdRange, barStep, barWidth, subPixelOffset, volMacdOf);
         }
 
+        // 两融余额类MACD：画法完全复用 drawMacd（含翻转视图的柱/线/颜色/金叉箭头），
+        // 只换取值来源；与成交额/量类MACD 用同一个注入口。
+        function drawMarginMacd(klines, marginArea, macdRange, barStep, barWidth, subPixelOffset) {
+            drawMacd(klines, marginArea, macdRange, barStep, barWidth, subPixelOffset, marginMacdOf);
+        }
+
         // ══ RSI 槽（RSI(12)）════════════════════════════════════════════════
         // 数据来自后端：App/AppUtils.calculate_rsi → SSE 逐根下发 k.rsi。
         // 前端**零计算** —— 与 MACD 读 k.dif/dea/macd 完全同构；显示处理也照前端
@@ -2483,6 +2687,35 @@
                 ctx.fillStyle = "#888";
                 ctx.fillText("MACD数据缺失", xPos, lineY);
             }
+        }
+
+        // 两融余额槽的标签行：与价格 MACD / 成交额类MACD 同构，单位「亿元」。
+        // 品种口径由标签行右端 chip（两融余额）标识，正文不重复写前缀。
+        // 翻转视图：BAR 颜色对调，与翻转后的类MACD 柱一致（同 drawVolSlotLabel）。
+        function drawMarginSlotLabel(textArea, c) {
+            const targetK = c.targetK;
+            if (!targetK) return;
+            ctx.font = "11px monospace"; ctx.textAlign = "left";
+            const lineY = textArea.y + 11;
+            ctx.fillStyle = COLORS.textLight;
+            ctx.fillText("MACD(12,26,9)", c.textX, lineY);
+            const x0 = c.textX + ctx.measureText("MACD(12,26,9) ").width;
+            if (!_marginMacdByDate || _marginLoadError) {
+                ctx.fillStyle = "#888";
+                ctx.fillText(_marginLoadError || "两融余额加载中…", x0, lineY);
+                return;
+            }
+            const v = marginMacdOf(targetK);
+            let xPos = x0;
+            ctx.fillStyle = COLORS.dif;
+            ctx.fillText("DIF:" + formatMarginMacdVal(v.dif), xPos, lineY);
+            xPos += ctx.measureText("DIF:" + formatMarginMacdVal(v.dif) + " ").width;
+            ctx.fillStyle = COLORS.dea;
+            ctx.fillText("DEA:" + formatMarginMacdVal(v.dea), xPos, lineY);
+            xPos += ctx.measureText("DEA:" + formatMarginMacdVal(v.dea) + " ").width;
+            const barIsUp = _isMirrorMode ? (v.macd < 0) : (v.macd >= 0);
+            ctx.fillStyle = barIsUp ? "#FF3C3C" : "#00F0F0";
+            ctx.fillText("BAR:" + formatMarginMacdVal(v.macd), xPos, lineY);
         }
 
         // RSI 槽的标签行：单值。数值用 MACD 的 DIF 白（COLORS.dif）—— 与「RSI 曲线取
@@ -3138,6 +3371,23 @@
             ctx.fillText(formatVolMacdVal(botVal), volArea.x + volArea.w + 6, volArea.y + volArea.h - 4);
         }
 
+        // 两融余额类MACD 的纵轴：与 drawVolMacdAxis 同构（含翻转视图的
+        // top/bot 对调与零线位置），数值单位随两融余额（亿元）。
+        function drawMarginMacdAxis(marginArea, macdRange) {
+            ctx.fillStyle = COLORS.text; ctx.font = "11px monospace";
+            ctx.textBaseline = "alphabetic"; ctx.textAlign = "left";
+            const range = macdRange.max - macdRange.min;
+            const zeroY = _isMirrorMode
+                ? marginArea.y + (0 - macdRange.min) / range * marginArea.h
+                : marginArea.y + marginArea.h * (macdRange.max / range);
+            const topVal = _isMirrorMode ? macdRange.min : macdRange.max;
+            const botVal = _isMirrorMode ? macdRange.max : macdRange.min;
+            ctx.fillText(formatMarginMacdVal(topVal), marginArea.x + marginArea.w + 6, marginArea.y + 12);
+            ctx.fillText("0", marginArea.x + marginArea.w + 6, zeroY + 4);
+            ctx.fillText(formatMarginMacdVal(botVal), marginArea.x + marginArea.w + 6,
+                         marginArea.y + marginArea.h - 4);
+        }
+
         function drawVolumeAxis(volArea, volRange) {
             ctx.fillStyle = COLORS.text; ctx.font = "11px monospace"; ctx.textBaseline = "alphabetic"; ctx.textAlign = "left";
             // 成交量(额)恒为正值，轴标签不随翻转视图改变（0在底部、max在顶部）
@@ -3791,13 +4041,9 @@
                     chartData = dualSubData; currentFreq = dualSubFreq;
                     try {
                     const area = getChartArea();
-                    // 底部指标区：切换入口是标签行 chip，这里只做命中拦截
-                    const bottomTop = getBottomSlotLabelArea(0).y;
-                    const bottomBottom = getBottomAreaBottomY();
-                    if (clickX >= area.x && clickX <= area.x + area.w &&
-                        clickY >= bottomTop && clickY <= bottomBottom) {
-                        return;
-                    }
+                    // 底部指标区：与主画布共用双击分派（vol 槽绘图窗切显示模式），
+                    // 其余位置仍只做命中拦截，不落到下窗选点链路。
+                    if (handleBottomAreaDblClick(clickX, clickY, area)) return;
                     const klines = getVisibleKlines();
                     if (!klines.length) { return; }
                     const priceRange = getPriceRange(klines);
@@ -4526,6 +4772,7 @@
             if (activeBtn) activeBtn.classList.add('active');
             // 市场量能按钮可用性（仅上证指数日K）
             updateAmoButtonState();
+            updateMarginButtonState();
         }
 
         window.switchFreq = function(freq) {
@@ -6608,7 +6855,6 @@
             var biIdxCb = document.querySelector('#bsp-filter-dialog input[name="show-bi-idx"]');
             if (biIdxCb) biIdxCb.checked = showBiIdx;
             initCoordSystemRadio();
-            initVolDisplayModeRadio();
             document.getElementById("bsp-filter-dialog").classList.add("show");
             document.getElementById("bsp-filter-overlay").classList.add("show");
         };
@@ -6640,28 +6886,9 @@
             render();
         };
 
-        // 成交额/量显示模式（柱状图 / 类MACD）：即时生效，无需重开页面或重连。
-        // 刻意**不用内联 onchange** —— 内联处理器必须挂到 window.*，而 window API 面
-        // 已冻结（Test/test_phase6_guards.py ③ 逐名比对冻结基线），故改挂 addEventListener。
-        function onVolDisplayModeRadioChange(ev) {
-            var el = ev && ev.target ? ev.target : ev;
-            if (!el || !el.value) return;
-            _volDisplayMode = (el.value === 'macd') ? 'macd' : 'bar';
-            saveOverlaySettings();
-            render();
-        }
-
-        // 打开抽屉时调用：同步选中态 + 首次挂监听（data-bound 幂等，重复打开不叠加）
-        function initVolDisplayModeRadio() {
-            var radios = document.querySelectorAll('#bsp-filter-dialog input[name="vol-display-mode"]');
-            for (var i = 0; i < radios.length; i++) {
-                radios[i].checked = (radios[i].value === _volDisplayMode);
-                if (!radios[i].getAttribute('data-bound')) {
-                    radios[i].setAttribute('data-bound', '1');
-                    radios[i].addEventListener('change', onVolDisplayModeRadioChange);
-                }
-            }
-        }
+        // 成交额/量显示模式的入口已收敛到 vol 槽绘图窗双击（setVolDisplayMode /
+        // handleBottomAreaDblClick）：抽屉里不再放任何该模式的条目，免得同一状态
+        // 出现两个写入口，也不在抽屉里留静态文案。
 
         window.bspFilterSelectAll = function() {
             var cbs = document.querySelectorAll('#bsp-filter-dialog input[name="bsp-filter"]');
@@ -8441,6 +8668,8 @@
             if (panel.classList.contains("show")) {
                 closeAmoPanel();
             } else {
+                // 与「两融余额」互斥：两个面板共用同一浮层位置
+                closeMarginPanel();
                 panel.classList.add("show");
                 loadAmoData();
             }
@@ -8633,6 +8862,199 @@
             ctx.textAlign = "left";
         }
 
+
+
+// ══════════════════════════════════════════════════════════════════
+        // [COMPONENT] MarginPanel —— 两融余额面板（右上角「两融余额」按钮）
+        // 数据源：eltdx F10「大盘两融日序列汇总」，按 N001 日期把沪深北三市
+        // N005（融资 + 融券余额，元）分行求和 → 全 A 股合计，对外换算为亿元。
+        // 与「市场量能」面板互斥（共用同一浮层位置，打开一个即关闭另一个）。
+        // 仅上证指数(sh000001)日K图可用，其它周期/标的按钮灰化（与 AmoPanel 同口径）。
+// ══════════════════════════════════════════════════════════════════
+
+        function marginIsAvailable() {
+            // 与「市场量能」共用同一可用性判据：两融余额面板只在指数日K页提供。
+            // 直接调 AmoPanel 的函数（单一 SSOT），避免两个按钮条件日后各自漂移。
+            return amoIsAvailable();
+        }
+
+        function updateMarginButtonState() {
+            var btn = document.getElementById("btn-margin");
+            if (!btn) return;
+            var available = marginIsAvailable();
+            btn.disabled = !available;
+            btn.title = available ? "两融余额（全A股沪深北三市）" : "两融余额（仅上证指数日K可用）";
+            // 面板打开时若变为不可用（切股票/切周期）→ 关闭面板释放数据
+            if (!available) {
+                var panel = document.getElementById("margin-panel");
+                if (panel && panel.classList.contains("show")) {
+                    closeMarginPanel();
+                }
+            }
+        }
+
+        window.toggleMarginPanel = function() {
+            if (!marginIsAvailable()) return;
+            var panel = document.getElementById("margin-panel");
+            if (panel.classList.contains("show")) {
+                closeMarginPanel();
+            } else {
+                // 与「市场量能」互斥：两个面板共用同一浮层位置
+                closeAmoPanel();
+                panel.classList.add("show");
+                loadMarginData();
+            }
+        };
+
+        window.closeMarginPanel = function() {
+            var panel = document.getElementById("margin-panel");
+            if (panel) panel.classList.remove("show");
+            // 关闭面板即释放数据（无持久化）
+        };
+
+        // 打开面板后点击面板之外区域 → 自动关闭面板并释放数据
+        document.addEventListener("mousedown", function(e) {
+            var panel = document.getElementById("margin-panel");
+            if (!panel || !panel.classList.contains("show")) return;
+            // 点击面板内部 或「两融余额」按钮本身（避免与按钮 toggle 抢）→ 不关闭
+            if (panel.contains(e.target)) return;
+            var btn = document.getElementById("btn-margin");
+            if (btn && btn.contains(e.target)) return;
+            closeMarginPanel();
+        });
+
+        function loadMarginData() {
+            // 视口日期区间与市场量能同源（getViewportDateRange）
+            var range = getViewportDateRange();
+            if (!range) return;
+            fetch("/api/margin/read?start_date=" + encodeURIComponent(range.startDate)
+                + "&end_date=" + encodeURIComponent(range.endDate))
+                .then(function(resp) {
+                    if (!resp.ok) return resp.json().then(function(e) { throw new Error(e.detail || e.error || "查询失败"); });
+                    return resp.json();
+                })
+                .then(function(data) {
+                    renderMarginChart(data);
+                })
+                .catch(function(err) {
+                    var empty = document.getElementById("margin-empty");
+                    var canvas = document.getElementById("margin-chart");
+                    if (empty) { empty.style.display = "block"; empty.textContent = "加载失败: " + err.message; }
+                    if (canvas) { var ctx = canvas.getContext("2d"); ctx.clearRect(0, 0, canvas.width, canvas.height); }
+                });
+        }
+
+        function renderMarginChart(data) {
+            var canvas = document.getElementById("margin-chart");
+            var empty = document.getElementById("margin-empty");
+            if (!canvas) return;
+            var ctx = canvas.getContext("2d");
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            var dates = data.dates || [];
+            var balances = data.balances || [];
+            var stats = data.stats || {};
+
+            // 统计栏（与市场量能同版式：峰值 / 当前 / 缩至峰值）
+            document.getElementById("margin-current").textContent = fmtAmt(stats.current);
+            document.getElementById("margin-peak").textContent = fmtAmt(stats.peak);
+            var shrinkEl = document.getElementById("margin-shrink");
+            if (stats.peak_ratio != null) {
+                shrinkEl.textContent = stats.peak_ratio + "%";
+                shrinkEl.classList.add("shrink");
+                shrinkEl.classList.toggle("warn", stats.peak_ratio <= 50);
+            } else {
+                shrinkEl.textContent = "--";
+                shrinkEl.classList.remove("shrink", "warn");
+            }
+
+            if (!dates.length) {
+                if (empty) { empty.style.display = "block"; empty.textContent = "当前视口区间无两融余额数据"; }
+                return;
+            }
+            if (empty) empty.style.display = "none";
+
+            var W = canvas.width, H = canvas.height;
+            var padL = 8, padR = 8, padT = 12, padB = 24;
+            var plotW = W - padL - padR;
+            var plotH = H - padT - padB;
+            var maxA = Math.max.apply(null, balances);
+            var minA = Math.min.apply(null, balances);
+            if (maxA === minA) maxA = minA + 1;
+            var range = maxA - minA;
+            var padRange = range * 0.1;
+            var yMax = maxA + padRange;
+            var yMin = Math.max(0, minA - padRange);
+            var yRange = (yMax - yMin) || 1;
+
+            function x(i) { return padL + (dates.length === 1 ? plotW / 2 : (i / (dates.length - 1)) * plotW); }
+            function y(v) { return padT + (1 - (v - yMin) / yRange) * plotH; }
+
+            // 网格线
+            ctx.strokeStyle = "rgba(15,52,96,0.4)";
+            ctx.lineWidth = 1;
+            for (var g = 0; g <= 4; g++) {
+                var gy = padT + (g / 4) * plotH;
+                ctx.beginPath();
+                ctx.moveTo(padL, gy);
+                ctx.lineTo(W - padR, gy);
+                ctx.stroke();
+            }
+
+            // 面积填充
+            ctx.beginPath();
+            ctx.moveTo(x(0), y(balances[0]));
+            for (var i = 1; i < balances.length; i++) ctx.lineTo(x(i), y(balances[i]));
+            ctx.lineTo(x(balances.length - 1), padT + plotH);
+            ctx.lineTo(x(0), padT + plotH);
+            ctx.closePath();
+            var grad = ctx.createLinearGradient(0, padT, 0, padT + plotH);
+            grad.addColorStop(0, "rgba(233,69,96,0.35)");
+            grad.addColorStop(1, "rgba(233,69,96,0.02)");
+            ctx.fillStyle = grad;
+            ctx.fill();
+
+            // 曲线
+            ctx.beginPath();
+            ctx.moveTo(x(0), y(balances[0]));
+            for (var j = 1; j < balances.length; j++) ctx.lineTo(x(j), y(balances[j]));
+            ctx.strokeStyle = "#e94560";
+            ctx.lineWidth = 1.6;
+            ctx.stroke();
+
+            // 峰值点标记（金色圆点 + 数值）
+            var peakIdx = 0;
+            for (var p = 1; p < balances.length; p++) if (balances[p] > balances[peakIdx]) peakIdx = p;
+            ctx.beginPath();
+            ctx.arc(x(peakIdx), y(balances[peakIdx]), 3.5, 0, Math.PI * 2);
+            ctx.fillStyle = "#ffd700";
+            ctx.fill();
+            ctx.strokeStyle = "#fff";
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            ctx.fillStyle = "#ffd700";
+            ctx.font = "12px sans-serif";
+            ctx.fillText("峰值 " + fmtAmt(balances[peakIdx]), x(peakIdx) + 6, y(balances[peakIdx]) - 6);
+
+            // 当前点标记（最右，青色圆点）
+            var lastIdx = balances.length - 1;
+            ctx.beginPath();
+            ctx.arc(x(lastIdx), y(balances[lastIdx]), 3, 0, Math.PI * 2);
+            ctx.fillStyle = "#64ffda";
+            ctx.fill();
+
+            // 日期轴（首/中/尾）：与市场量能同源的 fmtAxisDate
+            ctx.fillStyle = "#8892b0";
+            ctx.font = "12px sans-serif";
+            var midIdx = Math.floor((dates.length - 1) / 2);
+            ctx.textAlign = "left";
+            ctx.fillText(fmtAxisDate(dates[0]), padL, H - 8);
+            ctx.textAlign = "center";
+            ctx.fillText(fmtAxisDate(dates[midIdx]), x(midIdx), H - 8);
+            ctx.textAlign = "right";
+            ctx.fillText(fmtAxisDate(dates[lastIdx]), W - padR, H - 8);
+            ctx.textAlign = "left";
+        }
 
 
 // ══════════════════════════════════════════════════════════════════

@@ -15,11 +15,11 @@
      · 边界：首根恒 50；down == 0 → 100/0；全平 → 末根 0；样本 < period
      · 预览 bar 继承：_inherit_metrics_for_preview_bar 把 rsi 一并继承
      · SSE 侧 _apply_rsi_full 定义 1 处、两条快照路径都调用
-  ③ chip 命中与双击拦截（源码契约）
+  ③ chip 命中与双击分派（源码契约）
      · getBottomSlotChipRect(i) / hitBottomSlotChip(x, y) 是纯函数且被 click 消费
-     · 双击指标区**只做命中拦截**（两块 dblclick 都在底带分支 return，不落到底下的
-       「双击空白 → 恢复全视图」）
-     · 双击切换已废除（无 _showVolume = !_showVolume）；chip 按 BOTTOM_ORDER 循环
+     · 双击底带统一走 handleBottomAreaDblClick：vol 槽绘图窗内切显示模式，
+       其余位置仍只做命中拦截（不落到底下的「双击空白 → 恢复全视图」）
+     · 双击不切槽位（无 _showVolume = !_showVolume）；chip 按 BOTTOM_ORDER 循环
      · 单击处理器用 click.detail > 1 忽略双击的第二次点击（不得连切两位）
   ④ 翻转视图一致性（node 抽 rsiToY 真执行 + 源码反锚点）
      · rsiToY(v) 翻转前后之和 ≡ 2×area.y + area.h —— 对**任意**值域成立（不再只对 [0,100]）
@@ -440,28 +440,33 @@ def test_chip_and_dblclick():
         chip.splitlines()[0].strip())
 
     cyc = fn_src(js, "cycleBottomSlot")
-    rec("③", "cycleBottomSlot 按 BOTTOM_ORDER 循环（macd → rsi → vol → macd）",
+    rec("③", "cycleBottomSlot 按 BOTTOM_ORDER 循环并跳过不可用指标",
         "BOTTOM_ORDER.indexOf(_slotAt(i)) + 1" in cyc
-        and "BOTTOM_ORDER.length" in cyc and "saveOverlaySettings()" in cyc, "")
-    rec("③", "BOTTOM_ORDER 恰为 ['vol','macd','rsi']",
-        "const BOTTOM_ORDER = ['vol', 'macd', 'rsi'];" in js, "")
+        and "BOTTOM_ORDER.length" in cyc and "saveOverlaySettings()" in cyc
+        and "_bottomIndicatorEnabled(next)" in cyc, "")
+    rec("③", "BOTTOM_ORDER 恰为 ['vol','macd','rsi','margin']",
+        "const BOTTOM_ORDER = ['vol', 'macd', 'rsi', 'margin'];" in js, "")
 
-    rec("③", "双击切换已废除：无 _showVolume / _subShowVolume 的翻转赋值",
+    rec("③", "双击不切槽位：无 _showVolume / _subShowVolume 的翻转赋值",
         "_showVolume = !_showVolume" not in js
         and "_subShowVolume = !_subShowVolume" not in js
         and "_showVolume" not in js and "_subShowVolume" not in js, "")
-    rec("③", "双击指标区只做命中拦截（单窗 + 双窗下窗各一处，各含 return）",
-        js.count("const bottomTop = getBottomSlotLabelArea(0).y;") == 2
-        and js.count("const bottomBottom = getBottomAreaBottomY();") == 2
-        and js.count("                    clickY >= bottomTop && clickY <= bottomBottom) {\n"
-                     "                    return;") == 1
-        and js.count("                        clickY >= bottomTop && clickY <= bottomBottom) {\n"
-                     "                        return;") == 1,
-        "bottomTop=%d bottomBottom=%d" % (
+    rec("③", "双击底带统一走 handleBottomAreaDblClick 分派（单窗 + 双窗下窗各一处）",
+        js.count("const bottomTop = getBottomSlotLabelArea(0).y;") == 1
+        and js.count("const bottomBottom = getBottomAreaBottomY();") == 1
+        and js.count("if (handleBottomAreaDblClick(clickX, clickY, area)) return;") == 2,
+        "bottomTop=%d bottomBottom=%d dbl=%d" % (
             js.count("const bottomTop = getBottomSlotLabelArea(0).y;"),
-            js.count("const bottomBottom = getBottomAreaBottomY();")))
+            js.count("const bottomBottom = getBottomAreaBottomY();"),
+            js.count("if (handleBottomAreaDblClick(clickX, clickY, area)) return;")))
+    rec("③", "分派函数只认 vol 槽绘图窗（chip / 标签行 / 其它指标槽都不切）",
+        "function handleBottomAreaDblClick(clickX, clickY, area) {" in js
+        and "getBottomSlotPlotArea(i)" in fn_src(js, "handleBottomAreaDblClick")
+        and "_slotAt(i) !== 'vol'" in fn_src(js, "handleBottomAreaDblClick")
+        and "hitBottomSlotChip" not in fn_src(js, "handleBottomAreaDblClick"),
+        "")
 
-    # dblclick 处理器里不得再出现切换调用
+    # dblclick 处理器里不得再出现切槽位调用（v4 的显示模式切换走共用分派函数）
     bad_dbl = []
     for m in re.finditer(r'\.addEventListener\("dblclick", function\(e\) \{', js):
         b = js.index("{", m.end() - 1)

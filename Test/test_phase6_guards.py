@@ -111,6 +111,8 @@ WINDOW_ALLOWED_NEW = {"ChanApp", "stockTpslFromMenu", "stockTpslCancel",
 WINDOW_INLINE_BRIDGES = {
     "closeStatsPanel", "onAutoOrderToggle", "toggleAutoOrderLedger",
     "closeBacktestPanel",
+    # 两融余额面板（app.html 内联 onclick）
+    "toggleMarginPanel", "closeMarginPanel",
     #   onCodeInputFocus     <- app.html  onfocus="onCodeInputFocus()"
     #     2026-10-20：输入框聚焦不再清空已有代码（原先是聚焦即先 clearInput()，
     #     导致 CFFEX.IF2409 只能整串重打、没法只改末两位）。聚焦链路上的
