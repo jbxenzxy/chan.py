@@ -20,6 +20,8 @@
      · 双击底带统一走 handleBottomAreaDblClick：vol 槽绘图窗内切显示模式，
        其余位置仍只做命中拦截（不落到底下的「双击空白 → 恢复全视图」）
      · 双击不切槽位（无 _showVolume = !_showVolume）；chip 按 BOTTOM_ORDER 循环
+     · P2：存储值在当前图不可用时，chip 仍按 3 项循环，但只写会话态显示覆盖，
+       _bottomSlots / _subBottomSlots 深比较不变、saveOverlaySettings 0 次（node 抽真函数跑）
      · 单击处理器用 click.detail > 1 忽略双击的第二次点击（不得连切两位）
   ④ 翻转视图一致性（node 抽 rsiToY 真执行 + 源码反锚点）
      · rsiToY(v) 翻转前后之和 ≡ 2×area.y + area.h —— 对**任意**值域成立（不再只对 [0,100]）
@@ -423,6 +425,120 @@ def test_rsi_numeric():
 
 
 # ══════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════
+# ③ P2 行为探针（node 抽 app.js 真函数体，只桩可用性开关 / 落盘 / 重绘）
+# ══════════════════════════════════════════════════════════════════
+SLOT_FALLBACK_PROBE_JS = r"""
+var BOTTOM_ORDER = ['vol', 'macd', 'rsi', 'margin'];
+var BOTTOM_INDICATORS = {vol:{}, macd:{}, rsi:{}, margin:{}};
+var _bottomSlots = ['margin', 'rsi'];
+var _subBottomSlots = ['margin'];
+var _slotFallbackOverrides = {};
+var chartData = {klines: []};
+var dualSubData = null;
+var saved = 0;
+var available = true;
+var _marginRetryCount = 0;
+var _marginRetryTimer = null;
+var window = {_isRenderingBottom: false};
+function marginIndicatorAvailable() { return available; }
+function saveOverlaySettings() { saved += 1; }
+function _ensureMarginSeries() {}
+function render() {}
+function renderBottom() {}
+%FUNCS%
+function snapshot() {
+    return {slots: _bottomSlots.slice(), sub: _subBottomSlots.slice(),
+            shown: _slotAt(0), saved: saved};
+}
+var out = {};
+// 场景 1：指数日K（margin 可用）→ 正常写配置 + 落盘
+available = true;
+cycleBottomSlot(0);
+out.available = snapshot();
+// 场景 2：个股图（margin 不可用）→ 只改显示，配置不变、不落盘
+_bottomSlots = ['margin', 'rsi'];
+_slotFallbackOverrides = {};
+saved = 0;
+available = false;
+out.disabledBefore = snapshot();
+cycleBottomSlot(0);
+out.disabled1 = snapshot();
+// 场景 3：连点 3 次 → 仍是 3 项循环，配置始终不变
+var seq = [];
+for (var i = 0; i < 3; i++) { cycleBottomSlot(0); seq.push(_slotAt(0)); }
+out.seq = seq;
+out.disabled4 = snapshot();
+// 场景 4：切回指数日K → 存储值自动恢复，覆盖失效
+available = true;
+out.restored = snapshot();
+// 场景 5：双窗下窗独立（key = 'sub:0'），不碰上窗配置
+available = false;
+dualSubData = {klines: []};
+chartData = dualSubData;
+_subBottomSlots = ['margin'];
+_slotFallbackOverrides = {};
+saved = 0;
+cycleBottomSlot(0);
+out.sub = snapshot();
+console.log(JSON.stringify(out));
+"""
+
+
+def _run_slot_fallback_probe(js):
+    """P2：不可用图上点 chip 不污染配置，且显示值仍按 3 项循环。"""
+    node = shutil.which("node")
+    if not node:
+        rec("③", "P2 node 真跑可用", False, "node 不在位")
+        return
+    names = ["_bottomIndicatorEnabled", "_bottomSlotList", "_slotOverrideKey",
+             "_slotAt", "_setSlotAt", "cycleBottomSlot"]
+    bodies = []
+    for n in names:
+        b = fn_src(js, n)
+        if b is None:
+            rec("③", "P2 抽到真函数 " + n, False, "fn_src 返回 None")
+            return
+        bodies.append(b)
+    code = SLOT_FALLBACK_PROBE_JS.replace("%FUNCS%", "\n".join(bodies))
+    tmp = tempfile.mkdtemp(prefix="slot_fallback_")
+    try:
+        jf = os.path.join(tmp, "probe.js")
+        with open(jf, "w", encoding="utf-8") as f:
+            f.write(code)
+        proc = subprocess.run([node, jf], capture_output=True, text=True, timeout=60)
+        if proc.returncode != 0:
+            rec("③", "P2 node 真跑成功", False, "rc=%d %s" % (proc.returncode, proc.stderr[-300:]))
+            return
+        d = json.loads(proc.stdout.strip().splitlines()[-1])
+    except Exception as e:
+        rec("③", "P2 node 真跑成功", False, repr(e))
+        return
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    rec("③", "P2 可用图：chip 仍写配置并落盘（正常路径零回归）",
+        d["available"]["slots"] == ["vol", "rsi"] and d["available"]["saved"] == 1,
+        str(d["available"]))
+    rec("③", "P2 不可用图：点 chip 后 _bottomSlots 深比较不变、saveOverlaySettings 0 次",
+        d["disabled1"]["slots"] == ["margin", "rsi"] and d["disabled1"]["saved"] == 0,
+        str(d["disabled1"]))
+    rec("③", "P2 不可用图：chip 仍有响应（显示值 macd → rsi，不是早退无反应）",
+        d["disabledBefore"]["shown"] == "macd" and d["disabled1"]["shown"] == "rsi",
+        "%s → %s" % (d["disabledBefore"]["shown"], d["disabled1"]["shown"]))
+    rec("③", "P2 不可用图：连点 3 次仍是原来的 3 项循环 vol→macd→rsi，配置始终不变",
+        d["seq"] == ["vol", "macd", "rsi"]
+        and d["disabled4"]["slots"] == ["margin", "rsi"]
+        and d["disabled4"]["saved"] == 0,
+        "seq=%s slots=%s saved=%s" % (d["seq"], d["disabled4"]["slots"], d["disabled4"]["saved"]))
+    rec("③", "P2 切回指数日K：会话态覆盖自动失效，两融余额槽原样恢复",
+        d["restored"]["shown"] == "margin" and d["restored"]["slots"] == ["margin", "rsi"],
+        str(d["restored"]))
+    rec("③", "P2 双窗下窗：独立覆盖，_subBottomSlots 与 _bottomSlots 都不被污染",
+        d["sub"]["sub"] == ["margin"] and d["sub"]["slots"] == ["margin", "rsi"]
+        and d["sub"]["saved"] == 0 and d["sub"]["shown"] == "rsi",
+        str(d["sub"]))
+
 # ③ chip 命中与双击拦截（源码契约）
 # ══════════════════════════════════════════════════════════════════
 def test_chip_and_dblclick():
@@ -446,6 +562,16 @@ def test_chip_and_dblclick():
         and "_bottomIndicatorEnabled(next)" in cyc, "")
     rec("③", "BOTTOM_ORDER 恰为 ['vol','macd','rsi','margin']",
         "const BOTTOM_ORDER = ['vol', 'macd', 'rsi', 'margin'];" in js, "")
+
+    # ── P2：显示回落值与持久化配置解耦（静态契约 + node 真跑） ──
+    rec("③", "不可用时只写会话态覆盖：cycleBottomSlot 用 canPersist 分流落盘",
+        "const canPersist = _bottomIndicatorEnabled(stored);" in cyc
+        and "_slotFallbackOverrides[_slotOverrideKey(i)] = next;" in cyc
+        and "if (canPersist) {" in cyc, "")
+    rec("③", "_slotAt 只读会话态覆盖、不写配置（回落值不再回写）",
+        "_slotFallbackOverrides[_slotOverrideKey(i)]" in fn_src(js, "_slotAt")
+        and "_setSlotAt" not in fn_src(js, "_slotAt"), "")
+    _run_slot_fallback_probe(js)
 
     rec("③", "双击不切槽位：无 _showVolume / _subShowVolume 的翻转赋值",
         "_showVolume = !_showVolume" not in js

@@ -244,7 +244,7 @@ COMPONENTS = [
      [sys.executable, os.path.join("Test", "test_app_margin.py")]),
     ("margin_panel_guard",
      [sys.executable, os.path.join("Test", "test_margin_panel.py")]),
-    # 两融余额类MACD 指标（静态契约 + node 数值对齐 + canvas 真渲染 / 翻转视图）
+    # 两融余额类MACD 指标（静态契约 + node 数值对齐 + canvas 真渲染 + 真浏览器柱子上屏）
     ("margin_macd_indicator",
      [sys.executable, os.path.join("Test", "test_margin_macd_indicator.py")]),
     ("stocks_dual_algo",
@@ -402,7 +402,8 @@ COMPONENTS = [
      [sys.executable, os.path.join("Test", "test_vol_macd_mode.py")]),
     # 底部指标区「单窗双槽位 + RSI」（2026-10-09）：槽位几何不变式（双窗零回归 /
     # 四段铺满 / 每槽高与槽数无关）+ RSI 两份**后端**实现逐点对齐 + chip 单击循环与
-    # 双击绘图窗切显示模式、其余仍拦截（不落到底下的"恢复全视图"）+ 翻转视图下 rsiToY 的镜像 / 不动点 /
+    # 双击绘图窗切显示模式、其余仍拦截（不落到底下的"恢复全视图"）+ 不可用图 chip 仍 3 项循环但不落盘
+    # + 翻转视图下 rsiToY 的镜像 / 不动点 /
     # 70·30 互换，以及「纵轴中间档恒 50（不是 MACD 的零线 0）」。
     ("bottom_slots",
      [sys.executable, os.path.join("Test", "test_bottom_slots.py")]),

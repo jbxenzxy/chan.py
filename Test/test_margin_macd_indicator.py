@@ -22,6 +22,10 @@
      drawMarginMacdAxis / drawMarginSlotLabel，**正常与翻转两个视角各跑一遍**，
      验证柱的位置与颜色对调、白橙线与零线仍在、纵轴 top/bot 文本互换、
      标签行 BAR 颜色对调；再喂脏数据，证明坏值不上屏、不抛异常。
+  ⑤ 真浏览器绘制覆盖（无头 Chrome，浏览器不在位降级 SKIP）：起本地静态服务 +
+     桩 /api/health / analyze / /api/margin/read → 点 chip 循环到「两融余额」→
+     断言请求发出、标签行 DIF/DEA/BAR 带亿元、底部区红/青 MACD 柱真上屏。
+  另：① 里「失败只取一次」的旧契约已改为「失败计数 + 指数退避重试（上限 3 次）」。
 
 运行：python Test/test_margin_macd_indicator.py       （run_all 组件）
 """
@@ -144,7 +148,8 @@ def test_static():
     cyc = _extract_fn(js, "cycleBottomSlot") or ""
     check("_bottomIndicatorEnabled(id)" in slot and "_bottomIndicatorEnabled(next)" in cyc
           and "return id !== 'margin' || marginIndicatorAvailable();" in js,
-          "① 槽位回落 + chip 循环跳过不可用指标（其它图表仍是原来的 3 项）")
+          "① 槽位回落 + chip 循环跳过不可用指标（3 项循环的真行为由"
+          " test_bottom_slots 的 node 探针验收）")
 
     ensure = _extract_fn(js, "_ensureMarginSeries") or ""
     check("/api/margin/read?start_date=" in ensure
@@ -152,8 +157,19 @@ def test_static():
           and "encodeURIComponent(_MARGIN_FULL_END)" in ensure
           and api.count('@router.get("/api/margin/read")') == 1,
           "① 复用既有 /api/margin/read 取全历史，未新增 REST 路由、未改后端")
-    check("_marginFetching = true;" in ensure and "if (_marginMacdByDate || _marginFetching) return;" in ensure,
-          "① 全历史只取一次（防每帧重连），失败只取一次")
+    check("_marginFetching = true;" in ensure
+          and "if (_marginMacdByDate || _marginFetching || _marginRetryTimer) return;" in ensure,
+          "① 全历史只取一次（防每帧重连）；失败不再用空对象冒充已取到")
+    check("_marginMacdByDate = null;" in ensure
+          and "_marginMacdByDate = {}" not in ensure
+          and "_MARGIN_MAX_RETRIES" in ensure
+          and "_MARGIN_RETRY_BASE_MS * Math.pow(2, _marginRetryCount - 1)" in ensure
+          and "_marginRetryCount >= _MARGIN_MAX_RETRIES" in ensure,
+          "① 失败计数 + 指数退避重试（上限 3 次，间隔 2/4/8s），耗尽后不每帧重连")
+    check("_marginRetryCount = 0;" in ensure and "buildMarginMacdByDate(data);" in ensure,
+          "① 成功后重置重试计数（下一次失败重新享有完整退避窗口）")
+    check("_marginRetryCount = 0;" in (_extract_fn(js, "cycleBottomSlot") or ""),
+          "① 重新选到两融余额槽会重置计数（手动重试入口可达）")
     check("calcMarginMacdMap(data.klines, _marginMacdByDate)" in js,
           "① 渲染层按全序列做日期对齐（绘制 / 标签 / 纵轴 / 读数同源）")
     check("window.margin" not in js and "window.toggleMarginMacd" not in js,
@@ -423,12 +439,207 @@ def test_node_real_run():
         check(not bad, "④ 脏数据不上屏（无 NaN / undefined / Infinity）", str(bad[:4]))
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# ⑤ 真浏览器绘制覆盖（无头 Chrome：chip 循环到两融余额 → 柱子上屏）
+# ═══════════════════════════════════════════════════════════════════════
+MARGIN_RECT_RECORDER_JS = r"""
+window.__marginTexts = [];
+window.__marginRects = [];
+window.EventSource = function () {
+  this.readyState = 0; this.url = ''; this.close = function () {};
+  this.addEventListener = function () {}; this.removeEventListener = function () {};
+  this.dispatchEvent = function () { return false; };
+};
+(function () {
+  var orig = HTMLCanvasElement.prototype.getContext;
+  HTMLCanvasElement.prototype.getContext = function (type) {
+    var ctx = orig.apply(this, arguments);
+    if (type === '2d' && ctx && !ctx.__marginWrapped) {
+      ctx.__marginWrapped = true;
+      var of = ctx.fillText, or = ctx.fillRect;
+      ctx.fillText = function (t, x, y) {
+        try { window.__marginTexts.push(String(t)); } catch (e) {}
+        return of.apply(this, arguments);
+      };
+      ctx.fillRect = function (x, y, w, h) {
+        try { window.__marginRects.push([x, y, w, h, String(this.fillStyle)]); } catch (e) {}
+        return or.apply(this, arguments);
+      };
+    }
+    return ctx;
+  };
+})();
+"""
+
+
+def test_real_browser_margin_slot():
+    print("\n⑤ 真浏览器绘制覆盖（chip 循环到两融余额 → 柱子上屏）")
+    if TEST_DIR not in sys.path:
+        sys.path.insert(0, TEST_DIR)
+    try:
+        from test_vol_macd_mode import find_playwright, _launch_browser
+    except Exception as e:
+        print("  [SKIP] 无法复用浏览器启动器：%s" % e)
+        return
+    pl, why = find_playwright()
+    if pl is None:
+        print("  [SKIP] %s（静态 / node / canvas 层已覆盖）" % why)
+        return
+    from playwright.sync_api import sync_playwright
+
+    snap_path = os.path.join(TEST_DIR, "snapshots", "stock_d_full.json")
+    if not check(os.path.isfile(snap_path), "⑤ 股票快照存在", snap_path):
+        return
+    served = json.loads(open(snap_path, encoding="utf-8").read())
+    # 只改喂给页面的副本：两融指标与面板共用「上证指数日K」判据
+    served["meta"]["symbol"] = "sh000001"
+    served["meta"]["freq"] = "日线"
+    served["meta"]["is_index"] = True
+    dates = [k["date"] for k in served["klines"]]
+    balances = [15000.0 + 800.0 * math.sin(i / 6.0) + i * 3.0
+                for i in range(len(dates))]
+    margin_payload = json.dumps({
+        "dates": dates, "balances": balances,
+        "stats": {"peak": None, "current": None, "peak_ratio": None}})
+    served_text = json.dumps(served)
+    margin_hits = []
+
+    import functools
+    import http.server
+    import threading
+
+    class _Quiet(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+    httpd = http.server.ThreadingHTTPServer(
+        ("127.0.0.1", 0),
+        functools.partial(_Quiet, directory=os.path.join(REPO_ROOT, "Frontend")))
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    port = httpd.server_address[1]
+
+    js = read(APP_JS)
+    m_pad = re.search(r"const PADDING = \{ top: (\d+), right: (\d+), bottom: (\d+), left: (\d+) \};", js)
+    m_vol = re.search(r"const VOL_RATIO = ([\d.]+), GAP = (\d+);", js)
+    m_gap = re.search(r"const rightGap = (\d+);", js)
+    up = re.search(r'macdUp:\s*"([^"]+)"', js)
+    down = re.search(r'macdDown:\s*"([^"]+)"', js)
+    if not all([m_pad, m_vol, m_gap, up, down]):
+        check(False, "⑤ 布局常量与柱色可从源码解析（测试与实现同源）", "")
+        httpd.shutdown()
+        return
+    top, right, bottom, left = [int(x) for x in m_pad.groups()]
+    vol_base, gap = float(m_vol.group(1)), int(m_vol.group(2))
+    right_gap = int(m_gap.group(1))
+    colors = (up.group(1), down.group(1))
+
+    with sync_playwright() as pw:
+        browser, which, notes = _launch_browser(pw)
+        if browser is None:
+            print("  [SKIP] 无可用无头浏览器：" + " / ".join(notes[:3]))
+            httpd.shutdown()
+            return
+        print("  （无头浏览器：%s）" % which)
+        page = browser.new_page(viewport={"width": 1600, "height": 900})
+        page.add_init_script(MARGIN_RECT_RECORDER_JS)
+
+        def route_api(route):
+            url = route.request.url
+            if "/api/margin/read" in url:
+                margin_hits.append(url)
+                body = margin_payload
+            elif "/api/health" in url:
+                body = json.dumps({"config": {"view_count": 233}})
+            elif "analyze" in url:
+                body = served_text
+            else:
+                body = "{}"
+            route.fulfill(status=200, content_type="application/json", body=body)
+
+        page.route("**/api/**", route_api)
+        page.goto("http://127.0.0.1:%d/app.html" % port, wait_until="load")
+        page.wait_for_function(
+            "() => { const s = window.ChanApp && window.ChanApp.state;"
+            " return !!(s && s.chartData && s.chartData.klines && s.chartData.klines.length > 0); }",
+            timeout=20000)
+        page.wait_for_timeout(300)
+        page.evaluate("""() => {
+            const s = window.ChanApp.state;
+            s.currentFreq = 'd';
+            s.chartData.meta.symbol = 'sh000001';
+            s._bottomSlots = ['macd', 'rsi'];
+        }""")
+
+        box = page.locator("#chart-container canvas").first.bounding_box()
+        if not check(box is not None and box["width"] > 200,
+                     "⑤ 首屏 canvas 已渲染", str(box)):
+            page.unroute_all(behavior="ignore")
+            browser.close()
+            httpd.shutdown()
+            return
+        W, H = box["width"], box["height"]
+        netH = H - top - bottom - gap
+        b_top = top + netH * (1 - vol_base * 2)
+        area_w = W - left - right - right_gap
+        chip_x = box["x"] + left + area_w - 6
+        chip_y = box["y"] + b_top + 7
+
+        # chip 两次：macd → rsi → margin（可用图上不再跳过 margin）
+        page.mouse.click(chip_x, chip_y)
+        page.wait_for_timeout(200)
+        page.mouse.click(chip_x, chip_y)
+        page.wait_for_timeout(500)
+        slots = page.evaluate("() => window.ChanApp.state._bottomSlots")
+        check(list(slots)[0] == "margin",
+              "⑤ chip 循环到两融余额（macd → rsi → margin）", str(slots))
+        check(len(margin_hits) >= 1,
+              "⑤ /api/margin/read 被真请求（不是只改了状态没取数）", str(len(margin_hits)))
+        store = page.evaluate(
+            "() => JSON.parse(localStorage.getItem('chan_overlay_settings') || '{}')")
+        check(list(store.get("bottomSlots") or [])[:1] == ["margin"],
+              "⑤ 槽位配置正常落盘 bottomSlots", str(store.get("bottomSlots")))
+
+        # 清记录 → 鼠标移出画布触发一次干净重绘（避免 hover 标签与重复文字）
+        page.evaluate("() => { window.__marginTexts = []; window.__marginRects = []; }")
+        page.mouse.move(box["x"] + W / 2, box["y"] + H + 60)
+        page.wait_for_timeout(350)
+        texts = page.evaluate("() => window.__marginTexts.slice()")
+        rects = page.evaluate("() => window.__marginRects.slice()")
+        # Canvas 的 fillStyle getter 会把颜色串归一化（rgba(255,60,60,0.6) →
+        # rgba(255, 60, 60, 0.6)），与源码字面逐字比会假红 ⇒ 比对前去掉空白。
+        norm = lambda c: c.replace(" ", "")
+        palette = tuple(norm(c) for c in colors)
+        bars = [r for r in rects if r[1] > b_top and norm(r[4]) in palette]
+
+        check("两融余额" in texts,
+              "⑤ 标签行 chip 写出「两融余额」", repr(texts[-20:]))
+        dif = [t for t in texts if t.startswith("DIF:")]
+        dea = [t for t in texts if t.startswith("DEA:")]
+        bar = [t for t in texts if t.startswith("BAR:")]
+        check(bool(dif) and bool(dea) and bool(bar)
+              and all(("亿" in t) for t in (dif[0], dea[0], bar[0])),
+              "⑤ 标签行 DIF / DEA / BAR 真取到两融 MACD 值（单位亿元）",
+              repr([dif[:1], dea[:1], bar[:1]]))
+        check(len(bars) > 5,
+              "⑤ 底部区真有两融 MACD 柱上屏（COLORS.macdUp / macdDown 的 fillRect）",
+              "bars=%d rects=%d b_top=%.1f palette=%s observed=%s"
+              % (len(bars), len(rects), b_top, palette,
+                 sorted({r[4] for r in rects})[:14]))
+        check(len({r[4] for r in bars}) >= 2,
+              "⑤ 波形余额产生正负两色柱（不是全零值空图）",
+              str({r[4] for r in bars}))
+
+        page.unroute_all(behavior="ignore")
+        browser.close()
+    httpd.shutdown()
+
 def main():
     print("=" * 72)
     print("两融余额类MACD 指标：静态契约 + node 数值对齐 + canvas 真渲染（含翻转）")
     print("=" * 72)
     test_static()
     test_node_real_run()
+    test_real_browser_margin_slot()
     print("\n" + "=" * 72)
     if _FAILURES:
         print(f"合计 {len(_FAILURES)} 项失败：")

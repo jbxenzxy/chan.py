@@ -48,6 +48,12 @@
 
         let _subBottomSlots = ['macd'];       // 双窗口下窗（独立，不与上窗联动）
 
+        // 会话态显示覆盖：某槽存储值在当前图表不可用（个股图上的两融余额）时，
+        // chip 点出来的显示值只存在这里，不写回 _bottomSlots / _subBottomSlots，
+        // 也不落盘。key = 'main'|'sub' + 槽序；存储值一旦重新可用即自动失效，
+        // 切回上证指数日K 原配置原样恢复。
+        let _slotFallbackOverrides = {};
+
         // 成交额/量的显示模式：'bar'=柱状图（默认，与既有行为一致）；
         // 'macd'=类MACD（把成交额/量代入传统 MACD(12,26,9)，替代收盘价）。
         // 由「成交额/量」槽绘图窗内的双击切换；只作用于「选中了 vol 的那个槽」，
@@ -1217,6 +1223,11 @@
             return (chartData && chartData === dualSubData) ? _subBottomSlots : _bottomSlots;
         }
 
+        // 会话态覆盖的键：单窗/双窗上窗 与 双窗下窗 各存一份，互不串味。
+        function _slotOverrideKey(i) {
+            return ((chartData && chartData === dualSubData) ? 'sub:' : 'main:') + i;
+        }
+
         // 第 i 槽当前选中的指标 id；越界 / 数组被清空时回落到 'macd'，
         // 避免"标签行空了、指标窗没内容"的空状态（槽数本身由窗口模式决定，不随内容变）。
         function _slotAt(i) {
@@ -1224,7 +1235,11 @@
             const id = (list && BOTTOM_INDICATORS[list[i]]) ? list[i] : 'macd';
             // 槽位里存着 margin 但当前图表不可用时，本槽回落 MACD（配置不改写，
             // 切回指数日K 自动恢复），不出现「选了指标却空白」的空状态。
-            return _bottomIndicatorEnabled(id) ? id : 'macd';
+            if (_bottomIndicatorEnabled(id)) return id;
+            // 存储值不可用：优先用本会话 chip 点出来的显示值，其次回落 MACD。
+            // 两者都只影响显示，不改写共享配置，也不落盘。
+            const ov = _slotFallbackOverrides[_slotOverrideKey(i)];
+            return (ov && BOTTOM_INDICATORS[ov] && _bottomIndicatorEnabled(ov)) ? ov : 'macd';
         }
 
         function _setSlotAt(i, id) {
@@ -1242,13 +1257,27 @@
 
         // chip 点击：该槽在 BOTTOM_ORDER 内往后跳一位（macd → rsi → vol → macd）
         function cycleBottomSlot(i) {
+            const list = _bottomSlotList();
+            const stored = (list && BOTTOM_INDICATORS[list[i]]) ? list[i] : 'macd';
+            // 存储值在当前图表不可用（如个股图上的 margin）：显示值仍按 3 项循环，
+            // 但只写会话态覆盖，绝不把回落值写回共享配置、也不落盘。
+            const canPersist = _bottomIndicatorEnabled(stored);
             let next = BOTTOM_ORDER[(BOTTOM_ORDER.indexOf(_slotAt(i)) + 1) % BOTTOM_ORDER.length];
             // 两融余额仅指数日K可用：不可用时顺延一项，其它图表上 chip 仍是原来的 3 项循环
             if (!_bottomIndicatorEnabled(next)) {
                 next = BOTTOM_ORDER[(BOTTOM_ORDER.indexOf(next) + 1) % BOTTOM_ORDER.length];
             }
-            _setSlotAt(i, next);
-            saveOverlaySettings();
+            if (canPersist) {
+                _setSlotAt(i, next);
+                saveOverlaySettings();
+            } else {
+                _slotFallbackOverrides[_slotOverrideKey(i)] = next;
+            }
+            // 重新选到两融余额 = 手动重试入口：退避计数已耗尽时也能再取一次。
+            if (next === 'margin' && _marginRetryCount > 0) {
+                _marginRetryCount = 0;
+                if (_marginRetryTimer) { clearTimeout(_marginRetryTimer); _marginRetryTimer = null; }
+            }
             _ensureMarginSeries();
             if (window._isRenderingBottom) renderBottom(); else render();
         }
@@ -1472,6 +1501,12 @@
         let _marginMacdMap = null;      // Map<K线对象, {dif, dea, macd}>
         let _marginFetching = false;
         let _marginLoadError = "";
+        // 失败重试：不用空对象当「已尝试」标记，改计数上限 + 指数退避（2s/4s/8s），
+        // 三次耗尽后停止；重新切到两融余额槽会重置计数，作为手动重试入口。
+        const _MARGIN_MAX_RETRIES = 3;
+        const _MARGIN_RETRY_BASE_MS = 2000;
+        let _marginRetryCount = 0;
+        let _marginRetryTimer = null;
 
         // REST 载荷 → 按交易日算好的 MACD 查表（日期统一为连字符，与 K 线
         // k.date.slice(0,10) 对齐）。同一天重复行只保留最后一条；坏值只丢该行。
@@ -1546,10 +1581,12 @@
         }
 
         // 全历史一次取足（eltdx 本就单次返回全历史），EMA 从序列起点预热，
-        // 当前视口内不会出现「前 26 根种子未收敛」的伪值。失败只取一次，不每帧重试。
+        // 当前视口内不会出现「前 26 根种子未收敛」的伪值。成功只取一次；
+        // 失败保留 null 并安排退避重试（上限 3 次），不再把空对象当已尝试标记。
         function _ensureMarginSeries() {
             if (!_hasBottomSlot('margin') || !marginIndicatorAvailable()) return;
-            if (_marginMacdByDate || _marginFetching) return;
+            if (_marginMacdByDate || _marginFetching || _marginRetryTimer) return;
+            if (_marginRetryCount >= _MARGIN_MAX_RETRIES) return;
             _marginFetching = true;
             fetch("/api/margin/read?start_date=" + encodeURIComponent(_MARGIN_FULL_START)
                 + "&end_date=" + encodeURIComponent(_MARGIN_FULL_END))
@@ -1560,11 +1597,21 @@
                 .then(function(data) {
                     _marginMacdByDate = buildMarginMacdByDate(data);
                     _marginLoadError = "";
+                    _marginRetryCount = 0;
+                    if (_marginRetryTimer) { clearTimeout(_marginRetryTimer); _marginRetryTimer = null; }
                     render();
                 })
                 .catch(function(err) {
                     _marginLoadError = "两融余额数据加载失败";
-                    _marginMacdByDate = {};   // 已尝试：避免每帧重试
+                    _marginMacdByDate = null;   // 不冒充「已取到」，交给退避重试
+                    if (_marginRetryCount < _MARGIN_MAX_RETRIES) {
+                        _marginRetryCount += 1;
+                        const delay = _MARGIN_RETRY_BASE_MS * Math.pow(2, _marginRetryCount - 1);
+                        _marginRetryTimer = setTimeout(function() {
+                            _marginRetryTimer = null;
+                            _ensureMarginSeries();
+                        }, delay);
+                    }
                     render();
                 })
                 .finally(function() { _marginFetching = false; });
