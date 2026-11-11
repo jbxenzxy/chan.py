@@ -96,7 +96,7 @@ def _extract_fn(src, name):
     return None
 
 
-_NODE_ERR_RE = re.compile(r"^[A-Za-z]*(?:Error|Exception):")
+_NODE_ERR_RE = re.compile(r"^\[?[A-Za-z]*(?:Error|Exception):")
 
 
 def _node_err_hint(proc):
@@ -106,7 +106,10 @@ def _node_err_hint(proc):
     末行是 node 版本号 —— 不能只取首行（v4.4 复核 §7.3 曾误判「消息在第 2 行」，
     v4.5 复核 §8.3 按 E6 原始 stderr 全文勘误），也不能取尾部（只剩栈与版本号）。
     扫描用行首锚定正则、不用 "Error" 子串 —— 否则出错源码行会被误当消息行
-    （§8.2，E6 实证："function f() { throw new Error(..." 被误命中）。"""
+    （§8.2，E6 实证："function f() { throw new Error(..." 被误命中）。
+    v4.6 复核 §8.2（E12）：正则行首加可选 "[" —— 方括号包裹的 "[Error: …]"
+    （util.inspect 形态）也能命中；兜底退回源码行时加「(未识别形态) 」前缀
+    （§8.3），读日志一眼可辨。"""
     lines = [ln.strip() for ln in (proc.stderr or "").strip().splitlines() if ln.strip()]
     if not lines:
         return "(stderr 为空)"
@@ -117,7 +120,7 @@ def _node_err_hint(proc):
             msg = ln[:400]
             break
     if not msg and len(lines) > 1:
-        msg = lines[1][:400]
+        msg = "(未识别形态) " + lines[1][:380]
     return "%s | %s" % (head, msg)
 
 
@@ -200,8 +203,10 @@ def test_static():
           "① 失败不冒充已取到 + 上限守卫在位（请求次数 / 退避间隔 / 空转定时器由 ⑥ 行为探针验收）")
     # v4.5 复核 §8.1：成功归零的字面串半边退役（E7 实证：等价改写 "-= _marginRetryCount"
     # 行为无差却误判红），成功归零由 ⑥ 场景 B 行为断言独立承担 —— 保留真契约半边：
+    # v4.6 复核 §8.1（E11 实证）：字面串在场 ≠ 分支归属，恒假分支下 ① 仍绿 ——
+    # 文案改「成功分支调用」，分支语义由 ⑤/⑥ 行为验收。
     check("buildMarginMacdByDate(data);" in ensure,
-          "① 成功后才建立 MACD 映射（重试计数归零由 ⑥ 行为探针验收）")
+          "① 成功分支调用 buildMarginMacdByDate（分支语义由 ⑤/⑥ 行为验收）")
     # v4.4 复核 §7.1：reset 行为语义由 ⑥b E/F/G 三场景独立承担，此字面串断言退役 ——
     # 等价改写（如 "_marginRetryCount -= _marginRetryCount;"）会令它误判红而行为无差。
     check("calcMarginMacdMap(data.klines, _marginMacdByDate)" in js,
