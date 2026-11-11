@@ -704,13 +704,17 @@ def test_datasource_import_gate(failures):
     if sse_mods != {"DataAPI.TqSdkCSSESource", "DataAPI.TqSdkAPI"}:
         bad.append(f"App/AppSSE.py 的 DataAPI import 应仅为 TqSdkCSSESource/TqSdkAPI，实测: {sorted(sse_mods)}")
     # AppRefresh：TdxAPI.refresh_block_files（block 刷新）+ collect_codes_from_vipdoc（vipdoc 代码收集）
-    #           + AkshareAPI 指数归属 + TxAPI 港股名称 + SinaAPI A股名称
-    #   注：A 股个股 PE-TTM（ElTdxAPI）已随「PE-TTM 不属于刷新功能」迁至
-    #   AppEngine 装配点（_fetch_pe_ttm_live 注入 AppData）。
+    #           + AkshareAPI 指数归属兜底 + TxAPI 港股名称 + SinaAPI A股名称
+    #           + ElTdxAPI 指数成分股主源（2026-11-11：指数归属主源切到 7615 F10
+    #             index_members —— csindex 的 OSS xls 单请求无中间粒度、超时
+    #             (10,60) 不可控，实测同一 URL 连打 8 次有 3 次超 16s；eltdx 分页
+    #             可重试且有 total 可校验。AKShare 保留为兜底，两者并存非双源）。
+    #   注：A 股个股 PE-TTM（ElTdxAPI）仍走「PE-TTM 不属于刷新功能」那条线，
+    #   在 AppEngine 装配点注入（见上条），与本条无关。
     refresh_mods = set(_datasource_imports(os.path.join("App", "AppRefresh.py")))
-    if refresh_mods != {"DataAPI.TdxAPI", "DataAPI.AkshareAPI",
+    if refresh_mods != {"DataAPI.TdxAPI", "DataAPI.AkshareAPI", "DataAPI.ElTdxAPI",
                         "DataAPI.TxAPI", "DataAPI.SinaAPI"}:
-        bad.append(f"App/AppRefresh.py 的 DataAPI import 应仅为 TdxAPI/AkshareAPI/TxAPI/SinaAPI，实测: {sorted(refresh_mods)}")
+        bad.append(f"App/AppRefresh.py 的 DataAPI import 应仅为 TdxAPI/AkshareAPI/ElTdxAPI/TxAPI/SinaAPI，实测: {sorted(refresh_mods)}")
     # AppScan：TdxAPI.get_index_stocks（板块成分读取）+ ElTdxAPI 流通市值（A股）
     scan_mods = set(_datasource_imports(os.path.join("App", "AppScan.py")))
     if scan_mods != {"DataAPI.TdxAPI", "DataAPI.ElTdxAPI"}:

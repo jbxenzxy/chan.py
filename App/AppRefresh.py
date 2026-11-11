@@ -8,8 +8,8 @@ App/AppRefresh.py —— 刷新功能域
   - 股票名称刷新（refresh_stock_names / refresh_stock_names_async / refresh_status）
   - 名称 / 指数归属 缓存读写（AppData 直连）
   - 刷新实现（_refresh_stock_names / _refresh_index_belong /
-      _fetch_index_belong_from_akshare / _collect_codes_from_vipdoc /
-      _fetch_names_from_sina_once 等）
+      _fetch_index_belong_from_sources / _fetch_one_index_belong /
+      _collect_codes_from_vipdoc / _fetch_names_from_sina_once 等）
 
 依赖方向：AppRefresh.py → AppConfig / AppData / DataAPI（单向）
 """
@@ -22,8 +22,10 @@ import traceback
 from App.AppConfig import app_config
 from App.AppData import app_data
 from App.AppLog import get_logger
+from App.AppUtils import _infer_bare_code_market
 from DataAPI.TdxAPI import collect_codes_from_vipdoc, refresh_block_files
 from DataAPI.AkshareAPI import AKSHARE_EXCHANGE_MAP, AKSHARE_INDEX_MAP, fetch_index_cons
+from DataAPI.ElTdxAPI import fetch_index_members
 from DataAPI.TxAPI import fetch_hk_names
 from DataAPI.SinaAPI import fetch_a_names
 
@@ -186,54 +188,107 @@ def _fetch_names_from_sina_once(codes_dict):
     return filled
 
 
-def _fetch_index_belong_from_akshare(timeout=30):
-    """
-    通过 AKShare index_stock_cons_csindex 接口在线获取沪深300/中证500/中证1000 最新成分股，
-    构建 stock→指数归属 反向映射。返回 {market+code: "沪深300"|"中证500"|"中证1000"}。
-    如果 AKShare 不可用或网络异常，返回空字典。每个指数单独设置超时。
-    （归属缓存由 app_data 持有，经 replace_index_belong 同对象替换）
-    """
-    def _fetch_one(_idx_code, _idx_name):
-        try:
-            _set_refresh_status(step=f"刷新指数归属: {_idx_name}...")
-            log.info(f"[指数归属] 开始获取 {_idx_name}({_idx_code})...")
-            items = fetch_index_cons(_idx_code)
-            count = 0
-            for item in items:
-                mkt = item["market"]
-                if mkt:
-                    result[mkt + item["code"]] = _idx_name
-                    count += 1
-            log.info(f"[指数归属] ✅ {_idx_name}({_idx_code}): 成功获取 {count}只 成分股")
-        except Exception as e:
-            log.info(f"[指数归属] {_idx_name}({_idx_code}) 获取失败: {e}")
+# ── 指数归属取数策略（2026-11-11 重构）────────────────────────────────
+# 主源 eltdx 7615 F10（index_members），兜底 AKShare csindex。为什么不是
+# 「AKShare 主源」：csindex 是 OSS 上一个 xls 静态文件，单请求拿全但**没有
+# 中间粒度** —— 实测同一 URL 连打 8 次耗时 1.75~>20s（3 次超 16s），而
+# akshare 默认超时 (10, 60)（akshare/utils/context.py:10），一次抖动整条
+# 指数全丢；eltdx 走 100 条/页 JSON 分页，单页可重试、超时可控、返回 total
+# 可校验截断。代价是正常态更慢（000852 要 10 页 ≈3.5s），故 4 个指数**并发**
+# 拉取并共用一份整体预算。
+# 「期望条数」是第二道闸：接口返回 0 或截断时按失败处理、保留旧值，
+# 不再像改造前那样打一条「✅ 成功获取 0只」然后照样落盘。
+_INDEX_BELONG_EXPECTED = {"000300": 300, "000905": 500, "000852": 1000, "000688": 50}
+# 4 个指数并发后的**整体**预算（不是每个指数各一份）
+_INDEX_BELONG_BUDGET = 30.0
 
-    import concurrent.futures
-    result = {}
+
+def _index_belong_items(index_code):
+    """单指数取数：eltdx 主源 → AKShare 兜底。返回 (items, source 名)。
+
+    主源**返回空**也走兜底：空结果对 4 个固定指数而言必然是故障（不是真的
+    没有成分股），换源再试一次比直接判失败划算。
+    """
+    try:
+        items = fetch_index_members(index_code)
+        if items:
+            return items, "eltdx"
+        log.warning(f"[指数归属] eltdx 取 {index_code} 返回空，改用 AKShare 兜底")
+    except Exception as e:              # noqa: BLE001 —— 主源任何失败都走兜底
+        log.warning(f"[指数归属] eltdx 取 {index_code} 失败，改用 AKShare 兜底: {e}")
+    return fetch_index_cons(index_code), "akshare"   # 内部已把异常吞成 []
+
+
+def _fetch_one_index_belong(index_code, index_name, box):
+    """单指数取数线程体：**只写自己的 box**，不碰任何共享结构。
+
+    「不碰共享结构」是本轮重构的关键：改造前 4 个线程往同一个 result 字典写，
+    超时后线程仍在跑（Python 杀不掉线程），下一轮刷新就会被上一轮的迟到写入
+    污染 —— 日志里同指数出现两条「✅」、且其中一条是「0只」即由此而来。
+    """
+    try:
+        items, source = _index_belong_items(index_code)
+    except Exception as e:              # noqa: BLE001
+        box["error"] = f"{type(e).__name__}: {e}"
+        return
+    mapping = {}
+    for item in items:
+        mkt = (item.get("market") or "").strip()
+        if not mkt:
+            # AKShare 的「交易所中文名」未命中映射时按代码首位兜底，
+            # 不再静默丢弃该票（旧实现 `if mkt:` 直接跳过）
+            mkt = _infer_bare_code_market(item.get("code", "")) or ""
+        if mkt:
+            mapping[mkt + item["code"]] = index_name
+    expected = _INDEX_BELONG_EXPECTED.get(index_code)
+    if expected is not None and len(mapping) != expected:
+        box["error"] = f"{source} 返回 {len(mapping)} 只，期望 {expected} 只"
+        return
+    box["mapping"] = mapping
+    box["source"] = source
+
+
+def _fetch_index_belong_from_sources(timeout=None):
+    """并发取 4 个指数归属，返回 (accepted, failed)。
+
+    accepted: {指数名: {market+code: 指数名}} —— 本次取到**且条数校验通过**的
+    failed:   {指数名: 失败原因}
+
+    预算 timeout 是**整体**预算（不是每指数一份）。改造前 4 个指数串行、每个
+    30s，最坏 120s；更关键的是外层 30s < akshare 内层 60s，超过 30s 的响应
+    必被丢弃，请求线程却继续跑到 60s 才失败 —— 每点一次刷新就多几条滞留线程。
+    线程一律 daemon：超预算即放弃等待，遗留线程不阻塞进程退出，也不写共享结构。
+    """
+    budget = _INDEX_BELONG_BUDGET if timeout is None else timeout
+    deadline = time.monotonic() + budget
+    boxes = {name: {} for name in AKSHARE_INDEX_MAP.values()}
+    threads = []
     for index_code, index_name in AKSHARE_INDEX_MAP.items():
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        try:
-            future = executor.submit(_fetch_one, index_code, index_name)
-            try:
-                future.result(timeout=timeout)
-            except concurrent.futures.TimeoutError:
-                log.info(f"[指数归属] {index_name}({index_code}) 获取超时({timeout}s)，跳过")
-        finally:
-            executor.shutdown(wait=False)  # 不等待卡住的线程，直接进入下一个指数
+        t = threading.Thread(target=_fetch_one_index_belong,
+                             args=(index_code, index_name, boxes[index_name]),
+                             name=f"index-belong-{index_code}", daemon=True)
+        t.start()
+        threads.append((index_name, index_code, t))
 
-    if result:
-        app_data.replace_index_belong(result)
-    else:
-        # 空结果不替换：replace_index_belong 是 clear()+update() **整体替换**，
-        # 网络全挂时用它会把内存里已有的指数归属一并清空（改造前即如此，随后
-        # 还会把空表落盘）。指数归属季度才变，保留旧值远优于清空。
-        log.info("[指数归属] 本次未获取到任何指数归属，保留内存中的既有数据")
-    return result
+    accepted, failed = {}, {}
+    for index_name, index_code, t in threads:
+        t.join(max(0.05, deadline - time.monotonic()))
+        box = boxes[index_name]
+        mapping = box.get("mapping")
+        if mapping:
+            accepted[index_name] = mapping
+            log.info(f"[指数归属] ✅ {index_name}({index_code}): {len(mapping)} 只"
+                     f"（{box.get('source')}）")
+        else:
+            reason = box.get("error") or f"超过总预算 {budget:.0f}s"
+            failed[index_name] = reason
+            log.warning(f"[指数归属] ❌ {index_name}({index_code}): {reason}")
+    return accepted, failed
 
 
 def _refresh_index_belong():
     """
-    刷新指数归属（AKShare 在线获取），落盘 stock_index_belong.json。
+    刷新指数归属（eltdx 主源 / AKShare 兜底），落盘 stock_index_belong.json。
 
     历史说明：本函数原为 _refresh_pe_ttm，同时刷新 PE-TTM 与指数归属并**合并**
     写入 stock_pettm_index.json。PE-TTM 每日随行情变动、指数归属季度调仓才变，
@@ -243,15 +298,48 @@ def _refresh_index_belong():
 
     落盘走 AppData.save_index_belong_cache()（原子写 + 过滤旧格式纯数字 key +
     空表保护），不再由本模块手工拼装合并字典。
+
+    ⚠ 缓存按**指数**合并（app_data.merge_index_belong），不再整体替换：整体
+    替换在单个指数抓取失败时会把它名下全部票的归属一并抹掉并落盘固化。
     """
     _set_refresh_status(step="刷新指数归属...")
     load_index_belong_cache()   # 先加载已有缓存（含新旧文件名一次性迁移）
     log.info("[指数归属] ========== 开始刷新指数归属 ==========")
     try:
-        _fetch_index_belong_from_akshare()
+        accepted, failed = _fetch_index_belong_from_sources()
     except Exception as e:
         log.info(f"[指数归属] 获取失败: {e}")
         _set_refresh_status(error=f"指数归属获取失败: {e}")
+        return
+
+    if accepted:
+        app_data.merge_index_belong(accepted)
+    summary = f"本次更新 {len(accepted)}/{len(AKSHARE_INDEX_MAP)} 个指数"
+    # 单值归属的已知上限：缓存每只票只存**一个**指数名（stock_index_belong.json
+    # 的值是字符串），同时属多个指数的票按 AKSHARE_INDEX_MAP 顺序**后写覆盖**
+    # —— 实测 沪深300∩科创50=20、中证500∩科创50=23，故 4 个指数全部成功时
+    # 沪深300 仍只有 280 条、中证500 只有 477 条。这不是取数失败，是存储格式
+    # 只支持单值；此处显式报出来，免得被误判成"又没刷上"。要支持多归属需把
+    # json 的值改成数组并同步前端展示（未在本轮范围内）。
+    if len(accepted) > 1:
+        _owner, _dup = {}, 0
+        for _name, _mapping in accepted.items():
+            for _key in _mapping:
+                if _key in _owner:
+                    _dup += 1
+                _owner[_key] = _name
+        if _dup:
+            log.warning(f"[指数归属] {_dup} 只同时属多个指数，单值归属只保留最后一个"
+                        f"（如 沪深300 与 科创50 重叠的科创板票记作科创50）")
+    if failed:
+        summary += "，失败: " + "；".join(f"{k}({v})" for k, v in failed.items())
+        log.warning(f"[指数归属] {summary}")
+    else:
+        log.info(f"[指数归属] {summary}")
+    if not accepted:
+        # 全部失败：保留内存/文件中的旧值（指数归属季度才变，旧值远优于清空），
+        # 但必须把失败显式挂到刷新状态上 —— 改造前这里是静默的「✅ 0只」。
+        _set_refresh_status(error=f"指数归属全部失败: {summary}")
         return
 
     snap = app_data.belong_snapshot()

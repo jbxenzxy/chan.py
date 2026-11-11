@@ -392,6 +392,11 @@ COMPONENTS = [
     # 全程打桩，**不联网**。
     ("pe_ttm_live",
      [sys.executable, os.path.join("Test", "test_pe_ttm_live.py")]),
+    # 指数归属取数路径（2026-11-11）：主源切到 eltdx 7615 F10 index_members，
+    #   AKShare 留作兜底；锁「主源不碰兜底 / 兜底可达 / 0只与截断算失败 /
+    #   整体预算生效 / 按指数合并不抹别的指数 / 无整体替换」六条。全程打桩。
+    ("index_belong_sources",
+     [sys.executable, os.path.join("Test", "test_index_belong_sources.py")]),
     ("sina_name_pairing",
      [sys.executable, os.path.join("Test", "test_sina_name_pairing.py")]),
     # 成交额/量「类MACD」显示模式（2026-09-18）：入口为绘图窗双击（抽屉条目全删）

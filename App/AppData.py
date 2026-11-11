@@ -1366,6 +1366,30 @@ class AppData:
             self._belong.update(result)
             self._belong_loaded = True
 
+    def merge_index_belong(self, per_index):
+        """按**指数**合并指数归属（刷新侧逐指数成功时调用）。
+
+        per_index: {指数名: {market+code: 指数名}}，只含本次取到**且条数校验
+        通过**的指数。语义是**按指数替换**：出现的指数其旧成员整体换新
+        （调仓后剔除的票必须能被移除），未出现的指数保持内存中的原值。
+
+        为什么不用 replace_index_belong（整体替换）：指数归属按指数分别抓取，
+        任一指数超时/被截断就会让它名下所有票的归属一起消失，而刷新侧紧接着
+        落盘 → 一次坏刷新把该指数的归属永久抹掉（2026-11-11 实测：
+        中证500 全部 500 只被清空、沪深300 只剩 280 只）。指数归属季度才
+        调仓，保留旧值远优于清空。
+
+        合并顺序 = per_index 的插入顺序（调用方按 AKSHARE_INDEX_MAP 顺序传入），
+        与整体替换时的「后写覆盖」语义一致（同一只票只存一个归属）。
+        """
+        with self._meta_cache_lock:
+            merged = {k: v for k, v in self._belong.items() if v not in per_index}
+            for mapping in per_index.values():
+                merged.update(mapping)
+            self._belong.clear()
+            self._belong.update(merged)
+            self._belong_loaded = True
+
     # ════════════════════════════════════════════════════════════════
     # 流通市值缓存（腾讯接口成功时的内存态 + 本地 JSON 兜底）
     # ════════════════════════════════════════════════════════════════

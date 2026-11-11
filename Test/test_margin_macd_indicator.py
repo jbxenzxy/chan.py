@@ -218,7 +218,7 @@ def test_static():
           "① 数值单位随两融余额（亿元），非成交额/量的万/亿/手")
 
     check("margin_macd_indicator" in read(RUN_ALL)
-          and "191 个组件" in read(RUN_ALL_TESTS),
+          and "192 个组件" in read(RUN_ALL_TESTS),
           "① 门禁注册 + 发现式 docstring 组件数同步")
 
 

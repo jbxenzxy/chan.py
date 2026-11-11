@@ -9,7 +9,9 @@ eltdx 数据源适配器（通达信网络行情客户端封装）。
      全市场统计文件）；
   3. 流通市值——0x0010 财务批量（流通股本）× 0x054c 快照（最新价）；
   4. 股东增减持计划——7615 F10/TQLEX HTTP 网关（按代码查询）；
-  5. 板块文件下载 / 刷新——0x06B9 通用文件读取。
+  5. 板块文件下载 / 刷新——0x06B9 通用文件读取；
+  6. 指数成分股——7615 F10/TQLEX HTTP 网关 index_members（Entry=
+     CWServ.skef10_zs_cfgsj_cfgjcsj），按指数分页拉全。
 PE 单位：倍；流通市值单位：亿元。「按市场 / 标的类型选源」是业务编排规则，
 收口在 App 层（App/AppEngine.py 的 _fetch_pe_ttm_live），不在 DataAPI 层。
 
@@ -1144,3 +1146,72 @@ def get_shareholder_reduction_flag(market, code, today):
         # 兼容旧字段（首个被命中窗口 = 区间截止日）—— 前端徽标默认取第一个
         "end": windows[0]["end_full"],
     }
+
+
+# ============================================================
+# 指数成分股（7615 F10 index_members）
+# ============================================================
+# 数据源：eltdx.f10.F10Client.index_members（7615 TQLEX 网关
+#   Entry=CWServ.skef10_zs_cfgsj_cfgjcsj）；服务端 100 条/页，指数越大往返
+#   越多（实测 000300=3 页 / 000905=5 页 / 000852=10 页 / 000688=1 页）。
+# 与 AKShare index_stock_cons_csindex（csindex OSS 上一个 xls、单请求拿全）
+# 的取舍：正常态本接口**更慢**（多页往返），但不依赖网页静态文件、单页可重试、
+# 且服务端返回 total 可校验是否被静默截断 —— 「有界 + 可自检」是把它当主源的
+# 理由；AppRefresh 按「eltdx 主源 → AKShare 兜底」取数。
+#   **要求 eltdx >= 3.3.2**：该版本起才有 F10Client.index_members。
+_INDEX_MEMBERS_TIMEOUT = 5.0
+_INDEX_MEMBERS_RETRIES = 1
+
+
+def _fetch_index_member_table(index_code):
+    """取单个指数的成分股表（eltdx IndexMemberTable，已自动翻页）。
+
+    走 eltdx 官方 F10Client（IPv4-first，与 _fetch_valuation_rows 同策略）。
+    取数失败抛异常，由 fetch_index_members 的重试处理。
+    """
+    from eltdx.f10 import F10Client
+    return F10Client(timeout=_INDEX_MEMBERS_TIMEOUT).index_members(index_code)
+
+
+def fetch_index_members(index_code):
+    """eltdx 7615 F10 取指数成分股 → ``[{"code": 6位, "market": "sh"/"sz"/"bj"}]``。
+
+    返回结构与 ``AkshareAPI.fetch_index_cons`` **完全一致**，调用方可无差别
+    互换。market 直接来自服务端市场标记 N004（0=sz / 1=sh / 2=bj，见
+    ``eltdx.f10.models.ID_TO_MARKET``），缺失时才按代码段推断 —— 故不需要
+    AKShare 那条「中文交易所名 → 前缀」映射。
+
+    两处自检（AKShare 那条路没有）：
+      · ``total``（服务端报告的样本数）与实收行数不一致 → 抛异常，避免分页
+        被截断时「少几十只」静默通过；
+      · 代码非 6 位数字 / 市场缺失的行直接丢弃，条数不足由调用方的期望条数
+        校验兜住。
+
+    取数失败**抛异常**（与 fetch_pe_ttm_single 同语义，不静默返回 []），
+    使调用方能区分「取数失败」与「该指数真的没有成分股」。
+    """
+    last_err = None
+    for _attempt in range(1 + _INDEX_MEMBERS_RETRIES):
+        try:
+            table = _fetch_index_member_table(index_code)
+        except Exception as e:              # noqa: BLE001 —— 失败由下方统一重试
+            last_err = e
+            continue
+        rows = list(getattr(table, "rows", ()) or ())
+        items = []
+        seen = set()
+        for row in rows:
+            code = (getattr(row, "code", None) or "").strip()
+            market = (getattr(row, "market", None) or "").strip().lower()
+            if len(code) != 6 or not code.isdigit() or code in seen:
+                continue
+            if market not in ELTDX_MARKETS:
+                continue
+            seen.add(code)
+            items.append({"code": code, "market": market})
+        total = getattr(table, "total", None)
+        if total is not None and len(items) != total:
+            raise RuntimeError(
+                f"分页不完整: 服务端 total={total}, 实收 {len(items)} 只")
+        return items
+    raise RuntimeError(f"[指数成分] {index_code} 取数失败: {last_err}")
