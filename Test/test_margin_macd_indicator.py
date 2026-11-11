@@ -96,18 +96,24 @@ def _extract_fn(src, name):
     return None
 
 
+_NODE_ERR_RE = re.compile(r"^[A-Za-z]*(?:Error|Exception):")
+
+
 def _node_err_hint(proc):
-    """node 崩溃诊断信息。实测形态（node 22）：第 1 行是位置（<anonymous_script>:40），
-    第 2 行才是错误类型与消息（ReferenceError / SyntaxError），其后是调用栈，
-    末行是 node 版本号 —— 取尾部 600 字符只剩栈与版本号，消息被切掉
-    （v4.4 复核 §7.3，E4 实测报错只剩 "node rc=1: 47:30)"）。"""
+    """node 崩溃诊断信息。实测形态（node 22，E6 全文）：第 1 行是位置（如
+    "<anonymous_script>:40"），第 2 行是出错源码，第 3 行是 ^ 指示箭头，第 4 行空，
+    第 5 行才是错误类型与消息（如 "ReferenceError: xxx is not defined"），其后是调用栈，
+    末行是 node 版本号 —— 不能只取首行（v4.4 复核 §7.3 曾误判「消息在第 2 行」，
+    v4.5 复核 §8.3 按 E6 原始 stderr 全文勘误），也不能取尾部（只剩栈与版本号）。
+    扫描用行首锚定正则、不用 "Error" 子串 —— 否则出错源码行会被误当消息行
+    （§8.2，E6 实证："function f() { throw new Error(..." 被误命中）。"""
     lines = [ln.strip() for ln in (proc.stderr or "").strip().splitlines() if ln.strip()]
     if not lines:
         return "(stderr 为空)"
     head = lines[0][:200]
     msg = ""
     for ln in lines[1:]:
-        if "Error" in ln or "错误" in ln:
+        if _NODE_ERR_RE.match(ln):
             msg = ln[:400]
             break
     if not msg and len(lines) > 1:
@@ -192,8 +198,10 @@ def test_static():
           and "_marginMacdByDate = {}" not in ensure
           and "_marginRetryCount >= _MARGIN_MAX_RETRIES" in ensure,
           "① 失败不冒充已取到 + 上限守卫在位（请求次数 / 退避间隔 / 空转定时器由 ⑥ 行为探针验收）")
-    check("_marginRetryCount = 0;" in ensure and "buildMarginMacdByDate(data);" in ensure,
-          "① 成功后重置重试计数（下一次失败重新享有完整退避窗口）")
+    # v4.5 复核 §8.1：成功归零的字面串半边退役（E7 实证：等价改写 "-= _marginRetryCount"
+    # 行为无差却误判红），成功归零由 ⑥ 场景 B 行为断言独立承担 —— 保留真契约半边：
+    check("buildMarginMacdByDate(data);" in ensure,
+          "① 成功后才建立 MACD 映射（重试计数归零由 ⑥ 行为探针验收）")
     # v4.4 复核 §7.1：reset 行为语义由 ⑥b E/F/G 三场景独立承担，此字面串断言退役 ——
     # 等价改写（如 "_marginRetryCount -= _marginRetryCount;"）会令它误判红而行为无差。
     check("calcMarginMacdMap(data.klines, _marginMacdByDate)" in js,
