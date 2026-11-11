@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-指标区「两融余额」类MACD —— 双层护栏
+指标区「两融余额」类MACD —— 双层护栏（结构 + 行为，共七层）
 =====================================================================
 被守护的功能（2026-11-10 新增）：
 
@@ -9,7 +9,7 @@
   MACD(12,26,9)，画成与「成交额/量 类MACD」同形态的红绿柱 + 白橙线。
   口径由用户拍板：仅上证指数日K可用、一次取全历史做 EMA 预热、支持翻转视图。
 
-五层守护：
+七层守护：
 
   ① 静态契约：注册表 / 循环顺序 / 五个钩子 / 单一 MACD 核心 / 单一可用性 SSOT /
      翻转视图分支 / REST 复用 / 门禁登记。
@@ -31,6 +31,8 @@
      耗尽后重选（reopen）能再发一次且新窗口退避从头开始。
   ⑥b chip 手动重试入口探针（node）：抽 cycleBottomSlot 真函数体，耗尽态重选 margin 槽 →
      计数归零、待触发定时器清空、取数被触发；未选到 margin（顺延）时不重置。
+     已知边界：harness 只注入函数体 + 显式桩，体外符号一律缺失 —— reset 逻辑必须保持
+     内联，抽成独立函数或引用体外新符号会令探针整体 ReferenceError（复核 §7.2）。
   另：① 里「失败只取一次」的旧契约已改为「失败计数 + 指数退避重试」；
      上限按请求总次数计（首发 1 + 重试 2），生效间隔 2s / 4s，耗尽后不排空转定时器。
 
@@ -92,6 +94,25 @@ def _extract_fn(src, name):
             if depth == 0:
                 return src[m.start():i + 1]
     return None
+
+
+def _node_err_hint(proc):
+    """node 崩溃诊断信息。实测形态（node 22）：第 1 行是位置（<anonymous_script>:40），
+    第 2 行才是错误类型与消息（ReferenceError / SyntaxError），其后是调用栈，
+    末行是 node 版本号 —— 取尾部 600 字符只剩栈与版本号，消息被切掉
+    （v4.4 复核 §7.3，E4 实测报错只剩 "node rc=1: 47:30)"）。"""
+    lines = [ln.strip() for ln in (proc.stderr or "").strip().splitlines() if ln.strip()]
+    if not lines:
+        return "(stderr 为空)"
+    head = lines[0][:200]
+    msg = ""
+    for ln in lines[1:]:
+        if "Error" in ln or "错误" in ln:
+            msg = ln[:400]
+            break
+    if not msg and len(lines) > 1:
+        msg = lines[1][:400]
+    return "%s | %s" % (head, msg)
 
 
 def _extract_core(src):
@@ -173,8 +194,8 @@ def test_static():
           "① 失败不冒充已取到 + 上限守卫在位（请求次数 / 退避间隔 / 空转定时器由 ⑥ 行为探针验收）")
     check("_marginRetryCount = 0;" in ensure and "buildMarginMacdByDate(data);" in ensure,
           "① 成功后重置重试计数（下一次失败重新享有完整退避窗口）")
-    check("_marginRetryCount = 0;" in (_extract_fn(js, "cycleBottomSlot") or ""),
-          "① 重新选到两融余额槽会重置计数（手动重试入口可达）")
+    # v4.4 复核 §7.1：reset 行为语义由 ⑥b E/F/G 三场景独立承担，此字面串断言退役 ——
+    # 等价改写（如 "_marginRetryCount -= _marginRetryCount;"）会令它误判红而行为无差。
     check("calcMarginMacdMap(data.klines, _marginMacdByDate)" in js,
           "① 渲染层按全序列做日期对齐（绘制 / 标签 / 纵轴 / 读数同源）")
     check("window.margin" not in js and "window.toggleMarginMacd" not in js,
@@ -309,7 +330,7 @@ def _run_node(src, payload):
             f.write(code)
         proc = subprocess.run([node, jf], capture_output=True, text=True, timeout=90)
         if proc.returncode != 0:
-            return None, f"node rc={proc.returncode}: {proc.stderr[-600:]}"
+            return None, f"node rc={proc.returncode}: {_node_err_hint(proc)}"
         return json.loads(proc.stdout.strip().splitlines()[-1]), ""
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -817,7 +838,7 @@ def _run_retry_node(src):
             f.write(code)
         proc = subprocess.run([node, jf], capture_output=True, text=True, timeout=90)
         if proc.returncode != 0:
-            return None, "node rc=%d: %s" % (proc.returncode, proc.stderr[-600:])
+            return None, "node rc=%d: %s" % (proc.returncode, _node_err_hint(proc))
         return json.loads(proc.stdout.strip().splitlines()[-1]), ""
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -867,7 +888,10 @@ def test_retry_behavior():
 # 复核 §8.1：N7（删 reset 段）只被 ① 的 "_marginRetryCount = 0;" 字面串咬住，
 # 把 reset 改成语义不同但保留字面串的实现（如条件写死成不可达）→ ① 恒绿。
 # 这里把 reset 钉成行为：耗尽态重选 margin 槽 → 计数归零、待触发定时器清空、
-# 取数被触发；未选到 margin（顺延）时不重置。与 ① 的结构断言并存。
+# 取数被触发；未选到 margin（顺延）时不重置。
+# v4.4 复核 §7.1：① 的字面串断言已退役（等价改写会误判），本段是 reset 行为唯一断言，
+# 整段删除 reset 仍被本段咬住 2 条；§7.2 已知边界：reset 必须保持内联，
+# 抽成独立函数 / 引用体外新符号会令本探针 ReferenceError。
 # ═══════════════════════════════════════════════════════════════════════
 CYCLE_HARNESS = r"""
 const BODY = %BODY%;
@@ -964,7 +988,7 @@ def _run_cycle_node(src):
             f.write(code)
         proc = subprocess.run([node, jf], capture_output=True, text=True, timeout=90)
         if proc.returncode != 0:
-            return None, "node rc=%d: %s" % (proc.returncode, proc.stderr[-600:])
+            return None, "node rc=%d: %s" % (proc.returncode, _node_err_hint(proc))
         return json.loads(proc.stdout.strip().splitlines()[-1]), ""
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -977,7 +1001,7 @@ def test_chip_manual_retry():
         return
     e, f, g = out["E"], out["F"], out["G"]
     check(e["count"] == 0,
-          "⑥ 耗尽态重选 margin 槽：重试计数归零（⑥ 行为层；① 结构断言并存）",
+          "⑥ 耗尽态重选 margin 槽：重试计数归零（reset 行为唯一断言，① 字面串已退役）",
           str(e["count"]))
     check(e["timer"] is None and e["cleared"] == 1,
           "⑥ 耗尽态重选：待触发定时器被清空", json.dumps(e, ensure_ascii=False))
