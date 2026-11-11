@@ -8602,9 +8602,15 @@
                     parts.push("<span style='color:#a8b2d1'>同花顺：失败</span>");
                     console.warn("[THS] 保存失败:", data.ths_msg);
                 }
+                // 失败原因挂 title（鼠标悬浮可见）：按钮宽度有限，只放状态；
+                // 具体原因（如「2 只失败：传入股票代码有误」）不显示出来等于没报。
+                btn.title = (data.ths_msg && data.ths_msg !== "ok"
+                             && data.ths_msg !== "THS_DIR 未配置")
+                    ? ("同花顺：" + data.ths_msg) : "";
                 btn.innerHTML = parts.join("&nbsp;&nbsp;&nbsp;");
                 setTimeout(function() {
                     btn.textContent = "保存到自选";
+                    btn.title = "";
                     btn.disabled = false;
                     btn.style.opacity = "";
                     updateScanSaveBtn();

@@ -183,6 +183,13 @@ class CThsCloudZxg:
                 log.info(f"[THS-API] ✓ {code} 添加成功")
                 existing_set.add(f"{code}:{marketid or ''}")
                 existing_codes.add(code)
+            elif "已经存在" in (resp.get("errorMsg") or ""):
+                # 本地去重靠 `code:marketid`，一旦 marketid 与服务端不一致（例如前缀式
+                # 代码被推断成默认沪市 17）就会漏判，请求打过去换来「股票已经存在」。
+                # 这不是失败，计跳过——否则用户看到「失败 N 只」却什么都没做错。
+                result["skipped"].append(code)
+                existing_codes.add(code)
+                log.info(f"[THS-API] 跳过 {code}（服务端：已存在）")
             else:
                 result["failed"].append({"code": code, "msg": resp.get("errorMsg", "未知错误")})
                 log.info(f"[THS-API] ✗ {code} 失败: {resp.get('errorMsg')}")
@@ -253,6 +260,34 @@ class CThsCloudZxg:
 # 辅助函数：从股票代码推断市场ID
 # ============================================================
 
+def _as_suffix_form(code_upper: str) -> str:
+    """把 `sz002523` / `SH600519` 这类**市场前缀式**代码转成 `002523.SZ` / `600519.SH`。
+
+    只有「前缀 + 纯数字」才转换，因此不会误伤 `SH`/`SZ` 开头的非 A 股代码；已是
+    后缀式（`002523.SZ`）或不带市场标记（`002523`）时原样返回。项目内部主键是
+    `sz002523` 这种小写前缀式，而同花顺的市场判定只认后缀分支，故先归一。
+    """
+    for pre in ("SH", "SZ", "BJ"):
+        if code_upper.startswith(pre):
+            rest = code_upper[len(pre):]
+            if rest.isdigit():
+                return rest + "." + pre
+    return code_upper
+
+
+def _is_hk_form(s: str) -> bool:
+    """`HK0020` / `K1234`（字母前缀后接纯数字）才算港股写法。
+
+    必须带数字约束：否则 `KO`（美股可口可乐）这类 K 开头的字母代码会被
+    下面「港股」分支截胡成 177，永远走不到美股判定。
+    """
+    if s.startswith("HK"):
+        return s[2:].isdigit()
+    if s.startswith("K"):
+        return s[1:].isdigit()
+    return False
+
+
 def get_market_id(code: str) -> str:
     """
     根据股票代码推断同花顺市场ID
@@ -262,13 +297,15 @@ def get_market_id(code: str) -> str:
     - 港股=177, 港股指数=176
     - 美股=169
     - 板块/概念=48
-    """
-    code_upper = code.strip().upper()
 
-    # 港股：带 .HK 后缀 或 HK+4位数字 或 K+5位数字
+    兼容三种写法：`sz002523`（项目内部主键）/ `002523.SZ`（东财式）/ `002523`。
+    """
+    code_upper = _as_suffix_form(code.strip().upper())
+
+    # 港股：带 .HK 后缀 或 HK+数字 或 K+数字
     if code_upper.endswith(".HK"):
         return "177"
-    if code_upper.startswith("HK") or code_upper.startswith("K"):
+    if _is_hk_form(code_upper):
         return "177"
     # 港股指数：HS+数字
     if code_upper.startswith("HS"):
@@ -297,8 +334,8 @@ def get_market_id(code: str) -> str:
     if not c:
         return "17"
 
-    # 港股：HK+4位数字 或 K+5位数字（港股通） 或纯5位数字
-    if c.startswith("HK") or c.startswith("K"):
+    # 港股：HK+数字 或 K+数字（港股通）
+    if _is_hk_form(c):
         return "177"
     # 港股指数：HS+数字
     if c.startswith("HS"):
@@ -325,6 +362,32 @@ def get_market_id(code: str) -> str:
     elif c.startswith("88"):
         return "48"   # 板块/概念
     return "17"
+
+
+def split_ths_code(code: str) -> tuple[str, str]:
+    """把各种写法的代码拆成同花顺接口要的 `(stockcode, marketid)`。
+
+    `stockcode` 是**裸代码**：A 股 6 位数字、港股 `HK`+4 位。同花顺
+    `modifySelfStock` 不接受带 `sh`/`sz` 前缀的代码（实测报「传入股票代码有误」），
+    也不能靠它自己识别市场——前缀会让 `get_market_id` 退化成默认沪市 17。
+
+    入参兼容：`sz002523`（项目内部主键）/ `002523.SZ` / `002523` /
+    `00020.HK` / `HK0020`。
+    """
+    marketid = get_market_id(code)
+    bare = _as_suffix_form(code.strip().upper())
+    for suf in (".SH", ".SZ", ".BJ", ".HK"):
+        if bare.endswith(suf):
+            bare = bare[:-len(suf)]
+            break
+    if marketid == "177":
+        # 港股：stockcode = HK + 4 位（去前导零后补零）。抓包确认 00020.HK → HK0020
+        if bare.startswith("HK"):
+            bare = bare[2:]
+        elif bare.startswith("K") and bare[1:].isdigit():
+            bare = bare[1:]
+        return "HK" + bare.lstrip("0").zfill(4), marketid
+    return bare, marketid
 
 
 # ============================================================
@@ -381,24 +444,20 @@ def save_scan_to_ths_cloud(
         if not api.check_login():
             return {"error": "同花顺登录态无效：已自动尝试缓存文件/浏览器/登录窗口，仍未取到可用 Cookie"}
 
-    # 处理代码格式：保留后缀给 get_market_id 识别港股，纯数字给 API 调用
+    # 代码归一化：调用方传的是项目内部主键 `sz002523`，而同花顺只认裸代码
+    # `002523`（带前缀报「传入股票代码有误」），且前缀会让 marketid 退化成
+    # 默认沪市 17（深市票会被判成沪市）。归一化统一走 split_ths_code。
     stocks = []
     for code in codes:
-        c = code.strip()
-        if not c:
+        if not code or not code.strip():
             continue
-        marketid = get_market_id(c)  # 传原始代码（带后缀），让 get_market_id 识别 .HK
-        plain = c.split(".")[0] if "." in c else c
+        stockcode, marketid = split_ths_code(code)
         if marketid == "177":
-            # 港股：stockcode = HK + 4位数字（去前导零后补零到4位）
-            # 抓包确认：00020.HK → stockcode=HK0020
-            hk_num = plain.lstrip("0").zfill(4)
-            hk_code = "HK" + hk_num
-            log.info(f"[THS-API] save_scan: {code} -> {hk_code}(港股)")
-            stocks.append((hk_code, None))
+            log.info(f"[THS-API] save_scan: {code} -> {stockcode}(港股)")
+            stocks.append((stockcode, None))
         else:
-            log.info(f"[THS-API] save_scan: {code} -> {plain}(marketid={marketid})")
-            stocks.append((plain, marketid))
+            log.info(f"[THS-API] save_scan: {code} -> {stockcode}(marketid={marketid})")
+            stocks.append((stockcode, marketid))
 
     if not stocks:
         return {"error": "无有效股票代码"}

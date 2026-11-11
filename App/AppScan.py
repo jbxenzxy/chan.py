@@ -643,10 +643,19 @@ def zxg_save(codes):
                 if "error" in cloud_result:
                     raise Exception(cloud_result["error"])
                 ths_added = len(cloud_result.get("added", []))
-                ths_msg = "ok"
+                ths_skipped = len(cloud_result.get("skipped", []))
+                ths_failed = cloud_result.get("failed") or []
+                # msg 必须反映真实结果：全失败也回 "ok" 会让按钮显示「同花顺：已保存」，
+                # 用户以为存上了而实际 0 只（2026-11-11 代码格式 bug 就是这么被掩盖的）。
+                if ths_failed:
+                    first = ths_failed[0]
+                    err = first.get("msg", "") if isinstance(first, dict) else str(first)
+                    ths_msg = f"{len(ths_failed)} 只失败：{err}"
+                else:
+                    ths_msg = "ok"
                 log.info(f"[保存] 同花顺: 新增{ths_added}, "
-                      f"跳过{len(cloud_result.get('skipped',[]))}, "
-                      f"失败{len(cloud_result.get('failed',[]))}, "
+                      f"跳过{ths_skipped}, "
+                      f"失败{len(ths_failed)}, "
                       f"Cookie来源={cloud_result.get('source', '?')}")
             except Exception as e:
                 # 消息由 DataAPI/ThsCookieSource 组装（已写明试过哪几条通道），

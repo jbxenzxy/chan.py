@@ -403,6 +403,8 @@ COMPONENTS = [
     #   原子写 / 脚本只做 CLI 与单向依赖」八条。全程打桩，不联网、不起浏览器。
     ("ths_cookie_autofetch",
      [sys.executable, os.path.join("Test", "test_ths_cookie_autofetch.py")]),
+    ("ths_code_normalize",
+     [sys.executable, os.path.join("Test", "test_ths_code_normalize.py")]),
     ("sina_name_pairing",
      [sys.executable, os.path.join("Test", "test_sina_name_pairing.py")]),
     # 成交额/量「类MACD」显示模式（2026-09-18）：入口为绘图窗双击（抽屉条目全删）
