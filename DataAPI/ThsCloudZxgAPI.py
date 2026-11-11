@@ -2,19 +2,26 @@
 同花顺云端自选股同步模块
 通过同花顺 Web API 直接增删自选股，云端实时同步，无需重启客户端。
 
-使用方法：
-  1. 浏览器打开 https://t.10jqka.com.cn 并登录同花顺账号
-  2. F12 → Network → 刷新页面 → 点击任意请求 → Request Headers → 复制 Cookie 值
-  3. 将 Cookie 写入 Script/ths_captured_cookie.txt 文件（由 Script/ths_capture_cookie.py
-     自动生成），或通过环境变量 THS_COOKIE 设置
+Cookie 从哪来：**不需要人工准备**。取数逻辑统一收在
+`DataAPI/ThsCookieSource.py`（缓存文件 → 本机已登录浏览器 → 登录窗口），
+本模块只在「拿到的 Cookie 用不了」时再向它要一次（见 `save_scan_to_ths_cloud`）。
+
+仍支持显式指定（优先级最高）：
+  · `CThsCloudZxg(cookie="...")` / `(cookie_file="...")`
+  · 环境变量 `THS_COOKIE`
 """
 
 import requests
-import json
 import time
-import re
 import os
 import logging
+from DataAPI.ThsCookieSource import (
+    ThsCookieUnavailable,
+    ensure_cookie,
+    parse_jsonp,
+    probe_cached,
+    read_cookie_file,
+)
 log = logging.getLogger(__name__)
 
 
@@ -43,41 +50,33 @@ class CThsCloudZxg:
     def __init__(self, cookie: str = None, cookie_file: str = None):
         """
         初始化 API
-        :param cookie: 同花顺登录后的完整 Cookie 字符串
-        :param cookie_file: Cookie 文件路径，默认按以下顺序查找：
-                            ① Script/ths_captured_cookie.txt（ths_capture_cookie.py 生成位置）
-                            ② 仓库根 ths_captured_cookie.txt（阶段 2 之前的历史位置，兼容回退）
-                            ③ 环境变量 THS_COOKIE
+        :param cookie: 同花顺登录后的完整 Cookie 字符串（显式指定，优先级最高）
+        :param cookie_file: 指定 Cookie 文件路径；不传时按
+                            `ThsCookieSource.candidate_cookie_files()` 的顺序查找
+                            （① Script/ths_captured_cookie.txt ② DataAPI/ ③ 仓库根），
+                            都读不到再向 `ensure_cookie()`（浏览器通道）要一次。
         """
+        self.cookie_source = "explicit"
         if cookie:
             self.cookie = cookie
         elif cookie_file and os.path.exists(cookie_file):
-            with open(cookie_file, 'r', encoding='utf-8') as f:
-                self.cookie = f.read().strip()
+            self.cookie_source = "cookie_file"
+            self.cookie = read_cookie_file(cookie_file)
         else:
-            # 按优先级查找默认位置（路径随脚本目录自动跟随 + 历史位置兼容）
-            _module_dir = os.path.dirname(os.path.abspath(__file__))
-            _repo_root = os.path.dirname(_module_dir)
-            self.cookie = ""
-            for default_path in (
-                os.path.join(_repo_root, "Script", "ths_captured_cookie.txt"),  # Script/（惯例位置）
-                os.path.join(_module_dir, "ths_captured_cookie.txt"),           # DataAPI/（本模块目录）
-                os.path.join(_repo_root, "ths_captured_cookie.txt"),            # 仓库根（阶段 2 前位置）
-            ):
-                if os.path.exists(default_path):
-                    with open(default_path, 'r', encoding='utf-8') as f:
-                        self.cookie = f.read().strip()
-                    if self.cookie:
-                        break
+            self.cookie = read_cookie_file()
+            self.cookie_source = "file"
             if not self.cookie:
-                # 尝试环境变量
-                self.cookie = os.environ.get("THS_COOKIE", "")
+                # 文件没有 → 后台读本机已登录浏览器（**不弹窗**，构造函数保持无交互）
+                try:
+                    self.cookie, self.cookie_source = ensure_cookie(allow_interactive=False)
+                except ThsCookieUnavailable as e:
+                    raise ValueError(str(e)) from e
 
         if not self.cookie:
             raise ValueError(
-                "未找到同花顺 Cookie。请运行 Script/ths_capture_cookie.py 重新获取。\n"
-                "  手动方式：运行 Script/ths_capture_cookie.py，或手工创建 Script/ths_captured_cookie.txt 写入 Cookie\n"
-                "  或设置环境变量 THS_COOKIE"
+                "未找到同花顺 Cookie，且未能从本机浏览器自动获取。\n"
+                "  解法：在浏览器打开 https://t.10jqka.com.cn 登录一次（之后本程序自动接管），"
+                "或运行 python Script/ths_capture_cookie.py 登录一次。"
             )
 
         self.headers = {
@@ -89,31 +88,16 @@ class CThsCloudZxg:
         }
 
     def _parse_jsonp(self, text: str, callback_name: str = "selfStock") -> dict:
-        """解析 JSONP 响应"""
-        if not text:
-            return {"errorCode": -1, "errorMsg": "empty response"}
-        try:
-            # 尝试直接 JSON 解析
-            if text.strip().startswith("{"):
-                return json.loads(text)
-            # JSONP 格式
-            pattern = re.compile(rf"{re.escape(callback_name)}\((.*)\);?", re.DOTALL)
-            match = pattern.search(text)
-            if match:
-                return json.loads(match.group(1))
-            # 尝试通用 JSONP 解析
-            if "(" in text and text.endswith(");"):
-                json_str = text[text.index("(") + 1 : -2]
-                return json.loads(json_str)
-        except Exception as e:
-            log.info(f"[THS-API] JSONP 解析失败: {e}")
-        return {"errorCode": -1, "errorMsg": "parse error"}
+        """解析 JSONP 响应（实现统一在 `ThsCookieSource.parse_jsonp`）。"""
+        return parse_jsonp(text, callback_name)
 
     def check_login(self) -> bool:
-        """检查登录状态"""
-        resp = self._request("get", "/newcircle/group/getSelfStockWithMarket/")
-        data = self._parse_jsonp(resp)
-        return data.get("errorCode") == 0
+        """检查登录状态（走 `probe_cached`，与 Cookie 供给层共享 2 分钟校验缓存，
+        因此「刚取到的 Cookie」不会在这里再打一次同样的请求）"""
+        ok, msg = probe_cached(self.cookie)
+        if not ok:
+            log.info(f"[THS-API] 登录态无效: {msg}")
+        return ok
 
     def get_self_stocks(self) -> list[dict]:
         """
@@ -347,6 +331,19 @@ def get_market_id(code: str) -> str:
 # 便捷函数：直接保存扫描结果到同花顺云自选
 # ============================================================
 
+def _open_api(cookie=None, cookie_file=None, force=False, allow_interactive=False):
+    """按 `ensure_cookie()` 取到**当场校验可用**的 Cookie 再构造 API。
+
+    返回 (api, 来源)；`cookie` / `cookie_file` 显式给出时不走自动获取。
+    """
+    if cookie:
+        return CThsCloudZxg(cookie=cookie), "explicit"
+    if cookie_file:
+        return CThsCloudZxg(cookie_file=cookie_file), "cookie_file"
+    value, source = ensure_cookie(force=force, allow_interactive=allow_interactive)
+    return CThsCloudZxg(cookie=value), source
+
+
 def save_scan_to_ths_cloud(
     codes: list[str],
     cookie: str = None,
@@ -356,16 +353,33 @@ def save_scan_to_ths_cloud(
     """
     将扫描结果保存到同花顺云端自选股
 
+    Cookie 自动获取（无需人工准备）：缓存文件 / 本机已登录浏览器读不到可用
+    Cookie 时，弹出一次登录窗口（`THS_AUTO_LOGIN=0` 可关闭）。
+
     :param codes: 股票代码列表，如 ["600519", "000001.SZ", "300750"]
-    :param cookie: 同花顺 Cookie
-    :param cookie_file: Cookie 文件路径
+    :param cookie: 同花顺 Cookie（显式指定，不自动刷新）
+    :param cookie_file: Cookie 文件路径（显式指定，不自动刷新）
     :param replace: True=全量替换, False=增量添加
-    :return: 操作结果
+    :return: 操作结果（含 `source`：本次 Cookie 来源）
     """
-    api = CThsCloudZxg(cookie=cookie, cookie_file=cookie_file)
+    source = "explicit" if cookie else "cookie_file"
+    if cookie or cookie_file:
+        api = CThsCloudZxg(cookie=cookie, cookie_file=cookie_file)
+    else:
+        try:
+            api, source = _open_api()
+        except ThsCookieUnavailable:
+            # 本机浏览器里没有登录态 → 弹一次登录窗口（用户此刻就在屏幕前点的按钮）
+            log.info("[THS-API] 未找到登录态，打开同花顺登录窗口等待一次登录…")
+            api, source = _open_api(force=True, allow_interactive=True)
 
     if not api.check_login():
-        return {"error": "登录状态失效，请更新 Cookie"}
+        if cookie or cookie_file:
+            return {"error": "登录状态失效（显式指定的 Cookie 不可用），请更新后重试"}
+        log.info("[THS-API] Cookie 已失效，强制重新获取…")
+        api, source = _open_api(force=True, allow_interactive=True)
+        if not api.check_login():
+            return {"error": "同花顺登录态无效：已自动尝试缓存文件/浏览器/登录窗口，仍未取到可用 Cookie"}
 
     # 处理代码格式：保留后缀给 get_market_id 识别港股，纯数字给 API 调用
     stocks = []
@@ -389,10 +403,10 @@ def save_scan_to_ths_cloud(
     if not stocks:
         return {"error": "无有效股票代码"}
 
-    if replace:
-        return api.batch_replace(stocks)
-    else:
-        return api.batch_add(stocks)
+    result = api.batch_replace(stocks) if replace else api.batch_add(stocks)
+    if isinstance(result, dict):
+        result["source"] = source
+    return result
 
 
 # ============================================================
@@ -406,6 +420,7 @@ if __name__ == "__main__":
 
     try:
         api = CThsCloudZxg()
+        log.info(f"Cookie 来源: {api.cookie_source}")
         if api.check_login():
             log.info("✅ 登录状态有效")
             stocks = api.get_self_stocks()
@@ -430,8 +445,7 @@ if __name__ == "__main__":
             log.info("❌ 登录状态失效，请检查 Cookie")
     except ValueError as e:
         log.info(f"❌ {e}")
-        log.info("\n请按以下步骤获取 Cookie：")
-        log.info("  1. 浏览器打开 https://t.10jqka.com.cn 并登录")
-        log.info("  2. F12 → Network → 刷新页面")
-        log.info("  3. 点击任意请求 → Request Headers → 复制 Cookie 值")
-        log.info("  4. 将 Cookie 保存到 Script/ths_captured_cookie.txt 文件中")
+        log.info("\nCookie 获取方式（任选其一，程序会自动接管）：")
+        log.info("  · 本机浏览器登录过 https://t.10jqka.com.cn → 后台自动读取（推荐）")
+        log.info("  · 运行 python Script/ths_capture_cookie.py → 弹出登录窗口，登录一次")
+        log.info("  · 设置环境变量 THS_COOKIE，或手工写 Script/ths_captured_cookie.txt")

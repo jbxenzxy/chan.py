@@ -8574,9 +8574,15 @@
             var btn = document.getElementById("scan-save-btn");
             btn.disabled = true;
             btn.textContent = "保存中...";
+            // 同花顺 Cookie 由后端自动获取；万一要弹登录窗口，请求会停在服务端等登录，
+            // 这里补一句说明，避免用户以为卡死（4s 内回来的请求看不到这句）。
+            var slowTimer = setTimeout(function() {
+                btn.textContent = "保存中(同花顺可能需要登录)...";
+            }, 4000);
             fetch("/api/stocks/scan/save/zxg?codes=" + encodeURIComponent(codes.join(",")), { method: "POST" })
             .then(function(r) { return r.json(); })
             .then(function(data) {
+                clearTimeout(slowTimer);
                 // 保存结果用与扫描面板汇总行一致的色：普通文字 #a8b2d1，高亮数字/状态 #ff3c3c
                 btn.style.opacity = "1";
                 var parts = [];
@@ -8605,6 +8611,7 @@
                 }, 2000);
             })
             .catch(function() {
+                clearTimeout(slowTimer);
                 btn.textContent = "保存失败";
                 btn.disabled = false;
                 btn.style.opacity = "";

@@ -54,7 +54,6 @@ sys.path.insert(0, REPO_ROOT)
 APP_JS = os.path.join(REPO_ROOT, "Frontend", "app.js")
 FRONT_API = os.path.join(REPO_ROOT, "FrontAPI.py")
 RUN_ALL = os.path.join(TEST_DIR, "run_all.py")
-RUN_ALL_TESTS = os.path.join(REPO_ROOT, "run_all_tests.py")
 
 from App.AppUtils import calculate_macd, MACD_MIN_BARS
 
@@ -217,9 +216,10 @@ def test_static():
           and "toFixed(2)" in (_extract_fn(js, "formatMarginMacdVal") or ""),
           "① 数值单位随两融余额（亿元），非成交额/量的万/亿/手")
 
-    check("margin_macd_indicator" in read(RUN_ALL)
-          and "192 个组件" in read(RUN_ALL_TESTS),
-          "① 门禁注册 + 发现式 docstring 组件数同步")
+    # 组件数同步已由 test_gate_credential_isolation ⑦ 用 len(COMPONENTS) 现算钉住，
+    # 这里不再硬编码数字（2026-11-11：加组件时它第二次变成「改代码才变绿」的假红）。
+    check("margin_macd_indicator" in read(RUN_ALL),
+          "① 门禁注册（组件数同步见 gate_credential_isolation ⑦）")
 
 
 # ═══════════════════════════════════════════════════════════════════════

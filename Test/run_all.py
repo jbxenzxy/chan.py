@@ -397,6 +397,12 @@ COMPONENTS = [
     #   整体预算生效 / 按指数合并不抹别的指数 / 无整体替换」六条。全程打桩。
     ("index_belong_sources",
      [sys.executable, os.path.join("Test", "test_index_belong_sources.py")]),
+    # 同花顺 Cookie 自动获取（2026-11-11）：保存到自选不再要人工开浏览器登录 +
+    #   跑脚本。锁「缓存有效不碰浏览器 / 失效回退浏览器并写回 / 全失败抛异常且
+    #   details 留痕 / 禁止弹窗与冷却期不弹 / 弹窗成功来源=login / 校验 TTL 缓存 /
+    #   原子写 / 脚本只做 CLI 与单向依赖」八条。全程打桩，不联网、不起浏览器。
+    ("ths_cookie_autofetch",
+     [sys.executable, os.path.join("Test", "test_ths_cookie_autofetch.py")]),
     ("sina_name_pairing",
      [sys.executable, os.path.join("Test", "test_sina_name_pairing.py")]),
     # 成交额/量「类MACD」显示模式（2026-09-18）：入口为绘图窗双击（抽屉条目全删）

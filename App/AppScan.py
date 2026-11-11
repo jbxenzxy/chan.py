@@ -646,14 +646,13 @@ def zxg_save(codes):
                 ths_msg = "ok"
                 log.info(f"[保存] 同花顺: 新增{ths_added}, "
                       f"跳过{len(cloud_result.get('skipped',[]))}, "
-                      f"失败{len(cloud_result.get('failed',[]))}")
+                      f"失败{len(cloud_result.get('failed',[]))}, "
+                      f"Cookie来源={cloud_result.get('source', '?')}")
             except Exception as e:
-                err_str = str(e)
-                if "登录状态失效" in err_str or "Cookie" in err_str:
-                    ths_msg = "Cookie过期，请运行 ths_capture_cookie.py 重新获取"
-                else:
-                    ths_msg = f"云端同步失败: {err_str}"
-                log.info(f"[保存] 同花顺: {ths_msg}")
+                # 消息由 DataAPI/ThsCookieSource 组装（已写明试过哪几条通道），
+                # 不再要求用户「去运行 ths_capture_cookie.py」—— Cookie 由程序自动取。
+                ths_msg = str(e) or type(e).__name__
+                log.info(f"[保存] 同花顺: 失败 - {ths_msg}")
         else:
             ths_msg = "DataAPI/ThsCloudZxgAPI.py 未找到，请确保 DataAPI/ 目录完整"
             log.info(f"[保存] 同花顺: {ths_msg}")
