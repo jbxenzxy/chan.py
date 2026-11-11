@@ -26,8 +26,11 @@
      桩 /api/health / analyze / /api/margin/read → 点 chip 循环到「两融余额」→
      断言请求发出、标签行 DIF/DEA/BAR 带亿元、底部区红/青 MACD 柱真上屏。
   ⑥ 失败重试行为探针（node 虚拟时钟，不依赖浏览器）：抽 _ensureMarginSeries 真函数体，
-     桩 fetch / setTimeout / clearTimeout / render，实跑「始终失败 / 第 2 次成功 / 等待期防抖」
-     三场景，断言请求次数、delay 序列、末态计数与定时器、成功后归零。
+     桩 fetch / setTimeout / clearTimeout / render，实跑「始终失败 / 第 2 次成功 / 等待期防抖 /
+     耗尽后重选再取」四场景，断言请求次数、delay 序列、末态计数与定时器、成功后归零、
+     耗尽后重选（reopen）能再发一次且新窗口退避从头开始。
+  ⑥b chip 手动重试入口探针（node）：抽 cycleBottomSlot 真函数体，耗尽态重选 margin 槽 →
+     计数归零、待触发定时器清空、取数被触发；未选到 margin（顺延）时不重置。
   另：① 里「失败只取一次」的旧契约已改为「失败计数 + 指数退避重试」；
      上限按请求总次数计（首发 1 + 重试 2），生效间隔 2s / 4s，耗尽后不排空转定时器。
 
@@ -703,6 +706,7 @@ function makeHarness(opts) {
         ${BODY}
         return {
           tick: function () { _ensureMarginSeries(); },
+          reopen: function () { _marginRetryCount = 0; _marginRetryTimer = null; },
           flush: function () { return new Promise(function (r) { setImmediate(r); }); },
           snap: function () {
             return {count: _marginRetryCount, timer: _marginRetryTimer,
@@ -760,6 +764,23 @@ function makeHarness(opts) {
                  delays: h.st.delays.map(function (d) { return d.delay; }),
                  last: h.api.snap(), pendingTimers: h.st.timers.length};
     }
+    {
+        const h = makeHarness({});
+        h.api.tick(); await h.api.flush(); await h.api.flush();
+        for (let g = 0; g < 10; g++) {
+            const due = advance(h.st, h.st.now + 20000);
+            if (!due.length) break;
+            for (const t of due) t.f();
+            await h.api.flush(); await h.api.flush();
+        }
+        const d0 = h.st.delays.length;
+        const c0 = h.st.calls.length;
+        h.api.reopen();
+        h.api.tick(); await h.api.flush(); await h.api.flush();
+        out.D = {reopenCalls: h.st.calls.length - c0,
+                 reopenDelays: h.st.delays.slice(d0).map(function (d) { return d.delay; }),
+                 last: h.api.snap(), pendingTimers: h.st.timers.length};
+    }
     console.log(JSON.stringify(out));
 })();
 """
@@ -807,7 +828,7 @@ def test_retry_behavior():
     out, err = _run_retry_node(read(APP_JS))
     if not check(out is not None, "⑥ node 虚拟时钟探针真跑成功", err):
         return
-    a, b, c = out["A"], out["B"], out["C"]
+    a, b, c, d = out["A"], out["B"], out["C"], out["D"]
     check(a["calls"] == 3,
           "⑥ 始终失败：最多 3 次请求（首发 1 + 重试 2）", str(a["calls"]))
     check(a["delays"] == [2000, 4000],
@@ -834,6 +855,141 @@ def test_retry_behavior():
           "calls=%d timers=%d" % (c["calls"], c["pendingTimers"]))
     check(c["delays"] == [2000],
           "⑥ 等待期只排一个 2000ms 定时器", str(c["delays"]))
+    check(d["reopenCalls"] == 1,
+          "⑥ 耗尽后重选（计数归零）能再发一次请求（手动重试入口生效）",
+          str(d["reopenCalls"]))
+    check(d["reopenDelays"] == [2000],
+          "⑥ 重选后新窗口退避从头开始（新增 delay 恰为 2000ms）", str(d["reopenDelays"]))
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# ⑥b chip 手动重试入口探针（node，抽 cycleBottomSlot 真函数体）
+# 复核 §8.1：N7（删 reset 段）只被 ① 的 "_marginRetryCount = 0;" 字面串咬住，
+# 把 reset 改成语义不同但保留字面串的实现（如条件写死成不可达）→ ① 恒绿。
+# 这里把 reset 钉成行为：耗尽态重选 margin 槽 → 计数归零、待触发定时器清空、
+# 取数被触发；未选到 margin（顺延）时不重置。与 ① 的结构断言并存。
+# ═══════════════════════════════════════════════════════════════════════
+CYCLE_HARNESS = r"""
+const BODY = %BODY%;
+// 场景设定：上证指数日K（margin 可用），单槽 stored='macd'、当前显示 shown='rsi'，
+// 一次点击 next='margin'。场景可覆写 marginEnabled / shown / count / timer。
+function makeCycleHarness(opts) {
+    const st = {ensures: 0, renders: 0, saved: 0, setCalls: [], cleared: []};
+    const H = {
+        st: st,
+        BOTTOM_ORDER: ["vol", "macd", "rsi", "margin"],
+        BOTTOM_INDICATORS: {vol: 1, macd: 1, rsi: 1, margin: 1},
+        marginEnabled: opts.marginEnabled !== false,
+        shown: opts.shown || "rsi",
+        stored: opts.stored || "macd",
+        count: opts.count || 0,
+        timer: opts.timer || null,
+        clearTimeout: function (id) { st.cleared.push(id); },
+        saveOverlaySettings: function () { st.saved += 1; },
+        _ensureMarginSeries: function () { st.ensures += 1; },
+        render: function () { st.renders += 1; },
+        renderBottom: function () { st.renders += 1; },
+    };
+    const code = `
+      return (function (H) {
+        const window = { _isRenderingBottom: false };
+        const BOTTOM_ORDER = H.BOTTOM_ORDER;
+        const BOTTOM_INDICATORS = H.BOTTOM_INDICATORS;
+        const _bottomSlotList = function () { return [H.stored]; };
+        const _bottomIndicatorEnabled = function (n) {
+            return n === "margin" ? H.marginEnabled : true; };
+        const _slotAt = function () { return H.shown; };
+        const _setSlotAt = function (i, v) { H.st.setCalls.push([i, v]); };
+        const _slotFallbackOverrides = {};
+        const _slotOverrideKey = function (i) { return "main" + i; };
+        const saveOverlaySettings = H.saveOverlaySettings;
+        let _marginRetryCount = H.count;
+        let _marginRetryTimer = H.timer;
+        const clearTimeout = H.clearTimeout;
+        const _ensureMarginSeries = H._ensureMarginSeries;
+        const render = H.render;
+        const renderBottom = H.renderBottom;
+        ${BODY}
+        return {
+          run: function () { cycleBottomSlot(0); },
+          snap: function () {
+            return {count: _marginRetryCount, timer: _marginRetryTimer, st: H.st};
+          },
+        };
+      })(H);
+    `;
+    const api = new Function('H', code)(H);
+    return {api: api, st: st};
+}
+
+const out = {};
+{
+    // E：耗尽态（count=3、timer 非空）重选 margin 槽 → 计数归零、定时器清空、取数触发
+    const h = makeCycleHarness({count: 3, timer: {id: 7}});
+    h.api.run();
+    const s = h.api.snap();
+    out.E = {count: s.count, timer: s.timer, ensures: s.st.ensures,
+             cleared: s.st.cleared.length, setCalls: s.st.setCalls, saved: s.st.saved};
+}
+{
+    // F：非耗尽态（count=0、timer=null）重选 → 状态保持干净、仍取数
+    const h = makeCycleHarness({count: 0, timer: null});
+    h.api.run();
+    const s = h.api.snap();
+    out.F = {count: s.count, timer: s.timer, ensures: s.st.ensures};
+}
+{
+    // G：margin 不可用（如个股图）→ next 顺延为 vol，reset 不触发（count 保持耗尽值）
+    const h = makeCycleHarness({count: 3, timer: null, marginEnabled: false});
+    h.api.run();
+    const s = h.api.snap();
+    out.G = {count: s.count, timer: s.timer, ensures: s.st.ensures};
+}
+console.log(JSON.stringify(out));
+"""
+
+
+def _run_cycle_node(src):
+    node = shutil.which("node")
+    if not node:
+        return None, "node 不在位（⑥ chip 重选探针必须实跑，不降级 SKIP）"
+    body = _extract_fn(src, "cycleBottomSlot")
+    if body is None:
+        return None, "抽不到真函数 cycleBottomSlot"
+    code = CYCLE_HARNESS.replace("%BODY%", json.dumps(body, ensure_ascii=False))
+    tmp = tempfile.mkdtemp(prefix="margin_cycle_")
+    try:
+        jf = os.path.join(tmp, "harness.js")
+        with open(jf, "w", encoding="utf-8") as f:
+            f.write(code)
+        proc = subprocess.run([node, jf], capture_output=True, text=True, timeout=90)
+        if proc.returncode != 0:
+            return None, "node rc=%d: %s" % (proc.returncode, proc.stderr[-600:])
+        return json.loads(proc.stdout.strip().splitlines()[-1]), ""
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_chip_manual_retry():
+    print("\n⑥ chip 手动重试入口探针（node，抽 cycleBottomSlot 真函数体）")
+    out, err = _run_cycle_node(read(APP_JS))
+    if not check(out is not None, "⑥ chip 重选探针真跑成功", err):
+        return
+    e, f, g = out["E"], out["F"], out["G"]
+    check(e["count"] == 0,
+          "⑥ 耗尽态重选 margin 槽：重试计数归零（⑥ 行为层；① 结构断言并存）",
+          str(e["count"]))
+    check(e["timer"] is None and e["cleared"] == 1,
+          "⑥ 耗尽态重选：待触发定时器被清空", json.dumps(e, ensure_ascii=False))
+    check(e["ensures"] == 1,
+          "⑥ 耗尽态重选：取数被触发（chip 手动重试入口可达）", str(e["ensures"]))
+    check(e["setCalls"] == [[0, "margin"]] and e["saved"] == 1,
+          "⑥ 可用图上重选仍写配置并落盘（P2 契约不回归）",
+          json.dumps(e["setCalls"], ensure_ascii=False))
+    check(f["count"] == 0 and f["timer"] is None and f["ensures"] == 1,
+          "⑥ 非耗尽态重选：状态保持干净且仍会取数", json.dumps(f, ensure_ascii=False))
+    check(g["count"] == 3,
+          "⑥ 未选到 margin（顺延）时不触发重试计数重置", str(g["count"]))
 
 
 def main():
@@ -844,6 +1000,7 @@ def main():
     test_node_real_run()
     test_real_browser_margin_slot()
     test_retry_behavior()
+    test_chip_manual_retry()
     print("\n" + "=" * 72)
     if _FAILURES:
         print(f"合计 {len(_FAILURES)} 项失败：")
