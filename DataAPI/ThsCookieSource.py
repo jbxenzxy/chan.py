@@ -20,7 +20,7 @@ Firefox 打开 https://t.10jqka.com.cn 登录 → 保持登录态 → 运行
      登录成功即写回 ①，会话状态留存 `Script/ths_storage_state.json`。
      ③ 由**子进程**执行（`Script/ths_capture_cookie.py --login`）：Playwright
      同步 API 不进入 uvicorn worker 线程，且卡死可 kill，不留不可回收线程。
-     可用 `THS_AUTO_LOGIN=0` 关闭、`THS_LOGIN_TIMEOUT` 调整等待上限；
+     可用 `THS_AUTO_LOGIN=0` 关闭、`THS_LOGIN_TIMEOUT`（秒，默认 90）调整等待上限；
      失败后有 10 分钟冷却，避免每点一次保存就弹一次窗。
 
 实测数据（2026-11-11，本机，供后来者判断取舍）
@@ -60,14 +60,15 @@ USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 PROBE_TIMEOUT = 8.0             # 单次联网校验超时（秒）
 VALIDATE_TTL = 120.0            # 同一份 Cookie 的校验结论缓存时长（秒）
 INTERACTIVE_COOLDOWN = 600.0    # 交互登录失败后的冷却（秒）
-DEFAULT_LOGIN_TIMEOUT = 90.0    # 登录窗口等待上限（秒）
+DEFAULT_LOGIN_TIMEOUT = 90.0    # 登录窗口等待上限（秒）；THS_LOGIN_TIMEOUT 可覆盖
 
 REACH_HOST = "t.10jqka.com.cn"  # 网络可达性探测目标（与 LOGIN_URL 同域）
 REACH_TIMEOUT = 3.0             # 可达性探测**总时长**上限（秒，含 DNS 解析）
 # 默认**不跨请求复用**探测结论（0 = 不缓存）。零证据分支在一次保存里最多只
 # 触发一次，"缓存"换不来复用，却会把上一轮的结论带到下一轮：断网探完、
 # 网络恢复后仍按「不可达」跳过弹窗；反过来按「可达」白等 90s（P2-2）。
-# 只有显式传 ttl>0 的调用方才缓存（用例 ⑯ 用它验证缓存机制本身）。
+# 只有显式传 ttl>0 才**复用**缓存（`ttl=0` 仍写缓存、只是不读 —— 用例 ⑯
+# 用它验证缓存机制本身）。
 REACH_TTL = 0.0
 
 # `details` 里**算数**的前缀 = 「真的试过并失败了」的通道。判据只认这三类，
@@ -406,6 +407,27 @@ def interactive_allowed():
     return time.monotonic() - _last_login_fail >= INTERACTIVE_COOLDOWN
 
 
+def resolve_login_timeout():
+    """登录窗口等待上限（秒）：`THS_LOGIN_TIMEOUT` 覆盖 `DEFAULT_LOGIN_TIMEOUT`。
+
+    每次调用都读环境变量（与 `interactive_allowed()` 读 `THS_AUTO_LOGIN` 同一
+    口径），改配置不必重启进程。非数字 / ≤0 一律回退默认值并留一条日志 ——
+    静默回退会让用户以为设置生效了，实际白等 90s。
+    """
+    raw = (os.environ.get("THS_LOGIN_TIMEOUT") or "").strip()
+    if not raw:
+        return DEFAULT_LOGIN_TIMEOUT
+    try:
+        value = float(raw)
+    except ValueError:
+        value = 0.0
+    if value <= 0:
+        log.info("[THS-Cookie] THS_LOGIN_TIMEOUT=%r 无效（需为正数秒），改用默认 %.0fs",
+                 raw, DEFAULT_LOGIN_TIMEOUT)
+        return DEFAULT_LOGIN_TIMEOUT
+    return value
+
+
 def _launch_browser(p, headless):
     """本机 Edge → Chrome → 自带 chromium（本机 chromium 未下载，实测必失败）。"""
     channel = (os.environ.get("THS_BROWSER_CHANNEL") or "").strip()
@@ -424,7 +446,7 @@ def _launch_browser(p, headless):
         "或执行 playwright install chromium")
 
 
-def interactive_login(timeout=DEFAULT_LOGIN_TIMEOUT, headless=False):
+def interactive_login(timeout=None, headless=False):
     """弹出同花顺登录页，等登录完成后把 Cookie 写回文件并返回；超时返回 ""。
 
     读的是**当前会话内存**里的 Cookie（不碰浏览器磁盘库），因此不存在
@@ -435,12 +457,16 @@ def interactive_login(timeout=DEFAULT_LOGIN_TIMEOUT, headless=False):
     信号即非空并把 `last_sig` 锁定；用户登录时往往**只换同一批 Cookie 的值**
     （名字/域不变），只看 (name, domain) 就恒等、永远检测不到 —— 表现为登录
     窗口等到超时、随即进入 10 分钟失败冷却。
+
+    `timeout=None` 时按 `THS_LOGIN_TIMEOUT` 解析（见 `resolve_login_timeout()`）；
+    显式传值优先，供子进程 / CLI 原样透传。
     """
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
         raise ThsCookieUnavailable("未安装 playwright：pip install playwright")
 
+    timeout = resolve_login_timeout() if timeout is None else timeout
     state = state_file()
     log.info("[THS-Cookie] 正在打开同花顺登录窗口，请扫码或输入账号（等待上限 %ds）…", int(timeout))
     with sync_playwright() as p:
@@ -498,15 +524,18 @@ def interactive_login(timeout=DEFAULT_LOGIN_TIMEOUT, headless=False):
                 pass
 
 
-def ensure_interactive_login(timeout=DEFAULT_LOGIN_TIMEOUT):
+def ensure_interactive_login(timeout=None):
     """弹一次登录窗口（子进程），返回可用 Cookie；失败/超时返回 ""。
 
     走子进程的两个理由：
       · Playwright 同步 API 不进 uvicorn 的 worker 线程，避免事件循环冲突；
       · 卡死/浏览器崩溃可被 kill —— 不留回收不了的线程（指数归属那次的教训）。
     冻结版（PyInstaller）没有 .py 可跑，退化为进程内调用。
+
+    `timeout=None` 时按 `THS_LOGIN_TIMEOUT` 解析（见 `resolve_login_timeout()`）。
     """
     global _last_login_fail
+    timeout = resolve_login_timeout() if timeout is None else timeout
     if not _login_lock.acquire(blocking=False):
         log.info("[THS-Cookie] 已有登录窗口在等待，跳过本次")
         return ""
@@ -623,7 +652,7 @@ def resolve_cookie(validate=False, force=False, timeout=PROBE_TIMEOUT,
     return "", "", details
 
 
-def ensure_cookie(force=False, allow_interactive=False, login_timeout=DEFAULT_LOGIN_TIMEOUT,
+def ensure_cookie(force=False, allow_interactive=False, login_timeout=None,
                   skip_browser=False):
     """取一份**当场校验可用**的 Cookie，返回 (cookie, 来源)。
 
@@ -632,6 +661,8 @@ def ensure_cookie(force=False, allow_interactive=False, login_timeout=DEFAULT_LO
     通道顺序由 `resolve_cookie()` 统一给出（env → file → 浏览器 → 登录窗口）；
     全通道失败抛 `ThsCookieUnavailable`。
     `skip_browser=True` 原样透传（同一请求内已扫过浏览器，不重复扫）。
+    `login_timeout=None` 时由 `ensure_interactive_login` 按 `THS_LOGIN_TIMEOUT`
+    解析（见 `resolve_login_timeout()`）。
 
     `allow_interactive=True` 时才考虑弹窗，且**网络不可达一律不弹**：
     Cookie 通道全报网络错误是直接证据；一条通道都没试过时用

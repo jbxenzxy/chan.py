@@ -29,6 +29,8 @@ stock_index_belong.json 里 500 只中证500 成分股一条不剩。根因不�
   ⑨ 市场判不出的 920 段（北交所新段）**丢票但不写 `sh920736` 错 key** ——
      首位 9→sh 的规则会把 920 段误判成沪市，而落盘只过滤「6 位纯数字」key，
      脏 key 会永久留在 json 里；带 `market="bj"` 的票必须原样保留。
+  ⑩ 部分失败上报：`failed` 非空、`accepted` 也非空时，刷新状态里必须留下
+     「部分失败」原文（旧实现只 log.warning，UI 照旧显示「刷新完成」）。
 
 运行：python Test/test_index_belong_sources.py     # 校验（非 0 退出即失败）
 """
@@ -347,6 +349,47 @@ def test_expected_truth():
         f"实现={impl} 真值={EXPECTED_TRUE} 覆盖全部指数={covered}")
 
 
+def test_partial_failure_reports():
+    """⑩ 部分失败挂到刷新状态（改造前只在「全部失败」时报错）。
+
+    `_refresh_index_belong` 的「全部失败」分支早已上报；缺口在**部分失败**：
+    4 个指数挂了 1 个时只 log.warning，UI 照旧「刷新完成」，用户以为归属已
+    是最新。本用例把取数、落盘、快照全部换成假件（零副作用），只断言状态。
+    """
+    orig_fetch = R._fetch_index_belong_from_sources
+    orig_load = R.load_index_belong_cache
+    fakes = {
+        "merge_index_belong": lambda accepted: None,
+        "belong_snapshot": lambda: {"sh600000": "沪深300"},
+        "save_index_belong_cache": lambda: True,
+    }
+    had = {name: (name in app_data.__dict__,
+                  app_data.__dict__.get(name)) for name in fakes}
+    status_bak = dict(R._refresh_status)
+    try:
+        R._fetch_index_belong_from_sources = lambda: (
+            {"沪深300": {"sh600000": "沪深300"}},
+            {"中证500": "超过总预算 12s"})
+        R.load_index_belong_cache = lambda: None
+        for name, value in fakes.items():
+            setattr(app_data, name, value)
+        R._set_refresh_status(error=None)
+        R._refresh_index_belong()
+        err = R.refresh_status().get("error") or ""
+    finally:
+        R._fetch_index_belong_from_sources = orig_fetch
+        R.load_index_belong_cache = orig_load
+        for name, (was_own, value) in had.items():
+            if was_own:
+                app_data.__dict__[name] = value
+            else:
+                app_data.__dict__.pop(name, None)
+        R._refresh_status.clear()
+        R._refresh_status.update(status_bak)
+    ok = "部分失败" in err and "中证500" in err and "本次更新 1/" in err
+    rec("⑩", "部分失败挂到刷新状态（不再只 log）", ok, f"error={err!r}")
+
+
 def main():
     print("=" * 64)
     print("指数归属取数路径验证（eltdx 主源 / AKShare 兜底）")
@@ -354,7 +397,8 @@ def main():
     for fn in (test_expected_truth, test_eltdx_primary, test_akshare_fallback,
                test_empty_falls_back, test_count_guard, test_dropped_accounting,
                test_bj_920_no_bad_key, test_budget, test_merge_semantics, test_merge_overlap,
-               test_no_whole_replace, test_eltdx_total_mismatch):
+               test_no_whole_replace, test_eltdx_total_mismatch,
+               test_partial_failure_reports):
         try:
             fn()
         except Exception as e:                              # noqa: BLE001

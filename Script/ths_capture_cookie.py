@@ -50,8 +50,9 @@ def main(argv=None):
     parser.add_argument("--auto", action="store_true", help="只走后台通道，不弹登录窗口")
     parser.add_argument("--login", action="store_true", help="只弹登录窗口（程序内部调用）")
     parser.add_argument("--status", action="store_true", help="只诊断，不取 Cookie")
-    parser.add_argument("--timeout", type=float, default=src.DEFAULT_LOGIN_TIMEOUT,
-                        help="登录窗口等待上限（秒），默认 %(default)s")
+    parser.add_argument("--timeout", type=float, default=None,
+                        help=f"登录窗口等待上限（秒）；默认取 THS_LOGIN_TIMEOUT，"
+                             f"未设置则 {int(src.DEFAULT_LOGIN_TIMEOUT)}")
     parser.add_argument("--headless", action="store_true",
                         help="无头模式（不显示窗口；无 GUI 环境自检用，正常登录别加）")
     args = parser.parse_args(argv)
@@ -59,8 +60,10 @@ def main(argv=None):
     if args.status:
         return _print_status()
 
+    timeout = src.resolve_login_timeout() if args.timeout is None else args.timeout
+
     if args.login:
-        cookie = src.interactive_login(timeout=args.timeout, headless=args.headless)
+        cookie = src.interactive_login(timeout=timeout, headless=args.headless)
         return 0 if cookie else 1
 
     if args.auto:
@@ -81,7 +84,7 @@ def main(argv=None):
         return 0
     except src.ThsCookieUnavailable:
         log.info("[Cookie] 后台通道没有可用 Cookie，打开登录窗口…")
-    cookie = src.interactive_login(timeout=args.timeout)
+    cookie = src.interactive_login(timeout=timeout)
     if cookie:
         log.info("[Cookie] ✅ 登录成功，已写入 %s", src.cookie_file())
         return 0

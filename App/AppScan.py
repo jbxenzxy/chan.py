@@ -660,7 +660,14 @@ def zxg_save(codes):
             except Exception as e:
                 # 消息由 DataAPI/ThsCookieSource 组装（已写明试过哪几条通道），
                 # 不再要求用户「去运行 ths_capture_cookie.py」—— Cookie 由程序自动取。
+                # `ThsCookieUnavailable.details` 是**逐条通道**的失败原因（文件过期 /
+                # 浏览器未登录 / 登录窗超时…）。旧写法只取 `str(e)`，明细整段丢掉：
+                # 面板只显示「失败」、日志里也查不出是哪条通道坏的。
                 ths_msg = str(e) or type(e).__name__
+                details = [str(d).strip() for d in (getattr(e, "details", None) or [])]
+                details = [d for d in details if d]
+                if details:
+                    ths_msg = "；".join([ths_msg] + details)
                 log.info(f"[保存] 同花顺: 失败 - {ths_msg}")
         else:
             ths_msg = "DataAPI/ThsCloudZxgAPI.py 未找到，请确保 DataAPI/ 目录完整"

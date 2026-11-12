@@ -365,6 +365,11 @@ def _refresh_index_belong():
     if failed:
         summary += "，失败: " + "；".join(f"{k}({v})" for k, v in failed.items())
         log.warning(f"[指数归属] {summary}")
+        if accepted:
+            # 部分失败也要挂到刷新状态：改造前只有「全部失败」才报错，部分指数抓不到
+            # 时 UI 照旧显示「刷新完成」，用户以为归属已是最新（失败指数的成员其实
+            # 还停在上一季度）。accepted 的部分仍照常落盘，故措辞是「部分失败」。
+            _set_refresh_status(error=f"指数归属部分失败: {summary}")
     else:
         log.info(f"[指数归属] {summary}")
     if not accepted:

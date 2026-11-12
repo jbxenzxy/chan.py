@@ -30,11 +30,17 @@
      对照（网络通必弹）」—— ⑭ 那条说明行曾把「全网络错误」判成假，
      导致网断时仍白等 90s 登录窗。
   ⑯ `network_reachable` 自身行为：连接失败 / TLS / HTTP 4xx / 线程超时 / 缓存。
-  ⑰ 可达性结论不跨请求复用（`REACH_TTL=0`）：网络状态翻转后判据必须跟着翻；
-     弹窗被禁用时不做无谓探测。
+  ⑰ 可达性结论不跨请求复用（产品默认 `ttl=0`）：网络状态翻转后判据必须跟着翻；
+     弹窗被禁用时不做无谓探测。**不桩 `network_reachable`**，只桩 `_reach_once`
+     —— 桩掉整个函数会吞掉产品默认参数（把默认 ttl 写死成 60 也测不出来）。
+  ⑱ `THS_LOGIN_TIMEOUT` 真的生效：合法值 / 非法值回退默认 / 显式传值优先；
+     旧实现只有文档写了这个变量，代码里恒用 90s（P3-1）。
+  ⑲ 取 Cookie 失败时，`ThsCookieUnavailable.details`（逐通道原因）必须透到
+     保存接口的 `ths_msg`；旧写法只取 `str(e)`，面板与日志都看不到是哪条通道坏的。
 
 运行：python Test/test_ths_cookie_autofetch.py     # 非 0 退出即失败
 """
+import inspect
 import os
 import sys
 import tempfile
@@ -46,8 +52,6 @@ sys.path.insert(0, _REPO_ROOT)
 os.environ.pop("THS_COOKIE", None)          # 环境变量会抢占最高优先级，先摘掉
 
 from DataAPI import ThsCookieSource as S    # noqa: E402
-
-_ORIG_NETWORK_REACHABLE = S.network_reachable   # 真实函数本体（Case 只换模块属性）
 
 results = []
 
@@ -88,16 +92,16 @@ class Case:
     """每个用例共用的一批桩：记录浏览器/弹窗/探测/write 调用。
 
     `reach` 整体打桩 `network_reachable`（`None` = 默认可达；也可传可调用对象，
-    按调用次序返回不同结论）；`reach_once` 只打桩最底层的 `_reach_once`，让真实
-    `network_reachable`（含 TTL 缓存）照跑 —— 要验证「结论跨请求复用」必须用
-    后者，否则缓存逻辑一行都不执行，断言会假绿。默认值必须给，否则「一条
-    Cookie 通道都没试过」的用例会真发 HEAD 出去，测试从离线变联网。
+    按调用次序返回不同结论）；`reach_once` **只**打桩最底层的 `_reach_once`，
+    真实的 `network_reachable`（含默认参数与 TTL 缓存）整段照跑 —— 要验证
+    「结论跨请求复用」必须用后者：桩整体替换 `network_reachable` 时，
+    `ensure_cookie()` 的无参调用落在桩的默认值上，产品把默认 `ttl` 写死成 60
+    也测不出来（M4 盲点）。`reach_once` 模式不联网：HEAD 已被打桩。
     """
 
     def __init__(self, file_cookie="", browser=(), valid=(), allowed=True,
                  login_cookie="", probe=None, reach=None, reach_once=None):
         self.calls = {"browser": 0, "login": 0, "reach": 0}
-        self.ttls = []              # 每次探测收到的 ttl（钉住默认值 = 0，不跨请求复用）
         self.written = []
         self.browser = list(browser)
         self.login_cookie = login_cookie
@@ -115,7 +119,8 @@ class Case:
         if reach_once is None:
             targets["network_reachable"] = self._reach
         else:
-            targets["network_reachable"] = self._reach_real
+            # 不替换 `network_reachable`：必须让真实函数的默认参数真的被用上，
+            # 否则「产品默认 ttl 被改坏」这类回潮在本用例里不可见。
             targets["_reach_once"] = self._reach_once
         self.restore = _patch(**targets)
 
@@ -124,20 +129,19 @@ class Case:
 
     def _reach(self, host=S.REACH_HOST, timeout=S.REACH_TIMEOUT, ttl=S.REACH_TTL):
         self.calls["reach"] += 1
-        self.ttls.append(ttl)
         if callable(self.reach):
             return self.reach()
         if self.reach is None:
             return True, "HTTP 200"
         return self.reach
 
-    def _reach_real(self, host=S.REACH_HOST, timeout=S.REACH_TIMEOUT, ttl=S.REACH_TTL):
-        """记录 ttl/次数后交给**真实** `network_reachable`（缓存逻辑照跑）。"""
-        self.calls["reach"] += 1
-        self.ttls.append(ttl)
-        return _ORIG_NETWORK_REACHABLE(host=host, timeout=timeout, ttl=ttl)
+    def _reach_once(self, *args, **kwargs):
+        """最底层探测替身：真实 `network_reachable` 每真探一次才进来一次。
 
-    def _reach_once(self, host, timeout):
+        计数点放这里 —— 缓存命中根本进不来，所以次数就是「真的发了几次 HEAD」。
+        参数原样忽略：`_reach_once(host, timeout)` 的签名不是被测契约。
+        """
+        self.calls["reach"] += 1
         return self.reach_once()
 
     def _iter_browser(self):
@@ -694,7 +698,7 @@ def _two_saves(reach_once):
                 S.ensure_cookie(allow_interactive=True)
             except S.ThsCookieUnavailable:
                 pass
-        return c.calls["login"], c.calls["reach"], c.ttls
+        return c.calls["login"], c.calls["reach"]
 
 
 try:
@@ -709,18 +713,104 @@ try:
             S.ensure_cookie(allow_interactive=True)
         except S.ThsCookieUnavailable:
             pass
-        _OFF = (c.calls["login"], c.calls["reach"], c.ttls)
+        _OFF = (c.calls["login"], c.calls["reach"])
 finally:
     S._reach_cache.clear()          # 别把本用例的缓存留给后续（含门禁里的其他组件）
 
-rec("⑰", "可达性结论不跨请求复用（REACH_TTL=0）：两方向各探 2 次 / 弹窗禁用不探测",
-    S.REACH_TTL == 0.0
-    and _UP_DOWN[:2] == (1, 2) and _DOWN_UP[:2] == (1, 2)
-    and _OFF[:2] == (0, 0)
-    and _UP_DOWN[2] == [0.0, 0.0] and _DOWN_UP[2] == [0.0, 0.0],
-    f"网通→断网 login={_UP_DOWN[0]}(应1) 探测={_UP_DOWN[1]}(应2) ttl={_UP_DOWN[2]} | "
-    f"断网→网通 login={_DOWN_UP[0]}(应1) 探测={_DOWN_UP[1]}(应2) ttl={_DOWN_UP[2]} | "
-    f"弹窗禁用 login={_OFF[0]} 探测={_OFF[1]}(应0) | REACH_TTL={S.REACH_TTL}")
+# 产品默认参数也必须落在 `ttl=0`：上面的行为断言已能咬住「默认值被写死成 60」
+# （缓存一命中，第二次保存就不再真探、login 计数也不翻），这里再补一条静态
+# 断言，把「是哪个值坏了」直接写进失败信息。两种口径一起钉。
+_TTL_DEFAULT = inspect.signature(S.network_reachable).parameters["ttl"].default
+
+rec("⑰", "可达性结论不跨请求复用（产品默认 ttl=0）：两方向各真探 2 次 / 弹窗禁用不探测",
+    S.REACH_TTL == 0.0 and _TTL_DEFAULT == 0.0
+    and _UP_DOWN == (1, 2) and _DOWN_UP == (1, 2)
+    and _OFF == (0, 0),
+    f"网通→断网 login={_UP_DOWN[0]}(应1) 真探={_UP_DOWN[1]}(应2) | "
+    f"断网→网通 login={_DOWN_UP[0]}(应1) 真探={_DOWN_UP[1]}(应2) | "
+    f"弹窗禁用 login={_OFF[0]} 探测={_OFF[1]}(应0) | "
+    f"REACH_TTL={S.REACH_TTL} 签名默认={_TTL_DEFAULT}(应 0.0)")
+
+
+# ⑱ `THS_LOGIN_TIMEOUT` 生效（P3-1）：文档早就写了这个变量，代码旧实现恒用 90s
+#
+# 唯一解析点是 `resolve_login_timeout()`：合法值原样返回、非法值（非数字 / ≤0）回退默认、
+# 显式传值优先于环境变量。还要证明 `ensure_interactive_login` 把解析结果**真的
+# 传下去** —— 只测 `resolve_login_timeout()` 会漏掉「解析了但没人用」这种半截实现。
+_seen_timeouts = []
+restore = _patch(_login_via_subprocess=lambda script, timeout:
+                 _seen_timeouts.append(timeout) or "")
+_last_fail_bak = S._last_login_fail
+try:
+    os.environ["THS_LOGIN_TIMEOUT"] = "7.5"
+    _t_env = S.resolve_login_timeout()
+    _c_auto = S.ensure_interactive_login()                  # 无参 → 7.5
+    _c_explicit = S.ensure_interactive_login(timeout=12)    # 显式优先于 env
+    os.environ["THS_LOGIN_TIMEOUT"] = "abc"
+    _t_bad = S.resolve_login_timeout()
+    os.environ["THS_LOGIN_TIMEOUT"] = "-3"
+    _t_neg = S.resolve_login_timeout()
+    os.environ.pop("THS_LOGIN_TIMEOUT", None)
+    _t_unset = S.resolve_login_timeout()
+finally:
+    restore()
+    os.environ.pop("THS_LOGIN_TIMEOUT", None)
+    S._last_login_fail = _last_fail_bak
+rec("⑱", "THS_LOGIN_TIMEOUT 生效（合法值 / 非法回退 / 显式优先）",
+    _t_env == 7.5 and _t_bad == S.DEFAULT_LOGIN_TIMEOUT
+    and _t_neg == S.DEFAULT_LOGIN_TIMEOUT and _t_unset == S.DEFAULT_LOGIN_TIMEOUT
+    and _c_auto == "" and _c_explicit == "" and _seen_timeouts == [7.5, 12],
+    f"env=7.5→{_t_env}(应7.5) 非法→{_t_bad} 负数→{_t_neg} 未设→{_t_unset} "
+    f"(后三者应 {S.DEFAULT_LOGIN_TIMEOUT}) 登录窗收到={_seen_timeouts}(应 [7.5, 12])")
+
+
+# ⑲ 保存失败时逐通道明细必须透出（P3-2）
+#
+# 保存链路把 `ThsCookieUnavailable` 收敛成一句 `ths_msg`，前端只把 `ths_msg`
+# 挂到按钮 title。旧写法 `ths_msg = str(e)` 丢掉 `e.details`（哪条通道试过、
+# 为什么失败），面板只剩「同花顺：失败」，日志也查不出根因。
+import App.AppScan as _scan                              # noqa: E402
+
+
+def _shadow(obj, **attrs):
+    """临时替换模块/实例属性；restore 时区分「自有属性」与「继承来的」。"""
+    saved = {k: (k in obj.__dict__, obj.__dict__.get(k)) for k in attrs}
+    for k, v in attrs.items():
+        setattr(obj, k, v)
+
+    def restore():
+        for k, (was_own, old) in saved.items():
+            if was_own:
+                obj.__dict__[k] = old
+            else:
+                obj.__dict__.pop(k, None)
+    return restore
+
+
+_cookie_err = S.ThsCookieUnavailable(
+    "未取到可用的同花顺登录态", ["file: Cookie 已过期", "browser:firefox: 未登录"])
+
+
+def _raise_cookie_err(codes):
+    raise _cookie_err
+
+
+_restore_m = _shadow(_scan._m, _THS_CLOUD_AVAILABLE=True,
+                     save_scan_to_ths_cloud=_raise_cookie_err)
+_restore_data = _shadow(_scan.app_data, save_to_zxg_blk=lambda codes: len(codes))
+try:
+    _save_res, _save_code = _scan.zxg_save("600000, 000001")
+finally:
+    _restore_m()
+    _restore_data()
+_msg = _save_res.get("ths_msg") or ""
+rec("⑲", "取 Cookie 失败：逐通道明细落到 ths_msg",
+    _save_code == 200 and _save_res.get("ths_saved") == 0
+    and _save_res.get("tdx_saved") == 2
+    and "未取到可用的同花顺登录态" in _msg
+    and "file: Cookie 已过期" in _msg and "browser:firefox: 未登录" in _msg,
+    f"code={_save_code} ths_saved={_save_res.get('ths_saved')} "
+    f"tdx_saved={_save_res.get('tdx_saved')} ths_msg={_msg!r}")
 
 
 # ── 汇总 ──────────────────────────────────────────────────────────────
