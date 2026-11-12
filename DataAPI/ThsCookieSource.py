@@ -64,7 +64,11 @@ DEFAULT_LOGIN_TIMEOUT = 90.0    # 登录窗口等待上限（秒）
 
 REACH_HOST = "t.10jqka.com.cn"  # 网络可达性探测目标（与 LOGIN_URL 同域）
 REACH_TIMEOUT = 3.0             # 可达性探测**总时长**上限（秒，含 DNS 解析）
-REACH_TTL = 60.0                # 可达性结论缓存时长（秒）：一次保存最多两次兜底
+# 默认**不跨请求复用**探测结论（0 = 不缓存）。零证据分支在一次保存里最多只
+# 触发一次，"缓存"换不来复用，却会把上一轮的结论带到下一轮：断网探完、
+# 网络恢复后仍按「不可达」跳过弹窗；反过来按「可达」白等 90s（P2-2）。
+# 只有显式传 ttl>0 的调用方才缓存（用例 ⑯ 用它验证缓存机制本身）。
+REACH_TTL = 0.0
 
 # `details` 里**算数**的前缀 = 「真的试过并失败了」的通道。判据只认这三类，
 # 其余（`note:` 说明行、`network:` 探测结论）一律不参与 —— 见 `ensure_cookie`。
@@ -309,7 +313,7 @@ def _reach_once(host, timeout):
 
 
 def network_reachable(host=REACH_HOST, timeout=REACH_TIMEOUT, ttl=REACH_TTL):
-    """判断到同花顺服务端的网络是否可达；带 TTL 缓存。
+    """判断到同花顺服务端的网络是否可达（默认 `ttl=0`，不跨请求复用结论）。
 
     **不复用 `probe()`**：空 Cookie 会被 `probe()` 直接短路成
     `(False, "空 Cookie")`，那既不是「网络错误」也不是「有响应」，拿它判
@@ -632,6 +636,8 @@ def ensure_cookie(force=False, allow_interactive=False, login_timeout=DEFAULT_LO
     `allow_interactive=True` 时才考虑弹窗，且**网络不可达一律不弹**：
     Cookie 通道全报网络错误是直接证据；一条通道都没试过时用
     `network_reachable()` 补一次探测（不能默认"可弹"，否则新机器断网仍白等）。
+    弹窗已被关闭 / 处于冷却期时**不探测** —— 那个结论只影响一句提示文案，
+    不值得每次保存都付一次 `REACH_TIMEOUT`。
     """
     cookie, source, details = resolve_cookie(validate=True, force=force,
                                              skip_browser=skip_browser)
@@ -658,7 +664,7 @@ def ensure_cookie(force=False, allow_interactive=False, login_timeout=DEFAULT_LO
     if allow_interactive:
         if attempts:
             network_only = all("网络错误" in d for d in attempts)
-        else:
+        elif interactive_allowed():    # 弹窗关着/冷却中就不探测：结论只影响提示文案
             reachable, reach_msg = network_reachable()
             network_only = not reachable
             details.append(f"network: {'可达' if reachable else '不可达'}（{reach_msg}）")

@@ -29,6 +29,9 @@
   ⑮ 网络不可达四场景：「通道自证 / 说明行不污染判据 / 零证据靠独立探测 /
      对照（网络通必弹）」—— ⑭ 那条说明行曾把「全网络错误」判成假，
      导致网断时仍白等 90s 登录窗。
+  ⑯ `network_reachable` 自身行为：连接失败 / TLS / HTTP 4xx / 线程超时 / 缓存。
+  ⑰ 可达性结论不跨请求复用（`REACH_TTL=0`）：网络状态翻转后判据必须跟着翻；
+     弹窗被禁用时不做无谓探测。
 
 运行：python Test/test_ths_cookie_autofetch.py     # 非 0 退出即失败
 """
@@ -43,6 +46,8 @@ sys.path.insert(0, _REPO_ROOT)
 os.environ.pop("THS_COOKIE", None)          # 环境变量会抢占最高优先级，先摘掉
 
 from DataAPI import ThsCookieSource as S    # noqa: E402
+
+_ORIG_NETWORK_REACHABLE = S.network_reachable   # 真实函数本体（Case 只换模块属性）
 
 results = []
 
@@ -82,36 +87,58 @@ def _probe_by_value(valid_values, calls=None):
 class Case:
     """每个用例共用的一批桩：记录浏览器/弹窗/探测/write 调用。
 
-    `reach` 打桩网络可达性探测（`None` = 默认可达）。默认值必须给，否则
-    「一条 Cookie 通道都没试过」的用例会真发 HEAD 出去，测试从离线变联网。
+    `reach` 整体打桩 `network_reachable`（`None` = 默认可达；也可传可调用对象，
+    按调用次序返回不同结论）；`reach_once` 只打桩最底层的 `_reach_once`，让真实
+    `network_reachable`（含 TTL 缓存）照跑 —— 要验证「结论跨请求复用」必须用
+    后者，否则缓存逻辑一行都不执行，断言会假绿。默认值必须给，否则「一条
+    Cookie 通道都没试过」的用例会真发 HEAD 出去，测试从离线变联网。
     """
 
     def __init__(self, file_cookie="", browser=(), valid=(), allowed=True,
-                 login_cookie="", probe=None, reach=None):
+                 login_cookie="", probe=None, reach=None, reach_once=None):
         self.calls = {"browser": 0, "login": 0, "reach": 0}
+        self.ttls = []              # 每次探测收到的 ttl（钉住默认值 = 0，不跨请求复用）
         self.written = []
         self.browser = list(browser)
         self.login_cookie = login_cookie
         self.reach = reach
+        self.reach_once = reach_once
         self.probe = probe or _probe_by_value(set(valid))
-        self.restore = _patch(
+        targets = dict(
             read_cookie_file=lambda path=None: file_cookie,
             probe_cached=self._probe,
             iter_browser_cookies=self._iter_browser,
             ensure_interactive_login=self._login,
             interactive_allowed=lambda: allowed,
             write_cookie_file=self._write,
-            network_reachable=self._reach,
         )
+        if reach_once is None:
+            targets["network_reachable"] = self._reach
+        else:
+            targets["network_reachable"] = self._reach_real
+            targets["_reach_once"] = self._reach_once
+        self.restore = _patch(**targets)
 
     def _probe(self, cookie, ttl=S.VALIDATE_TTL, timeout=S.PROBE_TIMEOUT):
         return self.probe(cookie, ttl=ttl, timeout=timeout)
 
     def _reach(self, host=S.REACH_HOST, timeout=S.REACH_TIMEOUT, ttl=S.REACH_TTL):
         self.calls["reach"] += 1
+        self.ttls.append(ttl)
+        if callable(self.reach):
+            return self.reach()
         if self.reach is None:
             return True, "HTTP 200"
         return self.reach
+
+    def _reach_real(self, host=S.REACH_HOST, timeout=S.REACH_TIMEOUT, ttl=S.REACH_TTL):
+        """记录 ttl/次数后交给**真实** `network_reachable`（缓存逻辑照跑）。"""
+        self.calls["reach"] += 1
+        self.ttls.append(ttl)
+        return _ORIG_NETWORK_REACHABLE(host=host, timeout=timeout, ttl=ttl)
+
+    def _reach_once(self, host, timeout):
+        return self.reach_once()
 
     def _iter_browser(self):
         self.calls["browser"] += 1
@@ -630,6 +657,70 @@ rec("⑯", "network_reachable 自身：连接失败/TLS/HTTP4xx/线程超时/缓
     and _n_after == _n_before,
     f"conn={_r_conn[0]}/{_r_conn[1][:32]} ssl={_r_ssl[0]} 403={_r_403} "
     f"超时={_r_tmo[0]}({_elapsed:.2f}s,应<1s) 缓存={_n_after - _n_before}次额外请求(应 0)")
+
+
+# ⑰ P2-2 回归：可达性结论**不许跨请求复用**（`REACH_TTL` 默认 0）
+#
+# 缺陷形态（2026-11-12 复核实测）：`REACH_TTL=60` 让上一轮的探测结论在 60s 内
+# 跨请求生效，网络状态翻转后判据还是旧的：
+#   · 断网 → 恢复：第二次仍按「不可达」跳过弹窗（点了保存却不见登录窗）；
+#   · 通 → 断：第二次仍按「可达」去弹窗，白等 90s（P2-1 的同一后果，另一条入口）。
+# 两条方向各钉一次，外带「弹窗被禁用时不做无谓探测」。
+# `Case` 同时桩了 `ensure_interactive_login` 与 `interactive_allowed`，10 分钟
+# 失败冷却不会介入，login 计数是干净的判别信号（否则方向① 会假绿）。
+class _Flip:
+    """按调用次序返回给定结论；用尽后沿用最后一条（多探一次也不会炸）。"""
+
+    def __init__(self, *results):
+        self._results = list(results)
+        self._idx = 0
+
+    def __call__(self):
+        i = min(self._idx, len(self._results) - 1)
+        self._idx += 1
+        return self._results[i]
+
+
+def _two_saves(reach_once):
+    """同一进程连做两次「保存」：无 env / 无缓存文件 / 无浏览器登录态。
+
+    只桩最底层 `_reach_once`，真实 `network_reachable`（含 TTL 缓存）照跑 ——
+    要证明「结论不许跨请求复用」，必须让缓存代码真的执行。
+    """
+    S._reach_cache.clear()
+    with Case(file_cookie="", valid=set(), reach_once=reach_once) as c:
+        for _ in range(2):
+            try:
+                S.ensure_cookie(allow_interactive=True)
+            except S.ThsCookieUnavailable:
+                pass
+        return c.calls["login"], c.calls["reach"], c.ttls
+
+
+try:
+    _UP_DOWN = _two_saves(_Flip((True, "HTTP 200"),
+                                (False, "网络错误: ConnectionError: boom")))
+    _DOWN_UP = _two_saves(_Flip((False, "网络错误: ConnectionError: boom"),
+                                (True, "HTTP 200")))
+
+    # 弹窗被禁用（THS_AUTO_LOGIN=0 / 冷却中）：探测结论不影响任何分支，不该发请求
+    with Case(file_cookie="", valid=set(), allowed=False, reach=_NET) as c:
+        try:
+            S.ensure_cookie(allow_interactive=True)
+        except S.ThsCookieUnavailable:
+            pass
+        _OFF = (c.calls["login"], c.calls["reach"], c.ttls)
+finally:
+    S._reach_cache.clear()          # 别把本用例的缓存留给后续（含门禁里的其他组件）
+
+rec("⑰", "可达性结论不跨请求复用（REACH_TTL=0）：两方向各探 2 次 / 弹窗禁用不探测",
+    S.REACH_TTL == 0.0
+    and _UP_DOWN[:2] == (1, 2) and _DOWN_UP[:2] == (1, 2)
+    and _OFF[:2] == (0, 0)
+    and _UP_DOWN[2] == [0.0, 0.0] and _DOWN_UP[2] == [0.0, 0.0],
+    f"网通→断网 login={_UP_DOWN[0]}(应1) 探测={_UP_DOWN[1]}(应2) ttl={_UP_DOWN[2]} | "
+    f"断网→网通 login={_DOWN_UP[0]}(应1) 探测={_DOWN_UP[1]}(应2) ttl={_DOWN_UP[2]} | "
+    f"弹窗禁用 login={_OFF[0]} 探测={_OFF[1]}(应0) | REACH_TTL={S.REACH_TTL}")
 
 
 # ── 汇总 ──────────────────────────────────────────────────────────────
