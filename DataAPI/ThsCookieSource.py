@@ -62,10 +62,20 @@ VALIDATE_TTL = 120.0            # 同一份 Cookie 的校验结论缓存时长�
 INTERACTIVE_COOLDOWN = 600.0    # 交互登录失败后的冷却（秒）
 DEFAULT_LOGIN_TIMEOUT = 90.0    # 登录窗口等待上限（秒）
 
+REACH_HOST = "t.10jqka.com.cn"  # 网络可达性探测目标（与 LOGIN_URL 同域）
+REACH_TIMEOUT = 3.0             # 可达性探测**总时长**上限（秒，含 DNS 解析）
+REACH_TTL = 60.0                # 可达性结论缓存时长（秒）：一次保存最多两次兜底
+
+# `details` 里**算数**的前缀 = 「真的试过并失败了」的通道。判据只认这三类，
+# 其余（`note:` 说明行、`network:` 探测结论）一律不参与 —— 见 `ensure_cookie`。
+_COOKIE_ATTEMPT_PREFIXES = ("env", "file", "browser")
+
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 _cache_lock = threading.Lock()
 _probe_cache = {}               # cookie -> (ok, msg, monotonic_ts)
+_reach_lock = threading.Lock()
+_reach_cache = {}               # host -> (reachable, msg, monotonic_ts)
 _login_lock = threading.Lock()
 _last_login_fail = 0.0
 
@@ -262,6 +272,84 @@ def invalidate(cookie=None):
             _probe_cache.clear()
         else:
             _probe_cache.pop(cookie, None)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 网络可达性（不需要 Cookie，只看"连接通不通"）
+# ═══════════════════════════════════════════════════════════════════════
+
+def _reach_once(host, timeout):
+    """真正发一次 HEAD；返回 (可达, 说明裸文本)。
+
+    说明文本**不带「可达/不可达」标签**，由调用方统一加（避免
+    `network: 可达（可达（HTTP 200））` 这种套娃）。
+
+    判据方向刻意不对称：**只有连接失败/超时才算不可达**，HTTP 4xx/5xx、
+    TLS 告警、缺依赖、未知异常一律按可达处理。理由是该结论只用于「要不要
+    弹登录窗口」——把可达误判成不可达会让用户永久看不到登录入口（死路），
+    把不可达误判成可达只是多等一个超时（可恢复），代价不对等。
+    """
+    try:
+        import requests
+    except ImportError:
+        return True, "未安装 requests，按可达处理"
+    try:
+        resp = requests.head(f"https://{host}/", timeout=(timeout, timeout),
+                             allow_redirects=False,
+                             headers={"User-Agent": USER_AGENT})
+        return True, f"HTTP {resp.status_code}"
+    except requests.exceptions.SSLError as e:
+        # SSLError 是 ConnectionError 的子类，必须排在它前面：握手都到 TLS 了，
+        # 说明链路是通的（证书过期/中间人拦截不该让我们判定"网络不可达"）。
+        return True, f"TLS 异常: {type(e).__name__}"
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+        return False, f"{type(e).__name__}: {e}"
+    except Exception as e:                      # noqa: BLE001 —— 未知异常不算网络不可达
+        return True, f"未知异常按可达处理: {type(e).__name__}"
+
+
+def network_reachable(host=REACH_HOST, timeout=REACH_TIMEOUT, ttl=REACH_TTL):
+    """判断到同花顺服务端的网络是否可达；带 TTL 缓存。
+
+    **不复用 `probe()`**：空 Cookie 会被 `probe()` 直接短路成
+    `(False, "空 Cookie")`，那既不是「网络错误」也不是「有响应」，拿它判
+    可达性只会得到假阴性（详见 `ensure_cookie` 的零证据分支）。这里用
+    HEAD 探测，不依赖任何 Cookie。
+
+    三个实现约束（都有实测背景）：
+      · **走 requests 而不是裸 socket** —— 与 `probe()` 共享 `HTTP(S)_PROXY`
+        口径。裸 socket 在「直连被封、代理可用」的环境会判成不可达，于是
+        本该弹的登录窗口被静默跳过，与 `probe()` 的结论互相打架；
+      · **daemon 线程 + `join(timeout)` 定总时长** —— socket 的 timeout 不覆盖
+        `getaddrinfo`，DNS 悬停（断网 / 企业 DNS 无响应）时"3s 超时"可能实际
+        卡十几秒，守卫自己变成新的等待点；
+      · 缺 `requests` / 未知异常 → 按可达处理（见 `_reach_once` 的不对称判据）。
+    """
+    now = time.monotonic()
+    if ttl > 0:
+        with _reach_lock:
+            hit = _reach_cache.get(host)
+        if hit and now - hit[2] < ttl:
+            return hit[0], hit[1]
+
+    box = {}
+
+    def _run():
+        box["res"] = _reach_once(host, timeout)
+
+    th = threading.Thread(target=_run, name="ths-reach", daemon=True)
+    th.start()
+    th.join(timeout)
+    if th.is_alive():
+        result = (False, f"探测超时（>{timeout:.0f}s 无响应，DNS 或连接阻塞）")
+    else:
+        result = box.get("res") or (True, "探测无结果按可达处理")
+
+    with _reach_lock:
+        if len(_reach_cache) > 8:
+            _reach_cache.clear()
+        _reach_cache[host] = (result[0], result[1], now)
+    return result
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -486,10 +574,12 @@ def resolve_cookie(validate=False, force=False, timeout=PROBE_TIMEOUT,
     一轮浏览器时（`save_scan_to_ths_cloud` 的兜底与失效重取），重复扫拿不到
     新结果，却要为每个浏览器各付一次「读取 + `PROBE_TIMEOUT` 校验」（Edge
     通道在 Windows 上最坏 6s，四通道全失败时最坏数十秒）。跳过会在 `details`
-    留一条说明，诊断时可区分「本机确实没有登录态」与「本轮主动跳过」。
+    留一条 `note:` 说明，诊断时可区分「本机确实没有登录态」与「本轮主动跳过」。
 
     返回 (cookie, source, details)；全通道未命中时 cookie 为空串，
-    `details` 逐条记录每个通道的失败原因。
+    `details` 逐条记录每个通道的失败原因。**只有 `env:` / `file:` /
+    `browser:` 前缀是「真的试过并失败」**；`note:` 前缀是说明，不是证据 ——
+    `ensure_cookie` 的判据按前缀白名单取，不按关键字黑名单剔。
     """
     ttl = 0 if force else VALIDATE_TTL
     details = []
@@ -512,7 +602,7 @@ def resolve_cookie(validate=False, force=False, timeout=PROBE_TIMEOUT,
         log.info("[THS-Cookie] %s 通道的 Cookie 不可用：%s", source, msg)
 
     if skip_browser:
-        details.append("browser: 跳过（同一请求内已扫过一轮，不重复读取）")
+        details.append("note: browser 通道跳过（同一请求内已扫过一轮，不重复读取）")
     else:
         for name, cookie, count in iter_browser_cookies():
             if not validate:
@@ -538,14 +628,40 @@ def ensure_cookie(force=False, allow_interactive=False, login_timeout=DEFAULT_LO
     通道顺序由 `resolve_cookie()` 统一给出（env → file → 浏览器 → 登录窗口）；
     全通道失败抛 `ThsCookieUnavailable`。
     `skip_browser=True` 原样透传（同一请求内已扫过浏览器，不重复扫）。
+
+    `allow_interactive=True` 时才考虑弹窗，且**网络不可达一律不弹**：
+    Cookie 通道全报网络错误是直接证据；一条通道都没试过时用
+    `network_reachable()` 补一次探测（不能默认"可弹"，否则新机器断网仍白等）。
     """
     cookie, source, details = resolve_cookie(validate=True, force=force,
                                              skip_browser=skip_browser)
     if cookie:
         return cookie, source
 
-    # 全是网络错误时不弹登录窗口：网断时用户根本登不进去，只会白等一个超时
-    network_only = bool(details) and all("网络错误" in d for d in details)
+    # 决定要不要弹登录窗口的唯一判据：**网络是不是根本不通**。
+    # 两道证据，任一条成立即判不可达（网断时用户登不进去，只会白等一个超时）：
+    #
+    # ① Cookie 通道自证：真试过的通道（env / file / browser 前缀）**全部**
+    #    报「网络错误」。这里必须按前缀白名单取，不能按关键字黑名单剔 ——
+    #    `details` 里混着 `note:` 说明行（如「browser 跳过」），旧写法
+    #    `all("网络错误" in d for d in details)` 把说明行当证据，只要出现一条
+    #    说明行就判成"非全网络错误"，于是网断时照样弹窗白等 90s（P2-1）。
+    #    黑名单的毛病是每加一条说明/证据行就要再破一次，白名单天然免疫。
+    # ② 一条通道都没试过（全新部署 / 从未抓过 Cookie / 本轮跳过浏览器）：
+    #    `details` 里只有说明行，**零证据**，不能因为"没有反例"就放行弹窗。
+    #    补一次独立可达性探测 —— 不能复用 `probe()`：空 Cookie 会被它短路成
+    #    `(False, "空 Cookie")`，既不是网络错误也算不上响应，判不出可达性。
+    attempts = [d for d in details
+                if d.split(":", 1)[0].strip() in _COOKIE_ATTEMPT_PREFIXES]
+
+    network_only = False
+    if allow_interactive:
+        if attempts:
+            network_only = all("网络错误" in d for d in attempts)
+        else:
+            reachable, reach_msg = network_reachable()
+            network_only = not reachable
+            details.append(f"network: {'可达' if reachable else '不可达'}（{reach_msg}）")
 
     if allow_interactive and not network_only:
         if interactive_allowed():

@@ -26,6 +26,9 @@
   ⑬ Cookie 优先级只有一份（env → file → 浏览器），构造期不联网、显式路径不静默回退；
   ⑭ 同一请求内不重复扫浏览器：`skip_browser` 从保存链路两次兜底一路透传到
      `resolve_cookie`（旧实现每次兜底都重扫四个浏览器 + 逐通道 8s 校验）。
+  ⑮ 网络不可达四场景：「通道自证 / 说明行不污染判据 / 零证据靠独立探测 /
+     对照（网络通必弹）」—— ⑭ 那条说明行曾把「全网络错误」判成假，
+     导致网断时仍白等 90s 登录窗。
 
 运行：python Test/test_ths_cookie_autofetch.py     # 非 0 退出即失败
 """
@@ -77,14 +80,19 @@ def _probe_by_value(valid_values, calls=None):
 
 
 class Case:
-    """每个用例共用的一批桩：记录浏览器/弹窗/write 调用。"""
+    """每个用例共用的一批桩：记录浏览器/弹窗/探测/write 调用。
+
+    `reach` 打桩网络可达性探测（`None` = 默认可达）。默认值必须给，否则
+    「一条 Cookie 通道都没试过」的用例会真发 HEAD 出去，测试从离线变联网。
+    """
 
     def __init__(self, file_cookie="", browser=(), valid=(), allowed=True,
-                 login_cookie="", probe=None):
-        self.calls = {"browser": 0, "login": 0}
+                 login_cookie="", probe=None, reach=None):
+        self.calls = {"browser": 0, "login": 0, "reach": 0}
         self.written = []
         self.browser = list(browser)
         self.login_cookie = login_cookie
+        self.reach = reach
         self.probe = probe or _probe_by_value(set(valid))
         self.restore = _patch(
             read_cookie_file=lambda path=None: file_cookie,
@@ -93,10 +101,17 @@ class Case:
             ensure_interactive_login=self._login,
             interactive_allowed=lambda: allowed,
             write_cookie_file=self._write,
+            network_reachable=self._reach,
         )
 
     def _probe(self, cookie, ttl=S.VALIDATE_TTL, timeout=S.PROBE_TIMEOUT):
         return self.probe(cookie, ttl=ttl, timeout=timeout)
+
+    def _reach(self, host=S.REACH_HOST, timeout=S.REACH_TIMEOUT, ttl=S.REACH_TTL):
+        self.calls["reach"] += 1
+        if self.reach is None:
+            return True, "HTTP 200"
+        return self.reach
 
     def _iter_browser(self):
         self.calls["browser"] += 1
@@ -494,6 +509,127 @@ rec("⑭", "同一请求内不重复扫浏览器（skip_browser 透传）",
     _open_fwd and _n_skip == 2 and _skipped_ok and _default_ok,
     f"_open_api 透传={_open_fwd} 兜底带参={_n_skip}(应 2) "
     f"跳过时扫描={c.calls['browser']}(应 0) 默认扫描={c2.calls['browser']}(应 1)")
+
+
+# ⑮ P2-1 回归：网络不可达时，「有通道但全网络错误」与「一条通道都没有」都不许弹窗
+#
+# 缺陷形态（2026-11-12 复核实测）：`details` 里混着一条 `note: browser 通道跳过`
+# **说明行**，旧判据 `all("网络错误" in d for d in details)` 把它当证据 →
+# 判成"非全网络错误" → 网断时照样弹窗，白等 90s。
+# 四个场景必须分开测，它们走两条不同的证据链 + 一条对照：
+#   A 有通道且全网络错误   → 通道自证（前缀白名单判据）
+#   B 同上但本轮跳过浏览器 → 说明行不许污染判据（原缺陷的触发形态）
+#   C 一条通道都没有       → 零证据，靠独立可达性探测
+#   D 对照：同样没有 Cookie，但网络通 → 必须弹窗
+#     （否则"没 Cookie 就一律不弹"这种错误实现会假绿）
+_NET = (False, "ConnectionError: boom")
+
+# A：env 里的 Cookie 已过期 + 全网络错误
+os.environ["THS_COOKIE"] = "ENV=OLD"
+try:
+    with Case(file_cookie="", valid=set(), probe=_net_probe) as c:
+        try:
+            S.ensure_cookie(force=True, allow_interactive=True)
+        except S.ThsCookieUnavailable:
+            pass
+        _a_login, _a_reach = c.calls["login"], c.calls["reach"]
+finally:
+    os.environ.pop("THS_COOKIE", None)
+
+# B：与 A 同因，但同一请求内已扫过浏览器（保存链路的第二次兜底）
+with Case(file_cookie="OLD=1", valid=set(), probe=_net_probe) as c:
+    try:
+        S.ensure_cookie(force=True, allow_interactive=True, skip_browser=True)
+    except S.ThsCookieUnavailable:
+        pass
+    _b_login, _b_reach = c.calls["login"], c.calls["reach"]
+
+# C：全新部署（无 env / 无缓存文件 / 无浏览器登录态）+ 网络不可达
+with Case(file_cookie="", valid=set(), reach=_NET) as c:
+    try:
+        S.ensure_cookie(allow_interactive=True)
+    except S.ThsCookieUnavailable:
+        pass
+    _c_login, _c_reach = c.calls["login"], c.calls["reach"]
+
+# D：对照组 —— 同样没有 Cookie，但网络可达
+with Case(file_cookie="", valid=set(), reach=(True, "HTTP 200"),
+          login_cookie="FRESH=9") as c:
+    _d_cookie, _d_source = S.ensure_cookie(allow_interactive=True)
+    _d_login, _d_reach = c.calls["login"], c.calls["reach"]
+
+rec("⑮", "网络不可达四场景（A 通道自证 / B 说明行不污染 / C 零证据探测 / D 对照必弹）",
+    _a_login == 0 and _b_login == 0 and _c_login == 0
+    and _a_reach == 0 and _b_reach == 0 and _c_reach == 1 and _d_reach == 1
+    and _d_login == 1 and _d_cookie == "FRESH=9" and _d_source == "login",
+    f"A(env过期+断网)login={_a_login} B(跳过浏览器+断网)login={_b_login} "
+    f"C(无Cookie+断网)login={_c_login} D(无Cookie+网通)login={_d_login} | "
+    f"探测次数 a={_a_reach} b={_b_reach} c={_c_reach} d={_d_reach}（应 0/0/1/1）")
+
+
+# ⑯ network_reachable 自身行为（⑮ 把它整个打桩了，函数体零覆盖）
+#
+# 判据方向是刻意不对称的，四条都必须钉住，其中 TLS 那条最容易写错：
+# `requests.exceptions.SSLError` 是 `ConnectionError` 的**子类**，except 顺序
+# 一颠倒，证书告警就会被当成"网络不可达"→ 用户永远看不到登录入口。
+import time as _t                                        # noqa: E402
+import requests as _rq                                   # noqa: E402
+
+_orig_head = _rq.head
+_head_urls = []
+
+
+def _mk_head(exc=None, status=200, delay=0.0):
+    def _head(url, **kw):
+        _head_urls.append(url)
+        if delay:
+            _t.sleep(delay)
+        if exc is not None:
+            raise exc
+
+        class _R:
+            status_code = status
+        return _R()
+    return _head
+
+
+try:
+    S._reach_cache.clear()
+    _rq.head = _mk_head(exc=_rq.exceptions.ConnectionError("boom"))
+    _r_conn = S.network_reachable(ttl=0)
+
+    _rq.head = _mk_head(exc=_rq.exceptions.SSLError("cert expired"))
+    _r_ssl = S.network_reachable(ttl=0)
+
+    _rq.head = _mk_head(status=403)
+    _r_403 = S.network_reachable(ttl=0)
+
+    # 线程超时：head 睡 2s、预算 0.3s ⇒ 必须 ~0.3s 返回 False，而不是等满 2s。
+    # 这条钉的是「socket timeout 不覆盖 getaddrinfo」的防护（裸 requests timeout
+    # 在 DNS 悬停时可能卡十几秒，守卫自己变成新的等待点）。
+    _rq.head = _mk_head(delay=2.0)
+    _t0 = _t.monotonic()
+    _r_tmo = S.network_reachable(timeout=0.3, ttl=0)
+    _elapsed = _t.monotonic() - _t0
+
+    # TTL 缓存：ttl=0 写缓存，紧接着 ttl=60 必须命中、不再发请求
+    S._reach_cache.clear()
+    _rq.head = _mk_head(status=200)
+    S.network_reachable(ttl=0)
+    _n_before = len(_head_urls)
+    _r_cached = S.network_reachable(ttl=60)
+    _n_after = len(_head_urls)
+finally:
+    _rq.head = _orig_head
+    S._reach_cache.clear()
+
+rec("⑯", "network_reachable 自身：连接失败/TLS/HTTP4xx/线程超时/缓存",
+    _r_conn[0] is False and "ConnectionError" in _r_conn[1]
+    and _r_ssl[0] is True and _r_tmo[0] is False and _elapsed < 1.0
+    and _r_403 == (True, "HTTP 403") and _r_cached == (True, "HTTP 200")
+    and _n_after == _n_before,
+    f"conn={_r_conn[0]}/{_r_conn[1][:32]} ssl={_r_ssl[0]} 403={_r_403} "
+    f"超时={_r_tmo[0]}({_elapsed:.2f}s,应<1s) 缓存={_n_after - _n_before}次额外请求(应 0)")
 
 
 # ── 汇总 ──────────────────────────────────────────────────────────────
