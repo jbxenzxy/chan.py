@@ -194,8 +194,9 @@ def _fetch_names_from_sina_once(codes_dict):
 # 中间粒度** —— 实测同一 URL 连打 8 次耗时 1.75~>20s（3 次超 16s），而
 # akshare 默认超时 (10, 60)（akshare/utils/context.py:10），一次抖动整条
 # 指数全丢；eltdx 走 100 条/页 JSON 分页，单页可重试、超时可控、返回 total
-# 可校验截断。代价是正常态更慢（000852 要 10 页 ≈3.5s），故 4 个指数**并发**
-# 拉取并共用一份整体预算。
+# 可校验截断。代价是正常态更慢（本机实测 000852 要 10 页 ≈9.2s，是四个指数里
+# 的瓶颈：占 4 个指数串行总耗时 16.4s 的 56%；注释旧值 ≈3.5s 与实测差 2.6 倍），
+# 故 4 个指数**并发**拉取并共用一份整体预算。
 # 「期望条数」是第二道闸：接口返回 0 或截断时按失败处理、保留旧值，
 # 不再像改造前那样打一条「✅ 成功获取 0只」然后照样落盘。
 _INDEX_BELONG_EXPECTED = {"000300": 300, "000905": 500, "000852": 1000, "000688": 50}
@@ -228,21 +229,23 @@ def _fetch_one_index_belong(index_code, index_name, box):
     """
     try:
         items, source = _index_belong_items(index_code)
-    except Exception as e:              # noqa: BLE001
+        mapping = {}
+        for item in items:
+            mkt = (item.get("market") or "").strip()
+            if not mkt:
+                # AKShare 的「交易所中文名」未命中映射时按代码首位兜底，
+                # 不再静默丢弃该票（旧实现 `if mkt:` 直接跳过）
+                mkt = _infer_bare_code_market(item.get("code", "")) or ""
+            if mkt:
+                mapping[mkt + item["code"]] = index_name
+        expected = _INDEX_BELONG_EXPECTED.get(index_code)
+        if expected is not None and len(mapping) != expected:
+            box["error"] = f"{source} 返回 {len(mapping)} 只，期望 {expected} 只"
+            return
+    except Exception as e:              # noqa: BLE001 —— 线程体内异常必须落到 box
+        # 构造 mapping 也放进 try：异常一旦逃出线程体，线程静默死亡，外层只看到
+        # 「box 空」→ 误报成「超过总预算」，日志里查不到真因。
         box["error"] = f"{type(e).__name__}: {e}"
-        return
-    mapping = {}
-    for item in items:
-        mkt = (item.get("market") or "").strip()
-        if not mkt:
-            # AKShare 的「交易所中文名」未命中映射时按代码首位兜底，
-            # 不再静默丢弃该票（旧实现 `if mkt:` 直接跳过）
-            mkt = _infer_bare_code_market(item.get("code", "")) or ""
-        if mkt:
-            mapping[mkt + item["code"]] = index_name
-    expected = _INDEX_BELONG_EXPECTED.get(index_code)
-    if expected is not None and len(mapping) != expected:
-        box["error"] = f"{source} 返回 {len(mapping)} 只，期望 {expected} 只"
         return
     box["mapping"] = mapping
     box["source"] = source

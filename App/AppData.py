@@ -1355,17 +1355,6 @@ class AppData:
         finally:
             self._pe_live_lock.release()
 
-    def replace_index_belong(self, result):
-        """整体替换指数归属缓存（获取侧 AKShare 刷新完成时调用）
-
-        整段 RMW 持 _meta_cache_lock（与 replace_names 同形）：
-        clear()+update() 期间与快照读者互斥。
-        """
-        with self._meta_cache_lock:
-            self._belong.clear()
-            self._belong.update(result)
-            self._belong_loaded = True
-
     def merge_index_belong(self, per_index):
         """按**指数**合并指数归属（刷新侧逐指数成功时调用）。
 
@@ -1373,11 +1362,11 @@ class AppData:
         通过**的指数。语义是**按指数替换**：出现的指数其旧成员整体换新
         （调仓后剔除的票必须能被移除），未出现的指数保持内存中的原值。
 
-        为什么不用 replace_index_belong（整体替换）：指数归属按指数分别抓取，
-        任一指数超时/被截断就会让它名下所有票的归属一起消失，而刷新侧紧接着
-        落盘 → 一次坏刷新把该指数的归属永久抹掉（2026-11-11 实测：
-        中证500 全部 500 只被清空、沪深300 只剩 280 只）。指数归属季度才
-        调仓，保留旧值远优于清空。
+        为什么不做整体替换（2026-11-11 改造前的 clear()+update()，方法已删除）：
+        指数归属按指数分别抓取，任一指数超时/被截断就会让它名下所有票的归属
+        一起消失，而刷新侧紧接着落盘 → 一次坏刷新把该指数的归属永久抹掉
+        （2026-11-11 实测：中证500 全部 500 只被清空、沪深300 只剩 280 只）。
+        指数归属季度才调仓，保留旧值远优于清空。
 
         合并顺序 = per_index 的插入顺序（调用方按 AKSHARE_INDEX_MAP 顺序传入），
         与整体替换时的「后写覆盖」语义一致（同一只票只存一个归属）。

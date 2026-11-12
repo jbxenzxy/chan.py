@@ -36,7 +36,8 @@
      AppSSE（TqSdkCSSESource 流协议 + TqSdkAPI 会话上下文；
      CTqSdkAPI 主体经 AppEngine 显式名）、
      AppRefresh（TdxAPI.refresh_block_files + collect_codes_from_vipdoc
-      + AkshareAPI 指数归属 + TxAPI 港股名称 + SinaAPI A股名称）、
+      + ElTdxAPI 指数成分股主源 / AkshareAPI 指数归属兜底
+      + TxAPI 港股名称 + SinaAPI A股名称）、
      AppScan（TdxAPI.get_index_stocks + ElTdxAPI 流通市值）、App/AppUtils（仅 TqSdkAPI 纯函数依赖）
      （注：A 股个股 / 港股 PE-TTM 的 ElTdxAPI / TxAPI 装配点已随「PE-TTM 不属于刷新
       功能」迁到 AppEngine::_fetch_pe_ttm_live，AppRefresh 不再持有 PE-TTM；实判见文件

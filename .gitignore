@@ -15,11 +15,17 @@ cos_config.yaml
 # 其余目录下的 .env 仍一律忽略。
 .env
 !/.env
+# candidate_cookie_files() 的三个查找位置都算凭据：Script/ 是规范位置，
+# DataAPI/ 与仓库根是「阶段 2 前」的历史兼容位置 —— 用户若把文件放在那两处，
+# 不忽略就会被 git 跟踪。
 Script/ths_captured_cookie.txt
+/DataAPI/ths_captured_cookie.txt
+/ths_captured_cookie.txt
 # DataAPI/ThsCookieSource 自动取 Cookie 的副产物：浏览器会话状态（含 Cookie）
-# 与原子写的临时文件，同属凭据，一律不入库。
+# 与原子写的临时文件，同属凭据，一律不入库。临时文件由 mkstemp 生成，形如
+# ths_captured_cookie.txt.<随机>.tmp（旧的固定名 .tmp 已被替换）。
 Script/ths_storage_state.json
-Script/ths_captured_cookie.txt.tmp
+Script/ths_captured_cookie.txt*.tmp
 Script/.sync_tdx_config
 # 运行时缓存（stock_names / stock_pettm_index / stock_float_mc / last_code_freq
 # 等联网刷新产生的易变 json，不入库，避免无意义 diff 与合并冲突）

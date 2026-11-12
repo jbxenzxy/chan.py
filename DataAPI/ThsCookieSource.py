@@ -8,6 +8,10 @@ Firefox 打开 https://t.10jqka.com.cn 登录 → 保持登录态 → 运行
 
 取 Cookie 的三级通道（按成本从低到高）
 ---------------------------------------------------------------------
+  优先级与「是否联网校验」是两件事，口径统一收在 `resolve_cookie()`：
+  环境变量 `THS_COOKIE` → 缓存文件 → 本机浏览器 → 登录窗口。`validate=False`
+  只解析不校验（`CThsCloudZxg` 构造用，零网络副作用），`validate=True` 则每个
+  通道都要当场 probe 通过才算命中（`ensure_cookie` 对外承诺「拿到即可用」）。
   ① 缓存：`Script/ths_captured_cookie.txt`（含历史位置兼容），环境变量
      `THS_COOKIE` 优先；命中且**联网校验通过**直接返回，零交互；
   ② 浏览器：后台读本机**已登录**浏览器的同花顺 Cookie（Firefox / Chrome /
@@ -40,6 +44,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -118,25 +123,43 @@ def read_cookie_file(path=None):
 
 
 def write_cookie_file(cookie, path=None):
-    """原子写 Cookie（先写 .tmp 再 os.replace，避免读到半截内容）。"""
+    """原子写 Cookie（同目录 mkstemp → os.replace，避免读到半截内容）。
+
+    临时名必须**唯一**：并发 `ensure_cookie` 同时命中浏览器通道时，固定
+    `.tmp` 名会让两个写手互相覆盖（`_login_lock` 只保护登录窗口那条路）。
+    """
     cookie = (cookie or "").strip()
     if not cookie:
         return False
     path = path or cookie_file()
-    tmp = path + ".tmp"
+    tmp_fd = None
+    tmp_path = None
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(tmp, "w", encoding="utf-8") as f:
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=os.path.dirname(path),
+            prefix=os.path.basename(path) + ".",
+            suffix=".tmp")
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            tmp_fd = None                      # 已交给文件对象
             f.write(cookie)
-        os.replace(tmp, path)
+        os.replace(tmp_path, path)
+        tmp_path = None
         return True
     except OSError as e:
         log.info("[THS-Cookie] 写入 %s 失败：%s", path, e)
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
         return False
+    finally:
+        if tmp_fd is not None:
+            try:
+                os.close(tmp_fd)
+            except OSError:
+                pass
+        if tmp_path:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -180,7 +203,15 @@ def parse_jsonp(text, callback_name=None):
 # ═══════════════════════════════════════════════════════════════════════
 
 def probe(cookie, timeout=PROBE_TIMEOUT):
-    """用给定 Cookie 请求自选股接口，返回 (是否登录有效, 说明)。"""
+    """用给定 Cookie 请求自选股接口，返回 (是否登录有效, 说明)。
+
+    失败原因分三类，`ensure_cookie` 据此决定要不要弹登录窗口：
+      · ``网络错误:`` —— 连接失败 / 超时 / DNS。网络本身不通，弹窗用户也登不进去，
+        故「所有通道都是网络错误」时跳过登录窗口；
+      · ``服务端拒绝:`` —— HTTP 4xx/5xx（WAF 拦截 / 429 限流 / 5xx）。网络是通的，
+        Cookie 该换就换，**不能**归进网络错误，否则该弹的窗口被静默跳过；
+      · ``校验异常:`` —— 其它意外（重定向过多 / URL 非法…），同样不算网络不可达。
+    """
     if not cookie:
         return False, "空 Cookie"
     try:
@@ -194,10 +225,13 @@ def probe(cookie, timeout=PROBE_TIMEOUT):
                             headers=headers, timeout=timeout)
         resp.raise_for_status()
         data = parse_jsonp(resp.text)
-    except Exception as e:                      # noqa: BLE001 —— 网络异常一律视为不可用
-        # 前缀固定为「网络错误」：调用方据此区分「没登录」与「网断了」——
-        # 网断时弹登录窗口毫无意义（用户登不进去），只会白等一个超时。
+    except requests.exceptions.HTTPError as e:
+        status = getattr(getattr(e, "response", None), "status_code", "?")
+        return False, f"服务端拒绝: HTTP {status}"
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
         return False, f"网络错误: {type(e).__name__}: {e}"
+    except Exception as e:                      # noqa: BLE001 —— 其它异常不算网络不可达
+        return False, f"校验异常: {type(e).__name__}: {e}"
     if data.get("errorCode") == 0:
         return True, f"OK（自选 {len(data.get('result') or [])} 只）"
     return False, str(data.get("errorMsg") or f"errorCode={data.get('errorCode')}")
@@ -303,6 +337,12 @@ def interactive_login(timeout=DEFAULT_LOGIN_TIMEOUT, headless=False):
 
     读的是**当前会话内存**里的 Cookie（不碰浏览器磁盘库），因此不存在
     Firefox 被占用 / Edge app-bound 加密那类问题。
+
+    登录成功的判定信号 = 「同域 Cookie 的 (name, domain, value) 集合发生变化」。
+    含 value 是必须的：`new_context(storage_state=...)` 会带进旧 Cookie，首轮
+    信号即非空并把 `last_sig` 锁定；用户登录时往往**只换同一批 Cookie 的值**
+    （名字/域不变），只看 (name, domain) 就恒等、永远检测不到 —— 表现为登录
+    窗口等到超时、随即进入 10 分钟失败冷却。
     """
     try:
         from playwright.sync_api import sync_playwright
@@ -337,7 +377,8 @@ def interactive_login(timeout=DEFAULT_LOGIN_TIMEOUT, headless=False):
             last_sig = None
             while time.monotonic() < deadline:
                 cookies = context.cookies()
-                sig = tuple(sorted((c.get("name"), c.get("domain"))
+                sig = tuple(sorted((c.get("name"), c.get("domain"),
+                                    c.get("value") or "")
                                    for c in cookies if THS_DOMAIN in (c.get("domain") or "")))
                 if sig and sig != last_sig:
                     last_sig = sig
@@ -425,12 +466,23 @@ def _login_via_subprocess(script, timeout):
 # 对外唯一入口
 # ═══════════════════════════════════════════════════════════════════════
 
-def ensure_cookie(force=False, allow_interactive=False, login_timeout=DEFAULT_LOGIN_TIMEOUT):
-    """取一份**当场校验可用**的 Cookie，返回 (cookie, 来源)。
+def resolve_cookie(validate=False, force=False, timeout=PROBE_TIMEOUT):
+    """按**统一优先级**解析一份 Cookie：环境变量 → 文件 → 本机浏览器。
 
-    来源取值：`env` / `file` / `browser:<浏览器>` / `login`。
-    `force=True` 表示跳过校验缓存（调用方已发现 Cookie 不好使）。
-    全通道失败抛 `ThsCookieUnavailable`。
+    优先级只有这一处定义：面板保存链路（`ensure_cookie`）与同步脚本
+    （`CThsCloudZxg.__init__`）都从这里取，避免两条链路口径相反 ——
+    旧实现 `__init__` 是「文件优先且完全不读 THS_COOKIE」，同时存在环境变量
+    （有效）与旧 Cookie 文件（已过期）时，脚本会用旧文件并提示"请更新 Cookie"。
+
+    `validate` 决定**要不要当场联网校验**，与优先级无关：
+      · True  —— 每个通道都必须 probe 通过才算命中（`ensure_cookie` 用）；
+      · False —— 只看内容非空（构造函数用：`CThsCloudZxg(...)` 是纯配置动作，
+        不该在构造期产生网络副作用，也不该阻塞数十秒）。
+    只解析、不落盘：`validate=False` 命中浏览器通道时**不**写回 Cookie 文件
+    （避免把「构造一个对象」变成写操作）。
+
+    返回 (cookie, source, details)；全通道未命中时 cookie 为空串，
+    `details` 逐条记录每个通道的失败原因。
     """
     ttl = 0 if force else VALIDATE_TTL
     details = []
@@ -440,22 +492,44 @@ def ensure_cookie(force=False, allow_interactive=False, login_timeout=DEFAULT_LO
     for cookie, source in ((env_cookie, "env"), (file_cookie, "file")):
         if not cookie:
             continue
-        ok, msg = probe_cached(cookie, ttl=ttl)
+        if not validate:
+            log.info("[THS-Cookie] 使用%s中的 Cookie（未校验）",
+                     "环境变量" if source == "env" else "缓存文件")
+            return cookie, source, details
+        ok, msg = probe_cached(cookie, ttl=ttl, timeout=timeout)
         if ok:
-            log.info("[THS-Cookie] 使用%s中的 Cookie（%s）", "环境变量" if source == "env" else "缓存文件", msg)
-            return cookie, source
+            log.info("[THS-Cookie] 使用%s中的 Cookie（%s）",
+                     "环境变量" if source == "env" else "缓存文件", msg)
+            return cookie, source, details
         details.append(f"{source}: {msg}")
         log.info("[THS-Cookie] %s 通道的 Cookie 不可用：%s", source, msg)
 
     for name, cookie, count in iter_browser_cookies():
-        ok, msg = probe_cached(cookie, ttl=0)
+        if not validate:
+            log.info("[THS-Cookie] 从 %s 取到 Cookie（%d 条，未校验）", name, count)
+            return cookie, f"browser:{name}", details
+        ok, msg = probe_cached(cookie, ttl=0, timeout=timeout)
         if ok:
             write_cookie_file(cookie)
             log.info("[THS-Cookie] ✅ 从 %s 取到有效 Cookie（%d 条，%s），已写回 %s",
                      name, count, msg, cookie_file())
-            return cookie, f"browser:{name}"
+            return cookie, f"browser:{name}", details
         details.append(f"browser:{name}: {msg}")
         log.info("[THS-Cookie] 浏览器 %s 的 Cookie 不可用：%s", name, msg)
+    return "", "", details
+
+
+def ensure_cookie(force=False, allow_interactive=False, login_timeout=DEFAULT_LOGIN_TIMEOUT):
+    """取一份**当场校验可用**的 Cookie，返回 (cookie, 来源)。
+
+    来源取值：`env` / `file` / `browser:<浏览器>` / `login`。
+    `force=True` 表示跳过校验缓存（调用方已发现 Cookie 不好使）。
+    通道顺序由 `resolve_cookie()` 统一给出（env → file → 浏览器 → 登录窗口）；
+    全通道失败抛 `ThsCookieUnavailable`。
+    """
+    cookie, source, details = resolve_cookie(validate=True, force=force)
+    if cookie:
+        return cookie, source
 
     # 全是网络错误时不弹登录窗口：网断时用户根本登不进去，只会白等一个超时
     network_only = bool(details) and all("网络错误" in d for d in details)

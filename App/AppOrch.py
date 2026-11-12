@@ -204,7 +204,7 @@ SHARED_RESOURCE_REGISTRY = {
     "meta_caches（_names / _pe / _belong）": (
         "进程内", "AppData._meta_cache_lock (RLock)", "REST / 刷新工作线程 / 扫描线程",
         "股票名称 / PE-TTM / 指数归属三张惰性表。v5 **完全未登记**：写者是刷新"
-        "线程（replace_names / replace_index_belong 的 clear()+update()），读者"
+        "线程（replace_names / merge_index_belong 的 clear()+update()），读者"
         "是全部 REST 与扫描线程。点查（.get）在 CPython 下原子，**遍历不安全**"
         "——遍历一律经 names_snapshot() / pe_snapshot() / belong_snapshot()。"
         "惰性加载改为「先填本地字典、整体提交后才置 loaded 旗」+ 双检锁，"

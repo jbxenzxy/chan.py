@@ -19,7 +19,9 @@ stock_index_belong.json 里 500 只中证500 成分股一条不剩。根因不�
   ④ 超整体预算 → 该指数判失败，总耗时不超预算；
   ⑤ 合并语义：成功指数整体换新、失败指数旧值保留；
   ⑥ 静态契约：刷新侧走 merge_index_belong，不再调用 replace_index_belong；
-  ⑦ eltdx 侧自检：服务端 total 与实收行数不一致要抛异常（防分页静默截断）。
+  ⑦ eltdx 侧自检：服务端 total 与**实收行数**不一致要抛异常（防分页静默截断）；
+     「行被过滤/去重」不算截断（否则主源会被误判失败、静默退回兜底源）。
+  ⑧ 期望条数与**独立真值**一致（实现改错时本用例必须红）。
 
 运行：python Test/test_index_belong_sources.py     # 校验（非 0 退出即失败）
 """
@@ -38,8 +40,12 @@ from DataAPI import ElTdxAPI                               # noqa: E402
 
 results = []
 
-# 期望条数由被测模块自己的映射推出，避免本用例另存一份真值
-EXPECTED = dict(R._INDEX_BELONG_EXPECTED)
+# 期望条数的**独立真值**（刻意不从被测模块取）：
+# 2026-11-11 实测 eltdx index_members 与 AKShare index_stock_cons_csindex 对
+# 这 4 个指数返回条数完全一致（300/500/1000/50）。此处另存一份，用于发现
+# `_INDEX_BELONG_EXPECTED` 被改错 —— 若从实现推出，改错也没人报警。
+EXPECTED_TRUE = {"000300": 300, "000905": 500, "000852": 1000, "000688": 50}
+EXPECTED = EXPECTED_TRUE
 NAMES = dict(R.AKSHARE_INDEX_MAP)          # code -> name
 
 
@@ -62,13 +68,18 @@ class _Patched:
 
     def __enter__(self):
         self._e, self._a = R.fetch_index_members, R.fetch_index_cons
-        self._belong, self._loaded = app_data._belong, app_data._belong_loaded
+        # 存**内容快照**而不是 dict 引用：用例 ⑤ 用 app_data._belong.clear()
+        # 原地清空，按引用恢复等于把被测试数据污染过的同一个对象放回去（假恢复）。
+        self._belong_snapshot = dict(app_data._belong)
+        self._loaded = app_data._belong_loaded
         R.fetch_index_members, R.fetch_index_cons = self.eltdx_fn, self.ak_fn
         return self
 
     def __exit__(self, *exc):
         R.fetch_index_members, R.fetch_index_cons = self._e, self._a
-        app_data._belong, app_data._belong_loaded = self._belong, self._loaded
+        app_data._belong.clear()
+        app_data._belong.update(self._belong_snapshot)
+        app_data._belong_loaded = self._loaded
         return False
 
 
@@ -181,10 +192,10 @@ def test_no_whole_replace():
 
 
 def test_eltdx_total_mismatch():
-    """⑦ eltdx 侧自检：total 与实收行数不一致要抛（防分页静默截断）。"""
+    """⑦ eltdx 侧自检：真截断抛异常；行被过滤/去重**不算**截断。"""
     class _Row:
-        def __init__(self, code):
-            self.code, self.market = code, "sh"
+        def __init__(self, code, market="sh"):
+            self.code, self.market = code, market
 
     class _Table:
         def __init__(self, total, rows):
@@ -192,27 +203,53 @@ def test_eltdx_total_mismatch():
 
     orig = ElTdxAPI._fetch_index_member_table
     try:
-        ElTdxAPI._fetch_index_member_table = lambda c: _Table(300, [_Row("600000")] * 298)
-        raised = False
+        # ⑦a 真截断：服务端说 300，只回来 298 行 → 必须抛
+        ElTdxAPI._fetch_index_member_table = lambda c: _Table(
+            300, [_Row(f"{600000 + i}") for i in range(298)])
+        truncated = False
         try:
             ElTdxAPI.fetch_index_members("000300")
         except RuntimeError:
-            raised = True
-        ElTdxAPI._fetch_index_member_table = lambda c: _Table(2, [_Row("600000"), _Row("600001")])
+            truncated = True
+        # ⑦b 过滤：300 行齐全，其中 1 行 market 表外(hk) + 1 行重复 → **不抛**
+        #     （旧实现拿过滤后的 298 比对 total=300，会误报「分页不完整」）
+        rows = ([_Row(f"{600000 + i}") for i in range(298)]
+                + [_Row("600298", "hk"), _Row("600000", "sh")])
+        ElTdxAPI._fetch_index_member_table = lambda c: _Table(300, rows)
         items = ElTdxAPI.fetch_index_members("000300")
-        ok = raised and len(items) == 2 and items[0] == {"code": "600000", "market": "sh"}
+        filtered_ok = (len(items) == 298
+                       and not any(i["code"] == "600298" for i in items))
+        # ⑦c 正常：market 原样透传
+        ElTdxAPI._fetch_index_member_table = lambda c: _Table(
+            2, [_Row("600000"), _Row("000001", "sz")])
+        norm = ElTdxAPI.fetch_index_members("000300")
+        shape_ok = norm == [{"code": "600000", "market": "sh"},
+                            {"code": "000001", "market": "sz"}]
     finally:
         ElTdxAPI._fetch_index_member_table = orig
-    rec("⑦", "eltdx total 自检 + 返回结构", ok, f"截断抛异常={raised}，正常返回 {len(items)} 条")
+    rec("⑦", "eltdx 自检：真截断抛异常 / 过滤不算截断 / 返回结构",
+        truncated and filtered_ok and shape_ok,
+        f"截断抛异常={truncated} 过滤后 {len(items)} 只（应 298）={filtered_ok} "
+        f"结构={shape_ok}")
+
+
+def test_expected_truth():
+    """⑧ 实现里的期望条数与独立真值一致（防「改实现顺手改测试」）。"""
+    impl = dict(R._INDEX_BELONG_EXPECTED)
+    same = impl == EXPECTED_TRUE
+    covered = set(NAMES) == set(EXPECTED_TRUE)
+    rec("⑧", "期望条数与独立真值一致", same and covered,
+        f"实现={impl} 真值={EXPECTED_TRUE} 覆盖全部指数={covered}")
 
 
 def main():
     print("=" * 64)
     print("指数归属取数路径验证（eltdx 主源 / AKShare 兜底）")
     print("=" * 64)
-    for fn in (test_eltdx_primary, test_akshare_fallback, test_empty_falls_back,
-               test_count_guard, test_budget, test_merge_semantics,
-               test_no_whole_replace, test_eltdx_total_mismatch):
+    for fn in (test_expected_truth, test_eltdx_primary, test_akshare_fallback,
+               test_empty_falls_back, test_count_guard, test_budget,
+               test_merge_semantics, test_no_whole_replace,
+               test_eltdx_total_mismatch):
         try:
             fn()
         except Exception as e:                              # noqa: BLE001

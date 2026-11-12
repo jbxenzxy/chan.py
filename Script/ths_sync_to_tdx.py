@@ -109,7 +109,12 @@ def main():
     log.info("  同花顺 -> 通达信 自选股同步")
     log.info("=" * 50)
 
-    api = CThsCloudZxg(cookie_file=args.cookie_file)
+    try:
+        api = CThsCloudZxg(cookie_file=args.cookie_file)
+    except ValueError as e:
+        # 显式 --cookie-file 写错 / 一个通道都没命中：给一行结论，不要 traceback
+        log.error("[错误] %s", e)
+        sys.exit(1)
     if not api.check_login():
         log.error("[错误] 同花顺登录状态失效，请更新 Cookie")
         sys.exit(1)

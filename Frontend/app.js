@@ -8594,8 +8594,8 @@
                 // 同花顺状态：区分成功/已存在/失败/未配置
                 if (data.ths_saved > 0) {
                     parts.push("<span style='color:#a8b2d1'>同花顺：</span><span style='color:#ff3c3c'>" + data.ths_saved + "</span><span style='color:#a8b2d1'> 只</span>");
-                } else if (!data.ths_msg || data.ths_msg === "THS_DIR 未配置") {
-                    // 未配置同花顺目录，静默不显示
+                } else if (!data.ths_msg) {
+                    // 无同花顺状态（该源未启用或后端未回 msg），静默不显示
                 } else if (data.ths_msg === "ok") {
                     parts.push("<span style='color:#a8b2d1'>同花顺：</span><span style='color:#ff3c3c'> 已保存</span>");
                 } else {
@@ -8604,8 +8604,7 @@
                 }
                 // 失败原因挂 title（鼠标悬浮可见）：按钮宽度有限，只放状态；
                 // 具体原因（如「2 只失败：传入股票代码有误」）不显示出来等于没报。
-                btn.title = (data.ths_msg && data.ths_msg !== "ok"
-                             && data.ths_msg !== "THS_DIR 未配置")
+                btn.title = (data.ths_msg && data.ths_msg !== "ok")
                     ? ("同花顺：" + data.ths_msg) : "";
                 btn.innerHTML = parts.join("&nbsp;&nbsp;&nbsp;");
                 setTimeout(function() {

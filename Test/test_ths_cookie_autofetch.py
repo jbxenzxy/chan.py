@@ -19,7 +19,11 @@
   ⑦ Cookie 文件原子写（无 .tmp 残留、去首尾空白、空串不落盘）；
   ⑧ 静态契约：Script 工具只做 CLI（逻辑在 provider）、AppScan 不再要求「运行脚本」、
      DataAPI 不反向依赖 App（保持单向依赖）；
-  ⑨ JSONP 三形态解析 + Cookie 同名去重（后写覆盖，与历史实现一致）。
+  ⑨ JSONP 三形态解析 + Cookie 同名去重（后写覆盖，与历史实现一致）；
+  ⑩ 全部通道都是「网络错误」→ 不弹登录窗口（网断时弹窗只会白等超时）；
+  ⑪ 登录检测信号含 **value**：同名同域只换值也能检出（真跑 interactive_login）；
+  ⑫ probe 异常分类：HTTP 4xx/5xx 归「服务端拒绝」而非「网络错误」，仍允许弹窗；
+  ⑬ Cookie 优先级只有一份（env → file → 浏览器），构造期不联网、显式路径不静默回退。
 
 运行：python Test/test_ths_cookie_autofetch.py     # 非 0 退出即失败
 """
@@ -249,6 +253,211 @@ with Case(file_cookie="OLD=1", valid=set(), probe=_net_probe,
         err is not None and c.calls["login"] == 0
         and any("网络不可达" in d for d in err.details),
         f"login={c.calls['login']} details={getattr(err, 'details', None)}")
+
+
+# ⑪ interactive_login 的「登录成功」信号必须含 value
+#    缺陷形态：复用 storage_state 时首轮 Cookie 集非空 → last_sig 被锁定；用户
+#    登录后往往**只换同一批 Cookie 的值**（名字/域不变）→ 只看 (name, domain)
+#    永远等不到变化，窗口等到超时、随即进入 10 分钟失败冷却。
+#    本用例**真跑** interactive_login 的函数体（此前的 ⑤ 把 ensure_interactive_login
+#    整个打桩，函数体零执行），只把 playwright 与联网校验换成假件。
+def _run_interactive_login(rounds, valid_values):
+    """用假 playwright 跑真实 interactive_login；返回 (cookie, probe 记录, write 记录)。"""
+    import types
+
+    class _Page:
+        def goto(self, *a, **k):
+            return None
+
+    class _Ctx:
+        def __init__(self):
+            self.i = -1
+
+        def add_init_script(self, *a):
+            return None
+
+        def new_page(self):
+            return _Page()
+
+        def cookies(self):
+            self.i += 1
+            return rounds[min(self.i, len(rounds) - 1)]
+
+        def storage_state(self, path=None):
+            return None
+
+    class _Browser:
+        def __init__(self):
+            self.ctx = _Ctx()
+
+        def new_context(self, **kwargs):
+            return self.ctx
+
+        def close(self):
+            return None
+
+    class _PW:
+        def __init__(self):
+            self.chromium = self
+            self.browser = _Browser()
+
+        def launch(self, **kwargs):
+            return self.browser
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    class _Clock:
+        """假时钟：sleep 只推进虚拟时间，用例不真等。"""
+
+        def __init__(self):
+            self.t = 1000.0
+
+        def monotonic(self):
+            return self.t
+
+        def sleep(self, s):
+            self.t += s
+
+    probes, writes = [], []
+    fake_pw = types.ModuleType("playwright.sync_api")
+    fake_pw.sync_playwright = lambda: _PW()
+    snapshot = {k: sys.modules.get(k) for k in ("playwright", "playwright.sync_api")}
+    restore = _patch(
+        probe_cached=lambda cookie, ttl=S.VALIDATE_TTL, timeout=S.PROBE_TIMEOUT: (
+            probes.append(cookie) or (cookie in valid_values, "OK（自选 1 只）")),
+        write_cookie_file=lambda cookie, path=None: writes.append(cookie) or True,
+        state_file=lambda: os.path.join(tmpdir, "no_state.json"),
+        _launch_browser=lambda p, headless=False: p.chromium.launch(),
+        time=_Clock(),
+    )
+    sys.modules["playwright"] = types.ModuleType("playwright")
+    sys.modules["playwright.sync_api"] = fake_pw
+    try:
+        cookie = S.interactive_login(timeout=8, headless=True)
+    finally:
+        restore()
+        for k, v in snapshot.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
+    return cookie, probes, writes
+
+
+_ROUND_VALUE_ONLY = [
+    [{"name": "userid", "domain": ".10jqka.com.cn", "value": "u1"},
+     {"name": "ticket", "domain": ".10jqka.com.cn", "value": "OLD"}],
+    [{"name": "userid", "domain": ".10jqka.com.cn", "value": "u1"},
+     {"name": "ticket", "domain": ".10jqka.com.cn", "value": "NEW"}],
+]
+# 先用例形状自证：两轮的 (name, domain) 集合必须**完全相同**、只有 value 变，
+# 否则这条用例测不到本缺陷（例如误加了新 Cookie 名字就变成「名字集变化」）。
+_old_form = [tuple(sorted((c["name"], c["domain"]) for c in rnd))
+             for rnd in _ROUND_VALUE_ONLY]
+_fixture_ok = _old_form[0] == _old_form[1]
+_cookie_v, _probes_v, _writes_v = _run_interactive_login(
+    _ROUND_VALUE_ONLY, {"userid=u1; ticket=NEW"})
+rec("⑪", "登录检测信号含 value（同名同域只换值也能检出）",
+    _fixture_ok and _cookie_v == "userid=u1; ticket=NEW"
+    and _writes_v == ["userid=u1; ticket=NEW"] and len(_probes_v) == 2,
+    f"用例形状(两轮名字集相同)={_fixture_ok} 返回={_cookie_v!r} "
+    f"probe={len(_probes_v)} write={_writes_v}")
+
+# ⑫ probe 的异常分类：HTTP 4xx/5xx 归「服务端拒绝」，不得混进「网络错误」
+import requests                                  # noqa: E402
+
+class _Resp:
+    status_code = 403
+
+
+_orig_get = requests.get
+
+
+def _raise_http(*a, **k):
+    raise requests.exceptions.HTTPError("403 Client Error: Forbidden", response=_Resp())
+
+
+def _raise_conn(*a, **k):
+    raise requests.exceptions.ConnectionError("boom")
+
+
+try:
+    requests.get = _raise_http
+    _ok403, _msg403 = S.probe("A=1")
+    requests.get = _raise_conn
+    _oknet, _msgnet = S.probe("A=1")
+finally:
+    requests.get = _orig_get
+_cls_ok = (not _ok403 and _msg403.startswith("服务端拒绝")
+           and not _oknet and _msgnet.startswith("网络错误"))
+rec("⑫", "probe 异常分类：403→服务端拒绝 / 连接失败→网络错误", _cls_ok,
+    f"403={_msg403!r} conn={_msgnet!r}")
+
+# ⑫b 全通道都是「服务端拒绝」时必须**仍然弹窗**：网络是通的，用户完全能登录
+with Case(file_cookie="OLD=1", valid=set(),
+          probe=lambda cookie, ttl=S.VALIDATE_TTL, timeout=S.PROBE_TIMEOUT:
+              (False, "服务端拒绝: HTTP 403"),
+          browser=[("firefox", "B=1", 3)], allowed=True,
+          login_cookie="FRESH=9") as c:
+    _cookie_403, _source_403 = S.ensure_cookie(force=True, allow_interactive=True)
+    _popup_ok = (_cookie_403 == "FRESH=9" and _source_403 == "login"
+                 and c.calls["login"] == 1)
+rec("⑫b", "服务端拒绝（403）仍允许弹登录窗口", _popup_ok,
+    f"cookie={_cookie_403!r} source={_source_403} login={c.calls['login']}")
+
+# ⑬ Cookie 优先级只有一份（env → file → 浏览器）；构造期不联网；显式路径不静默回退
+os.environ["THS_COOKIE"] = "ENV=1"
+restore = _patch(
+    read_cookie_file=lambda path=None: "FILE=1",
+    iter_browser_cookies=lambda: iter([("firefox", "BROWSER=1", 3)]),
+    probe_cached=lambda *a, **k: (_ for _ in ()).throw(AssertionError("不该联网")))
+try:
+    _c1, _s1, _ = S.resolve_cookie(validate=False)
+finally:
+    restore()
+    os.environ.pop("THS_COOKIE", None)
+
+restore = _patch(
+    read_cookie_file=lambda path=None: "FILE=1",
+    iter_browser_cookies=lambda: iter([("firefox", "BROWSER=1", 3)]))
+try:
+    _c2, _s2, _ = S.resolve_cookie(validate=False)
+finally:
+    restore()
+_env_first = (_c1, _s1) == ("ENV=1", "env")
+_file_first = (_c2, _s2) == ("FILE=1", "file")
+
+from DataAPI.ThsCloudZxgAPI import CThsCloudZxg    # noqa: E402
+
+_explicit_err = ""
+try:
+    CThsCloudZxg(cookie_file=os.path.join(tmpdir, "nope.txt"))
+except ValueError as e:
+    _explicit_err = str(e)
+_explicit_ok = "不存在" in _explicit_err
+
+# 构造期不得联网：只剩浏览器通道时也必须能 new 出来，且不触发 probe
+restore = _patch(
+    read_cookie_file=lambda path=None: "",
+    iter_browser_cookies=lambda: iter([("firefox", "BROWSER=1", 3)]),
+    probe_cached=lambda *a, **k: (_ for _ in ()).throw(AssertionError("构造期不该联网")))
+try:
+    _api = CThsCloudZxg()
+    _ctor_ok = (_api.cookie == "BROWSER=1" and _api.cookie_source == "browser:firefox")
+    _ctor_detail = f"{_api.cookie!r} source={_api.cookie_source}"
+except AssertionError as e:
+    _ctor_ok, _ctor_detail = False, f"构造期联网了：{e}"
+finally:
+    restore()
+
+rec("⑬", "Cookie 优先级统一 + 构造期不联网 + 显式路径不静默回退",
+    _env_first and _file_first and _explicit_ok and _ctor_ok,
+    f"env={_env_first}({(_c1, _s1)}) file={_file_first}({(_c2, _s2)}) "
+    f"显式缺失={_explicit_err!r} 构造={_ctor_detail}")
 
 
 # ── 汇总 ──────────────────────────────────────────────────────────────

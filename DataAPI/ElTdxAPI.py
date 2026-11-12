@@ -1178,14 +1178,19 @@ def fetch_index_members(index_code):
 
     返回结构与 ``AkshareAPI.fetch_index_cons`` **完全一致**，调用方可无差别
     互换。market 直接来自服务端市场标记 N004（0=sz / 1=sh / 2=bj，见
-    ``eltdx.f10.models.ID_TO_MARKET``），缺失时才按代码段推断 —— 故不需要
-    AKShare 那条「中文交易所名 → 前缀」映射。
+    ``eltdx.f10.models.ID_TO_MARKET``），故不需要 AKShare 那条「中文交易所名
+    → 前缀」映射。
 
     两处自检（AKShare 那条路没有）：
-      · ``total``（服务端报告的样本数）与实收行数不一致 → 抛异常，避免分页
-        被截断时「少几十只」静默通过；
-      · 代码非 6 位数字 / 市场缺失的行直接丢弃，条数不足由调用方的期望条数
-        校验兜住。
+      · ``total``（服务端报告的样本数）与**实收行数** ``len(rows)`` 不一致 →
+        抛异常，避免分页被截断时「少几十只」静默通过；
+      · 代码非 6 位数字 / 重复 / market 不在 ``ELTDX_MARKETS`` 的行丢弃并告警
+        （计进 ``dropped``）。本层**不推断市场** —— 推断是 App 层
+        ``_infer_bare_code_market`` 的职责（DataAPI 不反向依赖 App），条数不足
+        由调用方的期望条数校验兜住。
+
+    ⚠ 判据必须是**原始行数**：拿过滤/去重后的条数比对 ``total``，会把「有一只
+    票被过滤」误报成「分页被截断」，让该指数主源静默失效、退回兜底源。
 
     取数失败**抛异常**（与 fetch_pe_ttm_single 同语义，不静默返回 []），
     使调用方能区分「取数失败」与「该指数真的没有成分股」。
@@ -1200,18 +1205,25 @@ def fetch_index_members(index_code):
         rows = list(getattr(table, "rows", ()) or ())
         items = []
         seen = set()
+        dropped = 0
         for row in rows:
             code = (getattr(row, "code", None) or "").strip()
             market = (getattr(row, "market", None) or "").strip().lower()
             if len(code) != 6 or not code.isdigit() or code in seen:
+                dropped += 1
                 continue
             if market not in ELTDX_MARKETS:
+                dropped += 1
                 continue
             seen.add(code)
             items.append({"code": code, "market": market})
         total = getattr(table, "total", None)
-        if total is not None and len(items) != total:
+        if total is not None and len(rows) != total:
             raise RuntimeError(
-                f"分页不完整: 服务端 total={total}, 实收 {len(items)} 只")
+                f"分页不完整: 服务端 total={total}, 实收 {len(rows)} 行")
+        if dropped:
+            log.warning("[指数成分] %s 丢弃 %d 行（非6位代码/重复/market 表外），"
+                        "实收 %d 只（服务端 total=%s）",
+                        index_code, dropped, len(items), total)
         return items
     raise RuntimeError(f"[指数成分] {index_code} 取数失败: {last_err}")

@@ -2,13 +2,14 @@
 同花顺云端自选股同步模块
 通过同花顺 Web API 直接增删自选股，云端实时同步，无需重启客户端。
 
-Cookie 从哪来：**不需要人工准备**。取数逻辑统一收在
-`DataAPI/ThsCookieSource.py`（缓存文件 → 本机已登录浏览器 → 登录窗口），
-本模块只在「拿到的 Cookie 用不了」时再向它要一次（见 `save_scan_to_ths_cloud`）。
+Cookie 从哪来：**不需要人工准备**。取数逻辑与**优先级**统一收在
+`DataAPI/ThsCookieSource.py::resolve_cookie`：环境变量 `THS_COOKIE` → Cookie
+文件 → 本机已登录浏览器 → 登录窗口；本模块只在「拿到的 Cookie 用不了」时
+再向 `ensure_cookie` 要一次（见 `save_scan_to_ths_cloud`）。
 
-仍支持显式指定（优先级最高）：
+仍支持显式指定（优先级最高，且**不做校验**）：
   · `CThsCloudZxg(cookie="...")` / `(cookie_file="...")`
-  · 环境变量 `THS_COOKIE`
+  · 环境变量 `THS_COOKIE`（与文件、浏览器同处一条优先级链，见上）
 """
 
 import requests
@@ -21,6 +22,7 @@ from DataAPI.ThsCookieSource import (
     parse_jsonp,
     probe_cached,
     read_cookie_file,
+    resolve_cookie,
 )
 log = logging.getLogger(__name__)
 
@@ -50,31 +52,37 @@ class CThsCloudZxg:
     def __init__(self, cookie: str = None, cookie_file: str = None):
         """
         初始化 API
+
+        Cookie 来源优先级（与 `ThsCookieSource.resolve_cookie` **同一口径**）：
+        显式 `cookie` → 显式 `cookie_file` → 环境变量 `THS_COOKIE` → Cookie 文件
+        （`candidate_cookie_files()`：① Script/ ② DataAPI/ ③ 仓库根）→ 本机浏览器。
+
+        **构造期不联网**：非显式分支走 `resolve_cookie(validate=False)`，只解析
+        不校验 —— 避免「new 一个对象」就 probe 一遍再扫四个浏览器（最坏数十秒）。
+        需要「拿到即保证可用」的调用方走 `_open_api()`（内部 `ensure_cookie`）。
+
         :param cookie: 同花顺登录后的完整 Cookie 字符串（显式指定，优先级最高）
-        :param cookie_file: 指定 Cookie 文件路径；不传时按
-                            `ThsCookieSource.candidate_cookie_files()` 的顺序查找
-                            （① Script/ths_captured_cookie.txt ② DataAPI/ ③ 仓库根），
-                            都读不到再向 `ensure_cookie()`（浏览器通道）要一次。
+        :param cookie_file: 指定 Cookie 文件路径；**指定了就必须存在且非空**，
+                            否则抛 ValueError（不静默退回自动通道，否则配置写错
+                            也会"看起来能用"，用的是别的凭证）
         """
         self.cookie_source = "explicit"
         if cookie:
             self.cookie = cookie
-        elif cookie_file and os.path.exists(cookie_file):
+        elif cookie_file:
+            if not os.path.exists(cookie_file):
+                raise ValueError(f"指定的 Cookie 文件不存在：{cookie_file}")
             self.cookie_source = "cookie_file"
             self.cookie = read_cookie_file(cookie_file)
-        else:
-            self.cookie = read_cookie_file()
-            self.cookie_source = "file"
             if not self.cookie:
-                # 文件没有 → 后台读本机已登录浏览器（**不弹窗**，构造函数保持无交互）
-                try:
-                    self.cookie, self.cookie_source = ensure_cookie(allow_interactive=False)
-                except ThsCookieUnavailable as e:
-                    raise ValueError(str(e)) from e
+                raise ValueError(f"指定的 Cookie 文件为空：{cookie_file}")
+        else:
+            # 优先级与面板保存链路一致（env → 文件 → 浏览器），但**不校验**
+            self.cookie, self.cookie_source, _details = resolve_cookie(validate=False)
 
         if not self.cookie:
             raise ValueError(
-                "未找到同花顺 Cookie，且未能从本机浏览器自动获取。\n"
+                "未找到同花顺 Cookie（环境变量 THS_COOKIE / Cookie 文件 / 本机浏览器均未命中）。\n"
                 "  解法：在浏览器打开 https://t.10jqka.com.cn 登录一次（之后本程序自动接管），"
                 "或运行 python Script/ths_capture_cookie.py 登录一次。"
             )
