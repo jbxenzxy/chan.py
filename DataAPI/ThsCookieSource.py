@@ -472,7 +472,7 @@ def interactive_login(timeout=None, headless=False):
 
     timeout = resolve_login_timeout() if timeout is None else timeout
     state = state_file()
-    log.info("[THS-Cookie] 正在打开同花顺登录窗口，请扫码或输入账号（等待上限 %ds）…", int(timeout))
+    log.info("[THS-Cookie] 正在打开同花顺登录窗口，请扫码或输入账号（等待上限 %gs）…", timeout)
     with sync_playwright() as p:
         browser = _launch_browser(p, headless=headless)
         context = None
@@ -519,7 +519,7 @@ def interactive_login(timeout=None, headless=False):
                                      cookie_file(), msg)
                             return cookie
                 time.sleep(2)
-            log.info("[THS-Cookie] ⏰ 等登录超时（%ds）", int(timeout))
+            log.info("[THS-Cookie] ⏰ 等登录超时（%gs）", timeout)
             return ""
         finally:
             try:

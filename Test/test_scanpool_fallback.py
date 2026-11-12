@@ -187,8 +187,15 @@ def test_restore_recover(failures):
                 break
             time.sleep(0.2)
         if final is None or final.get("status") != "done":
-            failures.append(f"③ 任务未收敛 done: {final}")
-            print(f"[FAIL] ③ 任务未收敛: {final}")
+            # 抖动归因要靠快照：final=None（30s 轮询超时）时把 store 里的最新状态、
+            # 进行中票数与池是否残留一并打出来，否则只有一句「None」没法定位是
+            # worker 没跑完、收割线程卡住，还是池装配失败。
+            snap = pool_mod.get_status(task_id)
+            diag = (f"final={final} snap={snap} "
+                    f"active={pool_mod._active_scans} "
+                    f"pool={'残留' if pool_mod._pool is not None else '已销毁'}")
+            failures.append(f"③ 任务未收敛 done: {diag}")
+            print(f"[FAIL] ③ 任务未收敛: {diag}")
             return
         if final.get("completed") != 2:
             failures.append(f"③ completed {final.get('completed')} != 2")
