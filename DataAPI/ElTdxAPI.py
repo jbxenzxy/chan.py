@@ -1173,11 +1173,29 @@ def _fetch_index_member_table(index_code):
     return F10Client(timeout=_INDEX_MEMBERS_TIMEOUT).index_members(index_code)
 
 
+class IndexMemberItems(list):
+    """``fetch_index_members`` 的返回值：普通 list + 主源丢弃行数。
+
+    为什么不改成 ``(items, dropped)`` / dict 包装：主源与 AKShare 兜底的
+    返回结构必须能被 ``AppRefresh._index_belong_items`` 无差别互换，改签名
+    会连带改所有调用方与打桩。list 子类让 ``if items`` / ``len(items)`` /
+    迭代 / ``== [ ... ]`` 全部保持原语义，只多一个**附加**计数；不需要它的
+    调用方（AKShare 兜底返回普通 list）用 ``getattr(items, "dropped", 0)``
+    取 0 即可，DataAPI 不反向依赖 App。
+    """
+
+    def __init__(self, items=(), dropped=0):
+        super().__init__(items)
+        self.dropped = int(dropped)
+
+
 def fetch_index_members(index_code):
     """eltdx 7615 F10 取指数成分股 → ``[{"code": 6位, "market": "sh"/"sz"/"bj"}]``。
 
     返回结构与 ``AkshareAPI.fetch_index_cons`` **完全一致**，调用方可无差别
-    互换。market 直接来自服务端市场标记 N004（0=sz / 1=sh / 2=bj，见
+    互换；额外带 ``dropped`` 属性（被过滤/去重行数，见 ``IndexMemberItems``），
+    供 App 层把「合法过滤」与「成分不全」区分开。
+    market 直接来自服务端市场标记 N004（0=sz / 1=sh / 2=bj，见
     ``eltdx.f10.models.ID_TO_MARKET``），故不需要 AKShare 那条「中文交易所名
     → 前缀」映射。
 
@@ -1225,5 +1243,5 @@ def fetch_index_members(index_code):
             log.warning("[指数成分] %s 丢弃 %d 行（非6位代码/重复/market 表外），"
                         "实收 %d 只（服务端 total=%s）",
                         index_code, dropped, len(items), total)
-        return items
+        return IndexMemberItems(items, dropped)
     raise RuntimeError(f"[指数成分] {index_code} 取数失败: {last_err}")

@@ -12,15 +12,19 @@ stock_index_belong.json 里 500 只中证500 成分股一条不剩。根因不�
   ③ count=0 也打「✅ 成功获取 0只」，失败与成功不可区分；
   ④ replace_index_belong 是整体替换 → 一个指数失败就把它名下全部归属抹掉。
 
-本用例锁住改造后的四条性质（**全程打桩，不联网**）：
+本用例锁住改造后的下列性质（**全程打桩，不联网**）：
   ① 主源 eltdx 成功时不碰 AKShare（调用计数为 0）；
   ② 主源失败 / 返回空 → AKShare 兜底；
-  ③ 条数≠期望（含 0 只）→ 该指数判失败、不进 accepted（旧值可保留）；
+  ③ 条数≠期望（含 0 只、条数多出）→ 该指数判失败、不进 accepted（旧值可保留）；
+  ③b 合法过滤：`dropped` 随主源返回值透出并与映射后条数一起对齐期望值，
+      不误判「成分不全」、不额外联网（回滚自证：换回旧判据本用例必须红）；
   ④ 超整体预算 → 该指数判失败，总耗时不超预算；
   ⑤ 合并语义：成功指数整体换新、失败指数旧值保留；
+  ⑤b 跨指数重叠票按 per_index 插入顺序后写覆盖（把现状钉住，改语义必须改断言）；
   ⑥ 静态契约：刷新侧走 merge_index_belong，不再调用 replace_index_belong；
   ⑦ eltdx 侧自检：服务端 total 与**实收行数**不一致要抛异常（防分页静默截断）；
-     「行被过滤/去重」不算截断（否则主源会被误判失败、静默退回兜底源）。
+     「行被过滤/去重」不算截断（否则主源会被误判失败、静默退回兜底源），
+     且过滤行数随返回值透出 `dropped`。
   ⑧ 期望条数与**独立真值**一致（实现改错时本用例必须红）。
 
 运行：python Test/test_index_belong_sources.py     # 校验（非 0 退出即失败）
@@ -146,6 +150,31 @@ def test_count_guard():
     rec("③", "条数校验（0 只/截断/多出）", ok, str(cases))
 
 
+def test_dropped_accounting():
+    """③b 合法过滤不算「成分不全」：dropped 随主源返回值透出，零额外联网。
+
+    主源 300 行里 2 行被过滤 → 映射后 298 只 + dropped=2，合计仍 300，
+    必须 accepted 且 AKShare 一次都不调。判据刻意用 == 不是 >=：③ 的
+    「条数多出」用例仍须全失败。
+    回滚自证：把 `_fetch_one_index_belong` 换回「只看 len(mapping)」的旧
+    判据，本用例必须红（沪深300 会被误判失败）。
+    """
+    def with_dropped(code):
+        items = _mk_items(EXPECTED[code])
+        if code != "000300":
+            return items
+        return ElTdxAPI.IndexMemberItems(items[:-2], 2)
+
+    ak = _Counter(lambda c: (_ for _ in ()).throw(AssertionError("不该走兜底")))
+    with _Patched(with_dropped, ak):
+        acc, failed = R._fetch_index_belong_from_sources()
+    ok = (set(acc) == set(NAMES.values()) and not failed and not ak.calls
+          and len(acc.get("沪深300", {})) == 298)
+    rec("③b", "主源丢弃行计入条数：不误判、不兜底", ok,
+        f"沪深300 {len(acc.get('沪深300', {}))} 只（应 298），"
+        f"兜底调用 {len(ak.calls)} 次，失败 {failed}")
+
+
 def test_budget():
     """④ 超出整体预算的指数判失败，总耗时不超预算（预算不是每指数一份）。"""
     def slow(code):
@@ -177,6 +206,32 @@ def test_merge_semantics():
     ok_iso = snap2.get("sh688001") == "科创50" and snap2.get("sh600000") == "中证500"
     rec("⑤", "按指数合并不抹别的指数", ok_keep and ok_new and ok_drop and ok_iso,
         f"保留失败指数={ok_keep} 换新={ok_new} 剔除旧成员={ok_drop} 互不影响={ok_iso}")
+
+
+def test_merge_overlap():
+    """⑤b 跨指数重叠票：单值存储上限，按 per_index 插入顺序后写覆盖。
+
+    把现状钉住：`AppData.merge_index_belong` 的 docstring 已写明这条例外，
+    谁改语义（例如「失败指数重叠票不覆盖」）都必须显式改本断言。
+    回滚自证：注入「保留失败指数归属」的修正版 merge 后本用例必须红。
+    """
+    names = list(NAMES.values())
+    app_data._belong.clear()
+    app_data._belong.update({"sh688001": "科创50", "sz000001": "中证500"})
+    app_data.merge_index_belong(
+        {"沪深300": {"sh688001": "沪深300", "sh600001": "沪深300"}})
+    one = dict(app_data.belong_snapshot())
+    ok_one = one.get("sh688001") == "沪深300"         # 成功指数后写覆盖
+    ok_keep = one.get("sz000001") == "中证500"         # 失败指数独占票保留
+
+    app_data._belong.clear()
+    app_data._belong.update({"sh688001": "科创50"})
+    app_data.merge_index_belong({n: {"sh688001": n} for n in names})
+    all_ok = dict(app_data.belong_snapshot())
+    ok_all = all_ok.get("sh688001") == names[-1]       # 全成功稳态 = 最后一个
+    rec("⑤b", "重叠票后写覆盖（单值存储上限）", ok_one and ok_keep and ok_all,
+        f"仅沪深300成功={one.get('sh688001')} 全成功={all_ok.get('sh688001')} "
+        f"失败指数独占票={one.get('sz000001')}")
 
 
 def test_no_whole_replace():
@@ -217,20 +272,25 @@ def test_eltdx_total_mismatch():
                 + [_Row("600298", "hk"), _Row("600000", "sh")])
         ElTdxAPI._fetch_index_member_table = lambda c: _Table(300, rows)
         items = ElTdxAPI.fetch_index_members("000300")
+        # ⑦b2 丢弃行数必须随返回值透出，App 层才能把「合法过滤」与
+        #      「成分不全」分开（见 ③b）；普通 list 路径按 0 处理。
+        dropped_ok = getattr(items, "dropped", None) == 2
         filtered_ok = (len(items) == 298
-                       and not any(i["code"] == "600298" for i in items))
+                       and not any(i["code"] == "600298" for i in items)
+                       and dropped_ok)
         # ⑦c 正常：market 原样透传
         ElTdxAPI._fetch_index_member_table = lambda c: _Table(
             2, [_Row("600000"), _Row("000001", "sz")])
         norm = ElTdxAPI.fetch_index_members("000300")
-        shape_ok = norm == [{"code": "600000", "market": "sh"},
-                            {"code": "000001", "market": "sz"}]
+        shape_ok = (norm == [{"code": "600000", "market": "sh"},
+                             {"code": "000001", "market": "sz"}]
+                    and getattr(norm, "dropped", None) == 0)
     finally:
         ElTdxAPI._fetch_index_member_table = orig
-    rec("⑦", "eltdx 自检：真截断抛异常 / 过滤不算截断 / 返回结构",
+    rec("⑦", "eltdx 自检：真截断抛异常 / 过滤不算截断 / dropped 透出 / 返回结构",
         truncated and filtered_ok and shape_ok,
         f"截断抛异常={truncated} 过滤后 {len(items)} 只（应 298）={filtered_ok} "
-        f"结构={shape_ok}")
+        f"dropped={getattr(items, 'dropped', None)}(应 2)={dropped_ok} 结构={shape_ok}")
 
 
 def test_expected_truth():
@@ -247,9 +307,9 @@ def main():
     print("指数归属取数路径验证（eltdx 主源 / AKShare 兜底）")
     print("=" * 64)
     for fn in (test_expected_truth, test_eltdx_primary, test_akshare_fallback,
-               test_empty_falls_back, test_count_guard, test_budget,
-               test_merge_semantics, test_no_whole_replace,
-               test_eltdx_total_mismatch):
+               test_empty_falls_back, test_count_guard, test_dropped_accounting,
+               test_budget, test_merge_semantics, test_merge_overlap,
+               test_no_whole_replace, test_eltdx_total_mismatch):
         try:
             fn()
         except Exception as e:                              # noqa: BLE001

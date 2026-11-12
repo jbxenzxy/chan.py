@@ -58,7 +58,10 @@ class CThsCloudZxg:
         （`candidate_cookie_files()`：① Script/ ② DataAPI/ ③ 仓库根）→ 本机浏览器。
 
         **构造期不联网**：非显式分支走 `resolve_cookie(validate=False)`，只解析
-        不校验 —— 避免「new 一个对象」就 probe 一遍再扫四个浏览器（最坏数十秒）。
+        不校验，因此不会发起任何联网 probe。但 env / Cookie 文件均未命中时，
+        仍会读本机浏览器 Cookie（Firefox / Chrome / Edge / Chromium）；Edge
+        通道在 Windows 上失败最坏约 6s。这恰恰是首次运行需要自动接管的场景，
+        故不把浏览器通道延后到 `_open_api()`。
         需要「拿到即保证可用」的调用方走 `_open_api()`（内部 `ensure_cookie`）。
 
         :param cookie: 同花顺登录后的完整 Cookie 字符串（显式指定，优先级最高）

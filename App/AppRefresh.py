@@ -209,6 +209,10 @@ def _index_belong_items(index_code):
 
     主源**返回空**也走兜底：空结果对 4 个固定指数而言必然是故障（不是真的
     没有成分股），换源再试一次比直接判失败划算。
+
+    主源返回值带 ``dropped``（被过滤/去重行数，见 ``ElTdxAPI.IndexMemberItems``）；
+    AKShare 兜底是普通 list，由 ``_fetch_one_index_belong`` 用 getattr 回落 0，
+    两源无需改签名、也不会额外联网。
     """
     try:
         items = fetch_index_members(index_code)
@@ -229,6 +233,11 @@ def _fetch_one_index_belong(index_code, index_name, box):
     """
     try:
         items, source = _index_belong_items(index_code)
+        # 主源把「非 6 位 / 重复 / market 表外」计进 dropped；AKShare 兜底是
+        # 普通 list，getattr 回落 0。丢弃行数必须与映射后条数一起对齐期望值，
+        # 否则一行合法脏数据就会把整个指数误判成「成分不全」（见
+        # ElTdxAPI.fetch_index_members 对原始行数的 ⚠ 说明）。
+        source_dropped = getattr(items, "dropped", 0)
         mapping = {}
         for item in items:
             mkt = (item.get("market") or "").strip()
@@ -238,9 +247,17 @@ def _fetch_one_index_belong(index_code, index_name, box):
                 mkt = _infer_bare_code_market(item.get("code", "")) or ""
             if mkt:
                 mapping[mkt + item["code"]] = index_name
+        app_dropped = len(items) - len(mapping)
+        dropped = source_dropped + app_dropped
+        if dropped:
+            log.warning("[指数归属] %s(%s) 丢弃 %d 行（主源 %d / 市场判定 %d），"
+                        "映射 %d 只", index_name, index_code, dropped,
+                        source_dropped, app_dropped, len(mapping))
         expected = _INDEX_BELONG_EXPECTED.get(index_code)
-        if expected is not None and len(mapping) != expected:
-            box["error"] = f"{source} 返回 {len(mapping)} 只，期望 {expected} 只"
+        accounted = len(mapping) + dropped
+        if expected is not None and accounted != expected:
+            box["error"] = (f"{source} 有效 {len(mapping)} 只 + 丢弃 {dropped} 行"
+                            f"= {accounted}，期望 {expected} 只")
             return
     except Exception as e:              # noqa: BLE001 —— 线程体内异常必须落到 box
         # 构造 mapping 也放进 try：异常一旦逃出线程体，线程静默死亡，外层只看到
