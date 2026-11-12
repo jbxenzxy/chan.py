@@ -37,10 +37,14 @@
      旧实现只有文档写了这个变量，代码里恒用 90s（P3-1）。
   ⑲ 取 Cookie 失败时，`ThsCookieUnavailable.details`（逐通道原因）必须透到
      保存接口的 `ths_msg`；旧写法只取 `str(e)`，面板与日志都看不到是哪条通道坏的。
+  ⑳ `Script/ths_capture_cookie.py` 的 `--login` 也跟随 `THS_LOGIN_TIMEOUT`、显式
+     `--timeout` 优先、`nan`/`inf` 在 argparse 边界被拒（不留 traceback）。
 
 运行：python Test/test_ths_cookie_autofetch.py     # 非 0 退出即失败
 """
+import contextlib
 import inspect
+import io
 import os
 import sys
 import tempfile
@@ -750,18 +754,24 @@ try:
     _t_bad = S.resolve_login_timeout()
     os.environ["THS_LOGIN_TIMEOUT"] = "-3"
     _t_neg = S.resolve_login_timeout()
+    os.environ["THS_LOGIN_TIMEOUT"] = "nan"      # float() 认，但 int() 会抛
+    _t_nan = S.resolve_login_timeout()
+    os.environ["THS_LOGIN_TIMEOUT"] = "inf"
+    _t_inf = S.resolve_login_timeout()
     os.environ.pop("THS_LOGIN_TIMEOUT", None)
     _t_unset = S.resolve_login_timeout()
 finally:
     restore()
     os.environ.pop("THS_LOGIN_TIMEOUT", None)
     S._last_login_fail = _last_fail_bak
-rec("⑱", "THS_LOGIN_TIMEOUT 生效（合法值 / 非法回退 / 显式优先）",
+rec("⑱", "THS_LOGIN_TIMEOUT 生效（合法值 / 非法回退 / 显式优先 / nan、inf 回退）",
     _t_env == 7.5 and _t_bad == S.DEFAULT_LOGIN_TIMEOUT
     and _t_neg == S.DEFAULT_LOGIN_TIMEOUT and _t_unset == S.DEFAULT_LOGIN_TIMEOUT
+    and _t_nan == S.DEFAULT_LOGIN_TIMEOUT and _t_inf == S.DEFAULT_LOGIN_TIMEOUT
     and _c_auto == "" and _c_explicit == "" and _seen_timeouts == [7.5, 12],
     f"env=7.5→{_t_env}(应7.5) 非法→{_t_bad} 负数→{_t_neg} 未设→{_t_unset} "
-    f"(后三者应 {S.DEFAULT_LOGIN_TIMEOUT}) 登录窗收到={_seen_timeouts}(应 [7.5, 12])")
+    f"nan→{_t_nan} inf→{_t_inf}（后五者应 {S.DEFAULT_LOGIN_TIMEOUT}）"
+    f" 登录窗收到={_seen_timeouts}(应 [7.5, 12])")
 
 
 # ⑲ 保存失败时逐通道明细必须透出（P3-2）
@@ -811,6 +821,73 @@ rec("⑲", "取 Cookie 失败：逐通道明细落到 ths_msg",
     and "file: Cookie 已过期" in _msg and "browser:firefox: 未登录" in _msg,
     f"code={_save_code} ths_saved={_save_res.get('ths_saved')} "
     f"tdx_saved={_save_res.get('tdx_saved')} ths_msg={_msg!r}")
+
+
+# ⑳ CLI 入口（`--login`）也跟随 `THS_LOGIN_TIMEOUT`（M18c：CLI 不读 env 无人发现）
+#
+# `Script/ths_capture_cookie.py` 既是子进程入口（父进程用 `--timeout` 显式传值），
+# 也是手工诊断入口（不带 `--timeout`）。手工跑时必须自己解析环境变量 —— 这条
+# 链路原先没有任何断言盯着：把 `main()` 的解析改成恒 90，20 项照样全绿。
+# 顺带钉住「非有限值在 CLI 边界就被拒」：`--timeout nan` 不该炸出 traceback。
+import importlib.util as _ilu
+
+_spec = _ilu.spec_from_file_location(
+    "_ths_cli_under_test", os.path.join(_REPO_ROOT, "Script", "ths_capture_cookie.py"))
+_cli = _ilu.module_from_spec(_spec)
+_spec.loader.exec_module(_cli)
+
+_cli_seen = []
+restore = _patch(interactive_login=lambda timeout=None, headless=False:
+                 (_cli_seen.append(timeout), "cookie")[1])
+os.environ["THS_LOGIN_TIMEOUT"] = "7.5"
+try:
+    _rc_env = _cli.main(["--login"])                              # 无 --timeout → 7.5
+    _rc_explicit = _cli.main(["--login", "--timeout", "3"])       # 显式优先
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):     # argparse 的 usage 不必刷屏
+            _cli.main(["--login", "--timeout", "nan"])
+        _rc_nan = None
+    except SystemExit as e:                                       # argparse 拒绝 → 2
+        _rc_nan = e.code
+    except Exception as e:                     # traceback 也算不合格，别让它打断整个组件
+        _rc_nan = type(e).__name__
+finally:
+    restore()
+    os.environ.pop("THS_LOGIN_TIMEOUT", None)
+
+
+# 子进程收到的秒数不许截断：`0.6s` 若被 `int()` 成 `0`，argparse 会直接拒（见上），
+# 表现为「设了 0.6 反而完全不弹窗」。这里只验命令行拼装，不启进程、不读真 Cookie。
+class _FakeProc:
+    returncode = 0
+
+    def communicate(self, timeout=None):
+        return b"", None
+
+    def kill(self):
+        pass
+
+
+_cmds = []
+_orig_popen = S.subprocess.Popen
+S.subprocess.Popen = lambda cmd, **kw: (_cmds.append(cmd), _FakeProc())[1]
+try:
+    _rbf = _patch(read_cookie_file=lambda: "")
+    try:
+        S._login_via_subprocess(
+            os.path.join(_REPO_ROOT, "Script", "ths_capture_cookie.py"), 0.6)
+    finally:
+        _rbf()
+finally:
+    S.subprocess.Popen = _orig_popen
+_cmd_timeout = ""
+if _cmds and "--timeout" in _cmds[-1]:
+    _cmd_timeout = _cmds[-1][_cmds[-1].index("--timeout") + 1]
+rec("⑳", "CLI --login 跟随 THS_LOGIN_TIMEOUT / 显式优先 / nan 被拒 / 秒数不截断",
+    _rc_env == 0 and _rc_explicit == 0 and _rc_nan == 2
+    and _cli_seen == [7.5, 3.0] and _cmd_timeout == "0.6",
+    f"rc={_rc_env},{_rc_explicit} nan_rc={_rc_nan}(应2) "
+    f"登录窗收到={_cli_seen}(应 [7.5, 3.0]) 子进程 --timeout={_cmd_timeout!r}(应 '0.6')")
 
 
 # ── 汇总 ──────────────────────────────────────────────────────────────

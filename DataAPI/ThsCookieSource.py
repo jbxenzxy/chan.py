@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import subprocess
@@ -411,8 +412,8 @@ def resolve_login_timeout():
     """登录窗口等待上限（秒）：`THS_LOGIN_TIMEOUT` 覆盖 `DEFAULT_LOGIN_TIMEOUT`。
 
     每次调用都读环境变量（与 `interactive_allowed()` 读 `THS_AUTO_LOGIN` 同一
-    口径），改配置不必重启进程。非数字 / ≤0 一律回退默认值并留一条日志 ——
-    静默回退会让用户以为设置生效了，实际白等 90s。
+    口径），改配置不必重启进程。非数字 / ≤0 / 非有限值一律回退默认值并留一条
+    日志 —— 静默回退会让用户以为设置生效了，实际白等 90s。
     """
     raw = (os.environ.get("THS_LOGIN_TIMEOUT") or "").strip()
     if not raw:
@@ -421,8 +422,11 @@ def resolve_login_timeout():
         value = float(raw)
     except ValueError:
         value = 0.0
-    if value <= 0:
-        log.info("[THS-Cookie] THS_LOGIN_TIMEOUT=%r 无效（需为正数秒），改用默认 %.0fs",
+    # `float()` 认 `nan` / `inf` / `1e400`，而 `nan <= 0`、`inf <= 0` 都是 False ——
+    # 只判 `<= 0` 会让它们原样穿透，下游 `int(timeout)` 直接抛
+    # ValueError / OverflowError：用户只是把变量写错，不该炸在登录路径上。
+    if not (value > 0 and math.isfinite(value)):
+        log.info("[THS-Cookie] THS_LOGIN_TIMEOUT=%r 无效（需为有限正数秒），改用默认 %.0fs",
                  raw, DEFAULT_LOGIN_TIMEOUT)
         return DEFAULT_LOGIN_TIMEOUT
     return value
@@ -553,7 +557,7 @@ def ensure_interactive_login(timeout=None):
 
 
 def _login_via_subprocess(script, timeout):
-    cmd = [sys.executable, script, "--login", "--timeout", str(int(timeout))]
+    cmd = [sys.executable, script, "--login", "--timeout", str(timeout)]
     if (os.environ.get("THS_LOGIN_HEADLESS") or "").strip().lower() in ("1", "true", "yes"):
         cmd.append("--headless")            # 无 GUI 环境（服务器/CI）不显示窗口
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)   # 只隐藏子进程控制台，浏览器窗口照常弹出

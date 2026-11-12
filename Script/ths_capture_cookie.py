@@ -16,6 +16,7 @@
 """
 import argparse
 import logging
+import math
 import os
 import sys
 
@@ -28,6 +29,21 @@ if repo_root not in sys.path:
 from DataAPI import ThsCookieSource as src  # noqa: E402  （sys.path 需先就位）
 
 log = logging.getLogger("ths_capture_cookie")
+
+
+def _timeout_seconds(text):
+    """`--timeout` 取有限正数秒。
+
+    `float()` 认 `nan` / `inf`，两者都不是可用秒数（`int()` 会抛
+    ValueError / OverflowError）；在 argparse 边界拒掉，报错比 traceback 好读。
+    """
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"不是数字：{text!r}")
+    if not (value > 0 and math.isfinite(value)):
+        raise argparse.ArgumentTypeError(f"需为有限正数秒：{text!r}")
+    return value
 
 
 def _print_status():
@@ -50,7 +66,7 @@ def main(argv=None):
     parser.add_argument("--auto", action="store_true", help="只走后台通道，不弹登录窗口")
     parser.add_argument("--login", action="store_true", help="只弹登录窗口（程序内部调用）")
     parser.add_argument("--status", action="store_true", help="只诊断，不取 Cookie")
-    parser.add_argument("--timeout", type=float, default=None,
+    parser.add_argument("--timeout", type=_timeout_seconds, default=None,
                         help=f"登录窗口等待上限（秒）；默认取 THS_LOGIN_TIMEOUT，"
                              f"未设置则 {int(src.DEFAULT_LOGIN_TIMEOUT)}")
     parser.add_argument("--headless", action="store_true",
