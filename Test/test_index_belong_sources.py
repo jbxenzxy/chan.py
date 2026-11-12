@@ -25,7 +25,10 @@ stock_index_belong.json 里 500 只中证500 成分股一条不剩。根因不�
   ⑦ eltdx 侧自检：服务端 total 与**实收行数**不一致要抛异常（防分页静默截断）；
      「行被过滤/去重」不算截断（否则主源会被误判失败、静默退回兜底源），
      且过滤行数随返回值透出 `dropped`。
-  ⑧ 期望条数与**独立真值**一致（实现改错时本用例必须红）。
+  ⑧ 期望条数与**独立真值**一致（实现改错时本用例必须红）；
+  ⑨ 市场判不出的 920 段（北交所新段）**丢票但不写 `sh920736` 错 key** ——
+     首位 9→sh 的规则会把 920 段误判成沪市，而落盘只过滤「6 位纯数字」key，
+     脏 key 会永久留在 json 里；带 `market="bj"` 的票必须原样保留。
 
 运行：python Test/test_index_belong_sources.py     # 校验（非 0 退出即失败）
 """
@@ -175,6 +178,48 @@ def test_dropped_accounting():
         f"兜底调用 {len(ak.calls)} 次，失败 {failed}")
 
 
+def test_bj_920_no_bad_key():
+    """⑨ 交易所字段缺失的 920 段：丢票，但不写 `sh920736` 这种错 key。
+
+    `_infer_bare_code_market` 按首位 9→sh（那是沪 B 900-909 的规则），北交所
+    920 段会被误判成沪市；而 `save_index_belong_cache` 只过滤「6 位纯数字」这一种
+    旧格式 key ⇒ 脏 key 会**永久落盘**，K 线页标签取到的是一个不存在的标的。
+    4 个固定指数都不含北交所票，故正确处置是丢弃并计入 dropped（条数判据仍是
+    「有效 + 丢弃 == 期望」，因此不会误判成成分不全）。
+    带正确 `market="bj"` 的票必须原样保留 —— 丢弃条件只针对「市场判不出来」。
+    回滚自证：去掉 `bare.startswith("920")` 分支后本用例必须红（出现 sh920736）。
+    """
+    def dirty(code):
+        items = _mk_items(EXPECTED[code])
+        if code != "000300":
+            return items
+        return items[:-1] + [{"code": "920736", "market": ""}]
+
+    def clean_bj(code):
+        items = _mk_items(EXPECTED[code])
+        if code != "000300":
+            return items
+        return items[:-1] + [{"code": "920736", "market": "bj"}]
+
+    ak = _Counter(lambda c: (_ for _ in ()).throw(AssertionError("不该走兜底")))
+    with _Patched(dirty, ak):
+        acc, failed = R._fetch_index_belong_from_sources()
+    bad = acc.get("沪深300", {})
+    ok_drop = ("sh920736" not in bad and "bj920736" not in bad
+               and len(bad) == EXPECTED["000300"] - 1 and not failed)
+
+    with _Patched(clean_bj, ak):
+        acc2, failed2 = R._fetch_index_belong_from_sources()
+    good = acc2.get("沪深300", {})
+    ok_keep = good.get("bj920736") == "沪深300" and len(good) == EXPECTED["000300"]
+
+    rec("⑨", "920 段只丢「市场判不出」的票，不写错 key",
+        ok_drop and ok_keep,
+        f"脏行：{len(bad)} 只（应 299），sh920736 在表内={'sh920736' in bad}，"
+        f"失败={failed}；带 market=bj：{len(good)} 只（应 300），"
+        f"bj920736={good.get('bj920736')}，失败={failed2}")
+
+
 def test_budget():
     """④ 超出整体预算的指数判失败，总耗时不超预算（预算不是每指数一份）。"""
     def slow(code):
@@ -308,7 +353,7 @@ def main():
     print("=" * 64)
     for fn in (test_expected_truth, test_eltdx_primary, test_akshare_fallback,
                test_empty_falls_back, test_count_guard, test_dropped_accounting,
-               test_budget, test_merge_semantics, test_merge_overlap,
+               test_bj_920_no_bad_key, test_budget, test_merge_semantics, test_merge_overlap,
                test_no_whole_replace, test_eltdx_total_mismatch):
         try:
             fn()

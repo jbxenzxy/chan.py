@@ -8556,8 +8556,14 @@
             return '<span class="scan-col-chk" onclick="event.stopPropagation()"><input type="checkbox" value="' + code + '" onchange="updateScanSaveBtn()" ' + (checked ? 'checked' : '') + '/></span>';
         }
 
+        // 「保存到自选」进行中标志。保存链路会在服务端同步等一个最长 90s 的
+        // 同花顺登录窗口，期间勾选框 onchange 会调 updateScanSaveBtn() 把按钮文案
+        // 与禁用态改回「保存到自选(N)」——用这个标志把按钮写入权收归 saveScanToZxg。
+        var _scanSaving = false;
+
         // 收集勾选的代码并更新按钮状态
         window.updateScanSaveBtn = function() {
+            if (_scanSaving) return;      // 保存中：按钮由 saveScanToZxg 独占（含取消态）
             var checks = document.querySelectorAll("#scan-body .scan-col-chk input[type=checkbox]:checked");
             var allCbs = document.querySelectorAll("#scan-body .scan-col-chk input[type=checkbox]");
             var btn = document.getElementById("scan-save-btn");
@@ -8572,17 +8578,51 @@
             var codes = [];
             checks.forEach(function(cb) { codes.push(cb.value); });
             var btn = document.getElementById("scan-save-btn");
-            btn.disabled = true;
-            btn.textContent = "保存中...";
+            _scanSaving = true;
+            // 不置 disabled：保存中这个按钮的点击被改绑成「取消」，禁用会让它点不动。
+            btn.disabled = false;
+            btn.style.cursor = "pointer";
+            btn.textContent = "保存中...（点此取消）";
             // 同花顺 Cookie 由后端自动获取；万一要弹登录窗口，请求会停在服务端等登录，
             // 这里补一句说明，避免用户以为卡死（4s 内回来的请求看不到这句）。
             var slowTimer = setTimeout(function() {
-                btn.textContent = "保存中(同花顺可能需要登录)...";
+                btn.textContent = "保存中(同花顺可能需要登录)...（点此取消）";
             }, 4000);
-            fetch("/api/stocks/scan/save/zxg?codes=" + encodeURIComponent(codes.join(",")), { method: "POST" })
+            // 请求可取消：后端最坏要等「浏览器通道一轮 + 登录窗口 90s」，而旧实现
+            // 既没有 signal 也没有可点的取消入口，用户只能干等、且无法重试。
+            var ctrl = (typeof AbortController === "function") ? new AbortController() : null;
+            var cancelled = false;
+            // 统一收尾：解除取消绑定 → 把按钮交回 updateScanSaveBtn。
+            // 漏掉这一步会让按钮永久停在取消分支（再点只显示「已取消保存」）。
+            function finish(delay) {
+                setTimeout(function() {
+                    btn.onclick = window.saveScanToZxg;
+                    btn.style.cursor = "";
+                    btn.style.opacity = "";
+                    btn.title = "";
+                    _scanSaving = false;
+                    updateScanSaveBtn();
+                }, delay);
+            }
+            btn.onclick = function(ev) {
+                if (ev) { ev.preventDefault(); }
+                if (cancelled) return;
+                cancelled = true;
+                if (ctrl) ctrl.abort();
+                clearTimeout(slowTimer);
+                btn.textContent = "已取消保存";
+                btn.title = "已取消：后端可能仍在等同花顺登录，可稍后重试";
+                btn.disabled = true;
+                finish(1200);
+            };
+            fetch("/api/stocks/scan/save/zxg?codes=" + encodeURIComponent(codes.join(",")),
+                  { method: "POST", signal: ctrl ? ctrl.signal : undefined })
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 clearTimeout(slowTimer);
+                if (cancelled) return;                 // abort 后不再渲染结果
+                // 结果展示期间点击无效（请求已结束，再点也不该改状态）
+                btn.onclick = function(ev) { if (ev) { ev.preventDefault(); } };
                 // 保存结果用与扫描面板汇总行一致的色：普通文字 #a8b2d1，高亮数字/状态 #ff3c3c
                 btn.style.opacity = "1";
                 var parts = [];
@@ -8607,19 +8647,17 @@
                 btn.title = (data.ths_msg && data.ths_msg !== "ok")
                     ? ("同花顺：" + data.ths_msg) : "";
                 btn.innerHTML = parts.join("&nbsp;&nbsp;&nbsp;");
-                setTimeout(function() {
-                    btn.textContent = "保存到自选";
-                    btn.title = "";
-                    btn.disabled = false;
-                    btn.style.opacity = "";
-                    updateScanSaveBtn();
-                }, 2000);
+                finish(2000);
             })
-            .catch(function() {
+            .catch(function(err) {
                 clearTimeout(slowTimer);
+                if (cancelled) return;                 // 取消的收尾已由 onCancel 做完
+                btn.onclick = window.saveScanToZxg;
                 btn.textContent = "保存失败";
+                btn.title = (err && err.message) ? String(err.message) : "请求失败（详见服务端日志）";
                 btn.disabled = false;
                 btn.style.opacity = "";
+                finish(1500);
             });
         };
 

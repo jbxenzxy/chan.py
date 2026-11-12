@@ -23,7 +23,9 @@
   ⑩ 全部通道都是「网络错误」→ 不弹登录窗口（网断时弹窗只会白等超时）；
   ⑪ 登录检测信号含 **value**：同名同域只换值也能检出（真跑 interactive_login）；
   ⑫ probe 异常分类：HTTP 4xx/5xx 归「服务端拒绝」而非「网络错误」，仍允许弹窗；
-  ⑬ Cookie 优先级只有一份（env → file → 浏览器），构造期不联网、显式路径不静默回退。
+  ⑬ Cookie 优先级只有一份（env → file → 浏览器），构造期不联网、显式路径不静默回退；
+  ⑭ 同一请求内不重复扫浏览器：`skip_browser` 从保存链路两次兜底一路透传到
+     `resolve_cookie`（旧实现每次兜底都重扫四个浏览器 + 逐通道 8s 校验）。
 
 运行：python Test/test_ths_cookie_autofetch.py     # 非 0 退出即失败
 """
@@ -458,6 +460,40 @@ rec("⑬", "Cookie 优先级统一 + 构造期不联网 + 显式路径不静默�
     _env_first and _file_first and _explicit_ok and _ctor_ok,
     f"env={_env_first}({(_c1, _s1)}) file={_file_first}({(_c2, _s2)}) "
     f"显式缺失={_explicit_err!r} 构造={_ctor_detail}")
+
+
+# ⑭ 同一请求内不重复扫浏览器（P3-2：保存按钮最坏等「两轮浏览器 + 90s 登录窗」）
+#
+# `save_scan_to_ths_cloud` 的两次兜底（首次取不到 / check_login 失效）都发生在
+# 一轮 `resolve_cookie` 之后：env / 文件 / 四个浏览器已逐个读过并校验过。同一
+# 请求内再扫一遍拿不到新结果，只会把「Edge 通道 6s + 每通道 8s 校验」再付一次。
+_src_api = _read("DataAPI/ThsCloudZxgAPI.py")
+_i = _src_api.index("def _open_api(")
+_j = _src_api.index("\ndef ", _i + 10)
+_open_fwd = "skip_browser=skip_browser" in _src_api[_i:_j]
+_n_skip = _src_api.count("_open_api(force=True, allow_interactive=True, skip_browser=True)")
+
+with Case(file_cookie="OLD=1", valid=set(), browser=[("firefox", "BAD=2", 20)]) as c:
+    _err = None
+    try:
+        S.ensure_cookie(force=True, allow_interactive=True, skip_browser=True)
+    except S.ThsCookieUnavailable as e:
+        _err = e
+    _skipped_ok = (c.calls["browser"] == 0
+                   and any("跳过" in d for d in getattr(_err, "details", [])))
+
+# 默认不跳过：构造期与首次取 Cookie 仍要能读到本机浏览器
+with Case(file_cookie="OLD=1", valid=set(), browser=[("firefox", "BAD=2", 20)]) as c2:
+    try:
+        S.ensure_cookie(force=True, allow_interactive=True)
+    except S.ThsCookieUnavailable:
+        pass
+    _default_ok = c2.calls["browser"] == 1
+
+rec("⑭", "同一请求内不重复扫浏览器（skip_browser 透传）",
+    _open_fwd and _n_skip == 2 and _skipped_ok and _default_ok,
+    f"_open_api 透传={_open_fwd} 兜底带参={_n_skip}(应 2) "
+    f"跳过时扫描={c.calls['browser']}(应 0) 默认扫描={c2.calls['browser']}(应 1)")
 
 
 # ── 汇总 ──────────────────────────────────────────────────────────────

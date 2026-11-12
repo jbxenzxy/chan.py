@@ -405,16 +405,20 @@ def split_ths_code(code: str) -> tuple[str, str]:
 # 便捷函数：直接保存扫描结果到同花顺云自选
 # ============================================================
 
-def _open_api(cookie=None, cookie_file=None, force=False, allow_interactive=False):
+def _open_api(cookie=None, cookie_file=None, force=False, allow_interactive=False,
+              skip_browser=False):
     """按 `ensure_cookie()` 取到**当场校验可用**的 Cookie 再构造 API。
 
     返回 (api, 来源)；`cookie` / `cookie_file` 显式给出时不走自动获取。
+    `skip_browser=True` 见 `ThsCookieSource.resolve_cookie`：同一请求内已经扫过
+    一轮浏览器时用它，避免把「读取 + 逐通道校验」再付一遍。
     """
     if cookie:
         return CThsCloudZxg(cookie=cookie), "explicit"
     if cookie_file:
         return CThsCloudZxg(cookie_file=cookie_file), "cookie_file"
-    value, source = ensure_cookie(force=force, allow_interactive=allow_interactive)
+    value, source = ensure_cookie(force=force, allow_interactive=allow_interactive,
+                                  skip_browser=skip_browser)
     return CThsCloudZxg(cookie=value), source
 
 
@@ -445,13 +449,22 @@ def save_scan_to_ths_cloud(
         except ThsCookieUnavailable:
             # 本机浏览器里没有登录态 → 弹一次登录窗口（用户此刻就在屏幕前点的按钮）
             log.info("[THS-API] 未找到登录态，打开同花顺登录窗口等待一次登录…")
-            api, source = _open_api(force=True, allow_interactive=True)
+            # skip_browser：上一步的 resolve_cookie 已经把 env / 文件 / 四个浏览器
+            # 全读过并逐个校验过了。同一请求内再扫一遍拿不到新结果，只会把
+            # 「Edge 通道 6s + 每通道 8s 校验」再付一次 —— 这正是保存按钮要等
+            # 数十秒才弹出登录窗口的原因。
+            api, source = _open_api(force=True, allow_interactive=True, skip_browser=True)
 
     if not api.check_login():
         if cookie or cookie_file:
             return {"error": "登录状态失效（显式指定的 Cookie 不可用），请更新后重试"}
         log.info("[THS-API] Cookie 已失效，强制重新获取…")
-        api, source = _open_api(force=True, allow_interactive=True)
+        # 同上：浏览器通道本轮已扫过，重取只走 env / 文件 / 登录窗口。
+        # 这也去掉了旧实现的一处隐性依赖 —— 它之所以「不会重复扫」，只是因为
+        # 登录返回前刚把 Cookie 写进 `_probe_cache`（probe_cached(ttl=120) 命中），
+        # 而该缓存在条目超过 8 条时整表 clear()（ThsCookieSource.probe_cached），
+        # 缓存一旦被清掉，这里就会真的再扫一遍浏览器。
+        api, source = _open_api(force=True, allow_interactive=True, skip_browser=True)
         if not api.check_login():
             return {"error": "同花顺登录态无效：已自动尝试缓存文件/浏览器/登录窗口，仍未取到可用 Cookie"}
 

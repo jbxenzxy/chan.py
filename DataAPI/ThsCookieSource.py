@@ -466,7 +466,8 @@ def _login_via_subprocess(script, timeout):
 # 对外唯一入口
 # ═══════════════════════════════════════════════════════════════════════
 
-def resolve_cookie(validate=False, force=False, timeout=PROBE_TIMEOUT):
+def resolve_cookie(validate=False, force=False, timeout=PROBE_TIMEOUT,
+                   skip_browser=False):
     """按**统一优先级**解析一份 Cookie：环境变量 → 文件 → 本机浏览器。
 
     优先级只有这一处定义：面板保存链路（`ensure_cookie`）与同步脚本
@@ -480,6 +481,12 @@ def resolve_cookie(validate=False, force=False, timeout=PROBE_TIMEOUT):
         不该在构造期产生网络副作用，也不该阻塞数十秒）。
     只解析、不落盘：`validate=False` 命中浏览器通道时**不**写回 Cookie 文件
     （避免把「构造一个对象」变成写操作）。
+
+    `skip_browser=True` 跳过「本机浏览器」通道：调用方在**同一请求内**刚扫过
+    一轮浏览器时（`save_scan_to_ths_cloud` 的兜底与失效重取），重复扫拿不到
+    新结果，却要为每个浏览器各付一次「读取 + `PROBE_TIMEOUT` 校验」（Edge
+    通道在 Windows 上最坏 6s，四通道全失败时最坏数十秒）。跳过会在 `details`
+    留一条说明，诊断时可区分「本机确实没有登录态」与「本轮主动跳过」。
 
     返回 (cookie, source, details)；全通道未命中时 cookie 为空串，
     `details` 逐条记录每个通道的失败原因。
@@ -504,30 +511,36 @@ def resolve_cookie(validate=False, force=False, timeout=PROBE_TIMEOUT):
         details.append(f"{source}: {msg}")
         log.info("[THS-Cookie] %s 通道的 Cookie 不可用：%s", source, msg)
 
-    for name, cookie, count in iter_browser_cookies():
-        if not validate:
-            log.info("[THS-Cookie] 从 %s 取到 Cookie（%d 条，未校验）", name, count)
-            return cookie, f"browser:{name}", details
-        ok, msg = probe_cached(cookie, ttl=0, timeout=timeout)
-        if ok:
-            write_cookie_file(cookie)
-            log.info("[THS-Cookie] ✅ 从 %s 取到有效 Cookie（%d 条，%s），已写回 %s",
-                     name, count, msg, cookie_file())
-            return cookie, f"browser:{name}", details
-        details.append(f"browser:{name}: {msg}")
-        log.info("[THS-Cookie] 浏览器 %s 的 Cookie 不可用：%s", name, msg)
+    if skip_browser:
+        details.append("browser: 跳过（同一请求内已扫过一轮，不重复读取）")
+    else:
+        for name, cookie, count in iter_browser_cookies():
+            if not validate:
+                log.info("[THS-Cookie] 从 %s 取到 Cookie（%d 条，未校验）", name, count)
+                return cookie, f"browser:{name}", details
+            ok, msg = probe_cached(cookie, ttl=0, timeout=timeout)
+            if ok:
+                write_cookie_file(cookie)
+                log.info("[THS-Cookie] ✅ 从 %s 取到有效 Cookie（%d 条，%s），已写回 %s",
+                         name, count, msg, cookie_file())
+                return cookie, f"browser:{name}", details
+            details.append(f"browser:{name}: {msg}")
+            log.info("[THS-Cookie] 浏览器 %s 的 Cookie 不可用：%s", name, msg)
     return "", "", details
 
 
-def ensure_cookie(force=False, allow_interactive=False, login_timeout=DEFAULT_LOGIN_TIMEOUT):
+def ensure_cookie(force=False, allow_interactive=False, login_timeout=DEFAULT_LOGIN_TIMEOUT,
+                  skip_browser=False):
     """取一份**当场校验可用**的 Cookie，返回 (cookie, 来源)。
 
     来源取值：`env` / `file` / `browser:<浏览器>` / `login`。
     `force=True` 表示跳过校验缓存（调用方已发现 Cookie 不好使）。
     通道顺序由 `resolve_cookie()` 统一给出（env → file → 浏览器 → 登录窗口）；
     全通道失败抛 `ThsCookieUnavailable`。
+    `skip_browser=True` 原样透传（同一请求内已扫过浏览器，不重复扫）。
     """
-    cookie, source, details = resolve_cookie(validate=True, force=force)
+    cookie, source, details = resolve_cookie(validate=True, force=force,
+                                             skip_browser=skip_browser)
     if cookie:
         return cookie, source
 

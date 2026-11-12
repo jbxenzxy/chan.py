@@ -134,7 +134,7 @@ D:\CChan\
 | **交付目录恰好 2 个文件、零新增/零删除/零改写** | `['ChanPy.exe', '使用说明.txt']`；`new=[]`、`removed=[]`、`changed=[]`；无 `chanpy\` 目录、无 `.env` 副本 |
 | **`config.json` 零产生** | 交付目录与仓库根磁盘均不存在；日志不含 `config.json` 与「已生成默认配置」；启动器源码 AST 里无 `config.json` 字面量 |
 | **启动器零文件写入（静态 + 运行时双证）** | 源码 AST 审计：`open(w/a/x/+)`、`Path.write_text/write_bytes`、`os.replace/remove/rename`、`shutil.*`、`json.dump` 等写调用 **0 处**（只认可执行语句，docstring 不算证据）；运行时交付目录零改写 |
-| 服务自身写入（与启动器区分） | 服务 shutdown 阶段重写 `App/trader_launch_record.json`：写入点 `App/AppTrader.py:283` `_write_state_file()`、`:290` `os.replace()`，调用点 `:413` / `:1151`；实测**字节不变、仅 mtime 变**。冒烟收尾还原为原始字节 + 原始 atime/mtime |
+| 服务自身写入（与启动器区分） | 服务 shutdown 阶段重写 `App/trader_launch_record.json`：写入点 `App/AppTrader.py::_write_state_file`（内部 `os.replace`），调用点 `App/AppTrader.py::_restore_from_file` / `App/AppTrader.py::_sync_state_file`；实测**字节不变、仅 mtime 变**。冒烟收尾还原为原始字节 + 原始 atime/mtime |
 | **生产数据零残留（还原后）** | `D:\CChan\App` 与 `D:\CChan\Trading\State` 全量快照 `new/removed/changed` 均为 `[]` |
 | 端口回收 | 等启动器打印 `[就绪]` 后广播 `CTRL_BREAK_EVENT`（模拟关窗），`stop_mode=ctrl_break` **无 fallback**；uvicorn 自报 PID 消失 + netstat 无 `LISTENING`，服务日志 `Shutting down` → `Application shutdown complete` → `服务已停止` |
 | 用户现有服务 | 全程未触碰；校验用独立端口 18087，进程按 PID 回收，未用 `taskkill /IM` |

@@ -241,12 +241,23 @@ def _fetch_one_index_belong(index_code, index_name, box):
         mapping = {}
         for item in items:
             mkt = (item.get("market") or "").strip()
+            bare = item.get("code") or ""
             if not mkt:
+                if bare.startswith("920"):
+                    # 北交所 920 段：`_infer_bare_code_market` 按首位 9→sh（那是沪 B
+                    # 900-909 的规则），会生成 `sh920736` 这种不存在的 key；而
+                    # `save_index_belong_cache` 只过滤「6 位纯数字」一种旧格式 key，
+                    # 脏 key 会**永久落盘**，K 线页标签取到的就是一个不存在的标的。
+                    # 4 个固定指数都不含北交所票，宁可丢这一只也不写错 key ——
+                    # 丢弃计入 app_dropped，条数判据仍是「有效 + 丢弃 == 期望」。
+                    # 不动 `_infer_bare_code_market`：它是沪深同号消歧的单一事实源，
+                    # 牵动搜索与 K 线兜底，收益（仅在交易所字段缺失时生效）远小于风险。
+                    continue
                 # AKShare 的「交易所中文名」未命中映射时按代码首位兜底，
                 # 不再静默丢弃该票（旧实现 `if mkt:` 直接跳过）
-                mkt = _infer_bare_code_market(item.get("code", "")) or ""
+                mkt = _infer_bare_code_market(bare) or ""
             if mkt:
-                mapping[mkt + item["code"]] = index_name
+                mapping[mkt + bare] = index_name
         app_dropped = len(items) - len(mapping)
         dropped = source_dropped + app_dropped
         if dropped:
