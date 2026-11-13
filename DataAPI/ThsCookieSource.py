@@ -472,9 +472,9 @@ def interactive_login(timeout=None, headless=False):
     信号即非空并进入校验；用户登录时往往**只换同一批 Cookie 的值**
     （名字/域不变），只看 (name, domain) 就恒等、永远检测不到 —— 表现为登录
     窗口等到超时、随即进入 10 分钟失败冷却。
-    校验未通过的签名只记「尝试过」并按 `LOGIN_PROBE_RETRY` 间隔重试；只有
-    **校验通过**的签名才被锁定（旧实现把「尝试过」当「已通过」，一次瞬时失败
-    后同一份 Cookie 在窗口剩余时间内再也不会被重试）。
+    校验未通过的签名按 `LOGIN_PROBE_RETRY` 间隔重试，不把一次瞬时失败当终局
+    （旧实现把「尝试过」当「已通过」，同一份 Cookie 在窗口剩余时间内再也不
+    会被重试）。校验通过即写盘返回，因此不存在「锁定已通过签名」这一状态。
 
     `timeout=None` 时按 `THS_LOGIN_TIMEOUT` 解析（见 `resolve_login_timeout()`）；
     显式传值优先，供子进程 / CLI 原样透传。
@@ -526,7 +526,6 @@ def interactive_login(timeout=None, headless=False):
             # 启动开销仍在窗口外 ⇒ 实际 ≈ timeout − 1s（≤ 等待上限，契约成立）。
             deadline += time.monotonic() - goto_start
 
-            ok_sig = None                    # 已**校验通过**的签名：只有它不再重试
             tried_sig, tried_at = None, 0.0  # 最近一次**尝试**校验的签名与时刻
             while time.monotonic() < deadline:
                 cookies = context.cookies()
@@ -537,7 +536,7 @@ def interactive_login(timeout=None, headless=False):
                 # 签名一变立刻校验；同一份 Cookie 校验失败过，按 LOGIN_PROBE_RETRY
                 # 间隔重试 —— 既不把一次瞬时失败当终局，也不把接口当轮询打。
                 due = (sig != tried_sig) or (now - tried_at >= LOGIN_PROBE_RETRY)
-                if sig and sig != ok_sig and due:
+                if sig and due:
                     tried_sig, tried_at = sig, now
                     cookie = build_cookie_string(
                         [(c.get("name"), c.get("value") or "") for c in cookies
@@ -549,7 +548,6 @@ def interactive_login(timeout=None, headless=False):
                                                     deadline - time.monotonic()))
                         ok, msg = probe_cached(cookie, ttl=0, timeout=probe_budget)
                         if ok:
-                            ok_sig = sig
                             # 写盘失败不能谎报成功：只读安装目录下 write_cookie_file
                             # 返回 False，但本次会话仍拿得到 cookie —— 明说「本次可用、
                             # 下次要重登」，而不是打一条「已写入」让用户以为存住了。
