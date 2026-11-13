@@ -268,6 +268,14 @@ def _rmw_round(n_procs, iters, lock_path, counter_path):
     """跑一轮 N 子进程「读-改-写」。返回 (rc 列表, 终值, 各子进程 stderr, children)。"""
     with open(counter_path, "w") as f:
         f.write("0")
+    # 父进程先创建 .lock 占位：file_lock 的 `open(lock_path, "a+")` 在 try 之外，
+    # 8 个子进程**同时创建同一个文件**时 Windows 会偶发 PermissionError(Errno 13)，
+    # 一崩就丢掉该进程的全部 iters 次更新 → final = N − iters×k，看起来像
+    # 「锁失效、静默丢更新」，实则只是创建竞态。本机实测（40 轮 × 8 进程，只做
+    # open）：不预创建 4/40 轮命中（每次恰 1 个进程 Errno 13）｜预创建 0/40 轮。
+    # 预创建后子进程只是打开**已存在**的文件，不进创建分支。
+    with open(lock_path, "a+"):
+        pass
     children = []
     for _ in range(n_procs):
         p = subprocess.Popen(
@@ -304,6 +312,9 @@ def test_cross_process_file_lock_serializes():
     终值 = 200 − 25×崩溃进程数。② 早已明写「瞬时 OSError 不计失败」，③ 此前却把
     同源的 Errno 13 当硬失败 → 本机实测 24 轮里 25%（A）/ 21%（B）随机报红，
     门禁在 Windows 上长期不可信。
+
+    （2026-11-13 补：创建竞态已由 `_rmw_round` 里父进程**预创建 .lock** 根治，
+    实测 40 轮 × 8 进程命中 0 次；下面的整轮重试保留为兜底，不再是主力手段。）
 
     处理：**整轮重试**（最多 _RMW_ATTEMPTS 轮，每轮全新临时目录 + 计数文件），
     且只对"崩溃子进程的 stderr 里确实是 Errno 13"这一种情形重试；一旦出现

@@ -23,6 +23,9 @@
 --------------------------------------------------------------------
  [静态]  app.html / app.css / app.js 的结构与计数契约（唯一写入点、幂等 guard、
          不拦截、判定锚点唯一、window 面零新增 —— 防 test_phase6_guards 白名单红）；
+ [状态机] 「保存到自选」按钮：进入保存 → 可取消 → finish() 复位三行。静态层钉
+         唯一状态变量与三处出口，行为层（node 桩 DOM/fetch/定时器）跑真实函数体，
+         验取消 / 成功 / 失败三条路径的复位与守卫；
  [真渲染] 无头 Chrome 打开真实页面：真点绘图区 / 面板内 / 顶部按钮 / Esc，
          断言 minimized 状态迁移 + 最小化态 × 的 computed display === 'none'
          + 禁用态样式生效 + 事件未被吞（容器 mousedown 计数）。
@@ -37,6 +40,7 @@ import io
 import json
 import os
 import re
+import subprocess
 import sys
 import threading
 
@@ -69,6 +73,123 @@ def _slice(text, start_marker, end_marker="});"):
         return ""
     j = text.find(end_marker, i)
     return text[i:j] if j > 0 else ""
+
+
+# 「保存到自选」状态机的行为级探针：把 app.js 里**真实**的
+# `updateScanSaveBtn` / `saveScanToZxg` 两函数体灌进 node，桩掉 DOM / fetch /
+# 定时器 / AbortController，跑「进入 → 取消 → 复位」「守卫」「成功」「失败」。
+# 静态断言只能防删除（删一行 `_scanSaving = false;` 会红），防不住语义回退
+# （例如把 finish() 改成只在成功分支调用、或去掉保存中的 return 守卫）。
+_SAVE_NODE = r'''
+const fs = require("fs");
+const file = process.argv[process.argv.length - 1];
+const src = fs.readFileSync(file, "utf8").replace(/\r\n/g, "\n");
+const i = src.indexOf("var _scanSaving = false;");
+const j = src.indexOf("// 扫描运行态的", i);
+if (i < 0 || j < 0) {
+  console.log("  FAIL 锚点丢失（_scanSaving 声明 / 扫描运行态注释）");
+  process.exit(1);
+}
+const block = src.slice(i, j);
+
+let fails = 0;
+function assert(cond, msg) {
+  console.log((cond ? "  PASS " : "  FAIL ") + msg);
+  if (!cond) { fails++; }
+}
+
+const timers = [];
+let tid = 0;
+function st(fn, ms) { timers.push({ id: ++tid, fn: fn, ms: ms, dead: false }); return tid; }
+function ct(id) { for (const t of timers) { if (t.id === id) { t.dead = true; } } }
+function flush(ms) {
+  timers.filter(t => !t.dead && t.ms === ms).forEach(t => { t.dead = true; t.fn(); });
+}
+
+const btn = { textContent: "", innerHTML: "", title: "", disabled: false,
+              style: {}, onclick: null };
+const CHECKS = [{ value: "sz002523" }, { value: "sh600519" }];
+const document = {
+  querySelectorAll: function () { return CHECKS; },
+  getElementById: function () { return btn; },
+};
+// 必须让 window === globalThis：真浏览器里 `window.updateScanSaveBtn = ...` 会
+// 同时成为全局变量，于是 finish() 里的裸调用 `updateScanSaveBtn()` 能解析；
+// 若把 window 做成普通对象，裸名就 ReferenceError（真浏览器行为差异）。
+// 裸 setTimeout / clearTimeout / AbortController / fetch 仍解析到 factory 的
+// **形参**（作用域链优先于 globalThis），桩不会被真实现顶掉。
+const window = globalThis;
+const ACs = [];
+function FakeAC() { this.signal = { aborted: false }; this.aborted = false; ACs.push(this); }
+FakeAC.prototype.abort = function () { this.aborted = true; this.signal.aborted = true; };
+let pending = null;
+function fakeFetch(url, opts) {
+  return new Promise(function (resolve, reject) {
+    pending = { url: url, opts: opts, resolve: resolve, reject: reject };
+  });
+}
+
+const factory = new Function(
+  "document", "window", "setTimeout", "clearTimeout", "AbortController",
+  "fetch", "console", "encodeURIComponent",
+  block + "\n;return { save: window.saveScanToZxg, update: window.updateScanSaveBtn," +
+          " isSaving: function () { return _scanSaving; } };");
+const api = factory(document, window, st, ct, FakeAC, fakeFetch, console, encodeURIComponent);
+
+async function tick() { await new Promise(function (r) { setImmediate(r); }); }
+
+async function main() {
+  // ── T1 进入保存态：标志置位 / 文案 / 不置灰 / 点击改绑取消 / URL 带全部代码 ──
+  api.save();
+  assert(api.isSaving() === true, "T1 进入保存：_scanSaving = true");
+  assert(btn.textContent === "保存中...（点此取消）",
+         "T1 文案，实得 " + JSON.stringify(btn.textContent));
+  assert(btn.disabled === false, "T1 保存中 disabled 必须 false（否则取消点不动）");
+  assert(btn.onclick !== api.save, "T1 点击已改绑为取消（不再是 saveScanToZxg）");
+  assert(!!pending && pending.url.indexOf("codes=sz002523%2Csh600519") > 0,
+         "T1 请求 URL 带全部勾选代码，实得 " + (pending && pending.url));
+
+  // ── T2 取消 → finish(1200) 复位 ──
+  btn.onclick({ preventDefault: function () {} });
+  assert(ACs.length === 1 && ACs[0].aborted === true, "T2 取消调用了 AbortController.abort()");
+  assert(btn.textContent === "已取消保存", "T2 取消文案，实得 " + JSON.stringify(btn.textContent));
+  assert(api.isSaving() === true, "T2 取消瞬间仍在收尾期，标志尚未复位");
+  flush(1200);
+  assert(api.isSaving() === false, "T2 finish(1200) 后 _scanSaving 复位为 false");
+  assert(btn.onclick === api.save,
+         "T2 finish 后 onclick 交回 saveScanToZxg（漏这步按钮永久停在取消分支）");
+  assert(btn.disabled === false, "T2 finish 后 updateScanSaveBtn 恢复了 enabled");
+
+  // ── T3 守卫：保存中 updateScanSaveBtn 不得抢写文案 ──
+  api.save();
+  const during = btn.textContent;
+  api.update();
+  assert(btn.textContent === during, "T3 保存中 updateScanSaveBtn 直接 return，文案不被抢写");
+
+  // ── T4 成功 → finish(2000) 复位 ──
+  pending.resolve({ json: function () {
+    return Promise.resolve({ tdx_saved: 2, ths_saved: 2, ths_msg: "ok" });
+  } });
+  await tick(); await tick(); await tick();
+  assert(btn.innerHTML.indexOf("同花顺") >= 0, "T4 成功结果渲染了同花顺状态");
+  assert(api.isSaving() === true, "T4 结果展示期仍在收尾（等 2000ms），标志未复位");
+  flush(2000);
+  assert(api.isSaving() === false, "T4 finish(2000) 后 _scanSaving 复位为 false");
+  assert(btn.onclick === api.save, "T4 finish 后 onclick 交回 saveScanToZxg");
+
+  // ── T5 失败 → finish(1500) 复位 ──
+  api.save();
+  pending.reject(new Error("boom"));
+  await tick(); await tick(); await tick();
+  assert(btn.textContent === "保存失败", "T5 失败文案，实得 " + JSON.stringify(btn.textContent));
+  flush(1500);
+  assert(api.isSaving() === false, "T5 finish(1500) 后 _scanSaving 复位为 false");
+  assert(btn.onclick === api.save, "T5 finish 后 onclick 交回 saveScanToZxg");
+
+  process.exit(fails ? 1 : 0);
+}
+main();
+'''
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -170,6 +291,82 @@ def part_static():
     check("② 内部函数不挂 window（window 白名单不动）",
           "window._applyScanMinimized" not in js
           and "window._setScanRunning" not in js)
+
+    # ── js：「保存到自选」按钮状态机（此前零护栏，P3-5 缺口）─────────
+    # 改造前 `grep -rn _scanSaving Test/` = 0：删掉 finish() 的复位三行、或去掉
+    # 保存中的 return 守卫，全量门禁仍全绿。此节钉四件事：
+    #   ① 唯一状态变量 + 唯一写入点（防在别处再开一份标志）；
+    #   ② 三个出口（取消 / 成功 / 失败）都走 finish()；
+    #   ③ finish() 内三行复位齐全（漏「交回 onclick」，按钮会永久停在取消分支）；
+    #   ④ 保存中不置 disabled（置了就点不动取消）。
+    _si = js.find("var _scanSaving = false;")
+    _sj = js.find("// 扫描运行态的", _si + 1) if _si >= 0 else -1
+    _blk = js[_si:_sj] if _si >= 0 and _sj > _si else ""
+    check("③ 保存状态机切片有效（两个锚点都在，防在整文件上空转假通过）",
+          2000 < len(_blk) < 12000, len(_blk))
+    check("③ `var _scanSaving = false;` 全文件恰 1 处（唯一状态变量）",
+          js.count("var _scanSaving = false;") == 1,
+          js.count("var _scanSaving = false;"))
+    # 声明行本身含 `_scanSaving = false;` 子串，故用否定后顾排除（否则恒为 2）
+    _w_true = len(re.findall(r"(?<!var )_scanSaving = true;", _blk))
+    _w_false = len(re.findall(r"(?<!var )_scanSaving = false;", _blk))
+    check("③ 声明之外 _scanSaving 只写 2 次：进入置 true、finish 置 false（各 1）",
+          _w_true == 1 and _w_false == 1, (_w_true, _w_false))
+    _fin = _slice(_blk, "function finish(delay) {", "\n            }")
+    check("③ finish() 三行复位齐全：解绑取消 → 清标志 → 交回 updateScanSaveBtn",
+          "btn.onclick = window.saveScanToZxg;" in _fin
+          and "_scanSaving = false;" in _fin
+          and "updateScanSaveBtn();" in _fin, _fin[:300])
+    check("③ 三个出口都调 finish()：取消 1200 / 成功 2000 / 失败 1500（各 1 处）",
+          _blk.count("finish(1200);") == 1 and _blk.count("finish(2000);") == 1
+          and _blk.count("finish(1500);") == 1,
+          (_blk.count("finish(1200);"), _blk.count("finish(2000);"),
+           _blk.count("finish(1500);")))
+    _upd = _slice(_blk, "window.updateScanSaveBtn = function() {", "\n        };")
+    check("③ updateScanSaveBtn 首条守卫 `if (_scanSaving) return;`"
+          "（保存中文案不被 onchange 抢写）",
+          "if (_scanSaving) return;" in _upd, _upd[:220])
+    _dis_on = _blk.find("btn.disabled = true;")
+    _cancel_at = _blk.find("btn.onclick = function(ev) {")
+    check("③ 唯一一处 `disabled = true` 落在取消分支内（保存中可点取消，不置灰）",
+          0 <= _dis_on and 0 <= _cancel_at and _dis_on > _cancel_at,
+          (_dis_on, _cancel_at))
+    check("③ 取消链路可中断：AbortController + ctrl.abort() 都在（无 signal 时降级）",
+          'var ctrl = (typeof AbortController === "function")' in _blk
+          and "ctrl.abort();" in _blk and "ctrl ? ctrl.signal : undefined" in _blk)
+    check("③ slowTimer 三个出口都 clear（防 4s 定时器在收尾后覆写文案）",
+          _blk.count("clearTimeout(slowTimer);") == 3,
+          _blk.count("clearTimeout(slowTimer);"))
+
+
+# ══════════════════════════════════════════════════════════════════════
+# ③ 保存到自选：状态机行为（node 桩；node 不在位降级 SKIP）
+# ══════════════════════════════════════════════════════════════════════
+def part_save_state():
+    """「保存到自选」按钮状态机的行为级验证（node 桩 DOM / fetch / 定时器）。
+
+    为什么不停在静态断言：静态层只能证明「某行文本还在」，证明不了状态机真的
+    会把按钮交回来（例如把 finish() 只留在成功分支、或让 updateScanSaveBtn
+    在保存中照样覆写文案）。这里跑的是 app.js 里的**函数体原文**，只换宿主 API。
+    """
+    print("══ ③ 保存到自选：状态机行为（进入 / 取消 / 守卫 / 成功 / 失败）══")
+    try:
+        proc = subprocess.run(
+            ["node", "-e", _SAVE_NODE, APPJS],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8", errors="replace", timeout=120)
+    except FileNotFoundError:
+        print("  [SKIP] node 不可用，行为级跳过（静态层 ③ 已覆盖结构与计数）")
+        return
+    except subprocess.TimeoutExpired:
+        check("③ 保存按钮状态机行为（node 桩）", False, "node 执行超时（120s）")
+        return
+    out = (proc.stdout or "").strip()
+    for line in out.splitlines():
+        print("  " + line)      # node 侧自带 PASS/FAIL 前缀，缩进对齐本文件风格
+    check("③ 保存按钮状态机行为：5 条路径全绿（node 桩，rc=0）",
+          proc.returncode == 0,
+          "rc=%s，末段输出：%s" % (proc.returncode, out[-400:]))
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -405,6 +602,7 @@ def main():
     print("扫描结果面板收起交互契约（点绘图区最小化 / 最小化态无 × / Esc / 扫描中灰化）")
     print("=" * 68)
     part_static()
+    part_save_state()
     part_render()
     print("-" * 68)
     total, passed = len(_OK), sum(_OK)
