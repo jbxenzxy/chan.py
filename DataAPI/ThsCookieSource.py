@@ -62,6 +62,12 @@ PROBE_TIMEOUT = 8.0             # 单次联网校验超时（秒）
 VALIDATE_TTL = 120.0            # 同一份 Cookie 的校验结论缓存时长（秒）
 INTERACTIVE_COOLDOWN = 600.0    # 交互登录失败后的冷却（秒）
 DEFAULT_LOGIN_TIMEOUT = 90.0    # 登录窗口等待上限（秒）；THS_LOGIN_TIMEOUT 可覆盖
+# 登录子进程的收尾余量（秒）：storage_state / browser.close / 解释器退出。
+# 父进程总预算由 `subprocess_budget()` 逐项汇总，父子不再各写一份魔数 ——
+# 旧实现只给 timeout+15（默认 105s），而子进程最坏 ≈ 页面加载 30 + 用户窗口
+# 90 + 校验 8 + 收尾 ≈ 130s ⇒ 登录成功却在写盘前被 kill（P3）。
+SUBPROCESS_GRACE = 20.0
+GOTO_TIMEOUT_MAX_MS = 30000     # page.goto 硬上限（**毫秒**，Playwright 的单位）
 
 REACH_HOST = "t.10jqka.com.cn"  # 网络可达性探测目标（与 LOGIN_URL 同域）
 REACH_TIMEOUT = 3.0             # 可达性探测**总时长**上限（秒，含 DNS 解析）
@@ -472,6 +478,12 @@ def interactive_login(timeout=None, headless=False):
 
     timeout = resolve_login_timeout() if timeout is None else timeout
     state = state_file()
+    # deadline 先自**函数入口**起算，作为 page.goto 的闸门（goto 不得超预算）；
+    # 页面加载完成后再把 goto 的真实耗时补回去，使用户窗口仍是完整 timeout 秒。
+    # 父进程的总预算由 subprocess_budget() 逐项汇总，覆盖 goto / 窗口 / 校验 /
+    # 收尾，避免「子进程最坏 ~130s、父进程只等 105s」⇒ 登录成功却在写盘前
+    # 被 kill、丢掉这次登录并触发 600s 冷却（P3）。
+    deadline = time.monotonic() + timeout
     log.info("[THS-Cookie] 正在打开同花顺登录窗口，请扫码或输入账号（等待上限 %gs）…", timeout)
     with sync_playwright() as p:
         browser = _launch_browser(p, headless=headless)
@@ -493,9 +505,19 @@ def interactive_login(timeout=None, headless=False):
             context.add_init_script(
                 "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
             page = context.new_page()
-            page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=30000)
+            # Playwright 的 timeout 单位是**毫秒**，remaining 是**秒**；必须换算，
+            # 且不得超过剩余预算，否则 goto 会再次把等待拖出 deadline。
+            goto_ms = max(1, min(GOTO_TIMEOUT_MAX_MS,
+                                 int((deadline - time.monotonic()) * 1000)))
+            goto_start = time.monotonic()
+            try:
+                page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=goto_ms)
+            except Exception as e:          # noqa: BLE001 —— 加载慢/预算耗尽不该炸 traceback
+                log.info("[THS-Cookie] 登录页未在 %dms 内加载完（%s），继续等 Cookie", goto_ms, e)
+            # 用户窗口从「页面可见」起算：把页面加载的真实耗时补回预算，
+            # `THS_LOGIN_TIMEOUT` 仍是用户看到窗口后的可操作秒数，不被 goto 吃掉。
+            deadline += time.monotonic() - goto_start
 
-            deadline = time.monotonic() + timeout
             last_sig = None
             while time.monotonic() < deadline:
                 cookies = context.cookies()
@@ -508,7 +530,11 @@ def interactive_login(timeout=None, headless=False):
                         [(c.get("name"), c.get("value") or "") for c in cookies
                          if THS_DOMAIN in (c.get("domain") or "")])
                     if cookie:
-                        ok, msg = probe_cached(cookie, ttl=0)
+                        # 校验也服从剩余预算：不能让循环体内的一次 8s probe 把
+                        # 写盘推到 deadline 之后（写盘晚于父进程 kill = 登录丢失）。
+                        probe_budget = max(0.5, min(PROBE_TIMEOUT,
+                                                    deadline - time.monotonic()))
+                        ok, msg = probe_cached(cookie, ttl=0, timeout=probe_budget)
                         if ok:
                             write_cookie_file(cookie)
                             try:
@@ -518,7 +544,10 @@ def interactive_login(timeout=None, headless=False):
                             log.info("[THS-Cookie] ✅ 登录成功，Cookie 已写入 %s（%s）",
                                      cookie_file(), msg)
                             return cookie
-                time.sleep(2)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                time.sleep(min(2.0, remaining))
             log.info("[THS-Cookie] ⏰ 等登录超时（%gs）", timeout)
             return ""
         finally:
@@ -582,6 +611,21 @@ def _kill_login_process_tree(proc):
         pass
 
 
+def subprocess_budget(timeout):
+    """父进程给登录子进程的总墙钟预算（秒）。
+
+    子进程的最坏耗时逐项列出，父子共用同一口径（P3 根因就是父进程只写
+    `timeout+15`，把页面加载与 Cookie 校验漏掉了）：
+      · 页面加载 ≤ GOTO_TIMEOUT_MAX_MS/1000 (30s)
+      · 用户窗口 = timeout（页面可见后才起算，见 `interactive_login`）
+      · 一次联网校验 ≤ PROBE_TIMEOUT (8s)
+      · 收尾（storage_state / browser.close / 解释器退出）≤ SUBPROCESS_GRACE (20s)
+    这是 `communicate` 的**超时上限**，不是正常等待时长：登录成功会立刻退出。
+    """
+    return (timeout + GOTO_TIMEOUT_MAX_MS / 1000.0
+            + PROBE_TIMEOUT + SUBPROCESS_GRACE)
+
+
 def _login_via_subprocess(script, timeout):
     cmd = [sys.executable, script, "--login", "--timeout", str(timeout)]
     if (os.environ.get("THS_LOGIN_HEADLESS") or "").strip().lower() in ("1", "true", "yes"):
@@ -594,7 +638,8 @@ def _login_via_subprocess(script, timeout):
         log.info("[THS-Cookie] 启动登录子进程失败（%s），改在进程内登录", e)
         return interactive_login(timeout=timeout)
     try:
-        out, _ = proc.communicate(timeout=timeout + 15)
+        # 总预算逐项覆盖子进程最坏耗时（见 subprocess_budget），不再用 timeout+15。
+        out, _ = proc.communicate(timeout=subprocess_budget(timeout))
     except subprocess.TimeoutExpired:
         log.info("[THS-Cookie] 登录子进程超时，终止")
         _kill_login_process_tree(proc)

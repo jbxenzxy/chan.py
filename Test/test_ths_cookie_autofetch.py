@@ -42,6 +42,11 @@
   ㉑ 登录子进程超时但 Cookie 已落盘：必须读回并用 `ttl=0` 校验，且不刷新
      `_last_login_fail`；对照组（Cookie 失效）仍判失败并进冷却 —— 别吞真失败。
   ㉒ 超时后连进程树一起回收：`proc.kill()` + Windows `taskkill /F /T /PID`。
+  ㉓ P3 父子预算自洽：父预算由 `subprocess_budget()` 逐项汇总（页面加载 30 +
+     用户窗口 timeout + 校验 8 + 收尾 20），且 goto 的真实耗时补回 deadline ——
+     `THS_LOGIN_TIMEOUT` 仍是看到窗口后的可操作秒数；goto 超时按**毫秒**换算
+     （写成秒会得到 8ms 白屏）。
+  ㉔ `page.goto` 超时/加载失败不得冒泡成 traceback：预算耗尽要正常返回空 Cookie。
 
 运行：python Test/test_ths_cookie_autofetch.py     # 非 0 退出即失败
 """
@@ -316,12 +321,23 @@ with Case(file_cookie="OLD=1", valid=set(), probe=_net_probe,
 #    永远等不到变化，窗口等到超时、随即进入 10 分钟失败冷却。
 #    本用例**真跑** interactive_login 的函数体（此前的 ⑤ 把 ensure_interactive_login
 #    整个打桩，函数体零执行），只把 playwright 与联网校验换成假件。
-def _run_interactive_login(rounds, valid_values):
-    """用假 playwright 跑真实 interactive_login；返回 (cookie, probe 记录, write 记录)。"""
+def _run_interactive_login(rounds, valid_values, goto_cost=0.0,
+                           goto_log=None, goto_raises=False):
+    """用假 playwright 跑真实 interactive_login；返回 (cookie, probe 记录, write 记录)。
+
+    `goto_cost` 让假 goto 推进虚拟时钟，用于验证「goto 的耗时算不算进预算」；
+    `goto_log` 记录 goto 收到的 kwargs（钉住毫秒单位）；`goto_raises` 模拟加载超时。
+    三者默认关闭，⑪ 的原始行为不变。
+    """
     import types
 
     class _Page:
         def goto(self, *a, **k):
+            if goto_log is not None:
+                goto_log.append((clock.t, dict(k)))
+            clock.t += goto_cost
+            if goto_raises:
+                raise RuntimeError("goto timeout (stub)")
             return None
 
     class _Ctx:
@@ -377,6 +393,7 @@ def _run_interactive_login(rounds, valid_values):
         def sleep(self, s):
             self.t += s
 
+    clock = _Clock()          # 假 goto 也要能推进它（闭包在调用时求值）
     probes, writes = [], []
     fake_pw = types.ModuleType("playwright.sync_api")
     fake_pw.sync_playwright = lambda: _PW()
@@ -387,7 +404,7 @@ def _run_interactive_login(rounds, valid_values):
         write_cookie_file=lambda cookie, path=None: writes.append(cookie) or True,
         state_file=lambda: os.path.join(tmpdir, "no_state.json"),
         _launch_browser=lambda p, headless=False: p.chromium.launch(),
-        time=_Clock(),
+        time=clock,
     )
     sys.modules["playwright"] = types.ModuleType("playwright")
     sys.modules["playwright.sync_api"] = fake_pw
@@ -895,7 +912,8 @@ rec("⑳", "CLI --login 跟随 THS_LOGIN_TIMEOUT / 显式优先 / nan 被拒 / �
 
 # ㉑/㉒ 登录子进程超时：Cookie 已落盘仍要读回，并回收整棵进程树
 # 复现条件（P2）：用户在上限内登录成功、Cookie 已原子落盘，但父进程的
-# communicate(timeout+15) 先超时。旧实现 kill 后直接 return "" → 本次保存失败
+# communicate(subprocess_budget(timeout)) 先超时。旧实现 kill 后直接
+# return "" → 本次保存失败
 # 且 _last_login_fail 被刷新 → 600s 冷却期内不再弹窗。
 class _TimeoutProc:
     """communicate 首次抛 TimeoutExpired；第二次（收尾）返回空输出。"""
@@ -976,7 +994,8 @@ rec("㉑", "登录子进程超时：已落盘 Cookie 读回 / 失效 Cookie 仍�
     _got_valid == "FRESH_AFTER_LOGIN=1" and _no_cooldown
     and _got_stale == "" and _cooldown_set
     and _probe_seen == [("FRESH_AFTER_LOGIN=1", 0), ("STALE=0", 0)]
-    and all(p.comm[0] == 16.0 for p in _procs),
+    and all(p.comm[0] == 59.0 for p in _procs)
+    and S.SUBPROCESS_GRACE >= S.PROBE_TIMEOUT + 5,
     f"有效返回={_got_valid!r} 冷却未刷新={_no_cooldown} "
     f"失效返回={_got_stale!r} 冷却已刷新={_cooldown_set} "
     f"probe={_probe_seen} 首轮communicate={[p.comm[:1] for p in _procs]}")
@@ -991,6 +1010,45 @@ rec("㉒", "超时后进程树被回收（proc.kill + Windows taskkill /F /T /PI
     _tree_ok,
     f"procs={len(_procs)} kills={[p.kills for p in _procs]} "
     f"taskkill={_tree_cmds} os.name={os.name}")
+
+
+# ㉓/㉔ P3：父子预算必须自洽，但**用户窗口不能被页面加载吃掉**
+# 旧实现父进程只等 timeout+15（默认 105s），而子进程最坏 = 页面加载 30
+# + 用户窗口 90 + 校验 8 + 收尾 ≈ 130s ⇒ 登录成功却在写盘前被 kill（600s 冷却）。
+# 修法：父预算由 subprocess_budget() 逐项汇总；子进程把 goto 的真实耗时补回
+# deadline，保证 THS_LOGIN_TIMEOUT 仍是「看到窗口后的可操作秒数」。
+# 这里用假时钟让 goto 真的花掉 30s：用户窗口必须仍是完整 8s（能登录成功）。
+# 同时钉住 goto 的 timeout 是**毫秒**：写成 remaining（秒）会得到 8ms 白屏。
+_GOTO_LOG = []
+_goto_cookie, _goto_probes, _goto_writes = _run_interactive_login(
+    _ROUND_VALUE_ONLY, {"userid=u1; ticket=NEW"},
+    goto_cost=30.0, goto_log=_GOTO_LOG)
+_goto_ms = _GOTO_LOG[0][1].get("timeout") if _GOTO_LOG else None
+_budget90 = S.subprocess_budget(90)
+rec("㉓", "P3 预算自洽：父预算覆盖子进程最坏 / 用户窗口不被 goto 吃掉 / 毫秒换算",
+    bool(_GOTO_LOG) and isinstance(_goto_ms, int)
+    and 1000 <= _goto_ms <= S.GOTO_TIMEOUT_MAX_MS
+    and _goto_ms == 8000
+    and _goto_cookie == "userid=u1; ticket=NEW"
+    and _goto_writes == ["userid=u1; ticket=NEW"]
+    and _budget90 == 148.0
+    and _budget90 > 90 + 30 + S.PROBE_TIMEOUT,
+    f"goto_kw={_GOTO_LOG} 返回={_goto_cookie!r} write={_goto_writes} "
+    f"probe={_goto_probes} 父预算(90)={_budget90}（须 ≥148）")
+
+# 预算很小 / 页面加载慢时 goto 抛异常，不得冒泡成 traceback（CLI 会直接崩）。
+_raise_err = None
+try:
+    _raise_cookie, _raise_probes, _raise_writes = _run_interactive_login(
+        _ROUND_VALUE_ONLY, {"userid=u1; ticket=NEW"}, goto_raises=True)
+except Exception as _e:                     # noqa: BLE001 —— 异常本身要变成 FAIL 证据
+    _raise_err = "%s: %s" % (type(_e).__name__, _e)
+    _raise_cookie, _raise_writes = "", []
+rec("㉔", "page.goto 超时不冒泡：仍能等到 Cookie 并正常写回",
+    _raise_err is None
+    and _raise_cookie == "userid=u1; ticket=NEW"
+    and _raise_writes == ["userid=u1; ticket=NEW"],
+    f"返回={_raise_cookie!r} write={_raise_writes} 异常={_raise_err!r}")
 
 
 # ── 汇总 ──────────────────────────────────────────────────────────────
