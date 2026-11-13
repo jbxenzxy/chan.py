@@ -479,10 +479,10 @@ def interactive_login(timeout=None, headless=False):
     timeout = resolve_login_timeout() if timeout is None else timeout
     state = state_file()
     # deadline 先自**函数入口**起算，作为 page.goto 的闸门（goto 不得超预算）；
-    # 页面加载完成后再把 goto 的真实耗时补回去，使用户窗口仍是完整 timeout 秒。
-    # 父进程的总预算由 subprocess_budget() 逐项汇总，覆盖 goto / 窗口 / 校验 /
-    # 收尾，避免「子进程最坏 ~130s、父进程只等 105s」⇒ 登录成功却在写盘前
-    # 被 kill、丢掉这次登录并触发 600s 冷却（P3）。
+    # 页面加载后把 goto 耗时补回，用户窗口 ≈ timeout −（浏览器启动 ~1s）：
+    # `DEFAULT_LOGIN_TIMEOUT` 是**等待上限**，不是精确可操作秒数，启动开销落在
+    # 窗口之前、不从窗口还回。父进程总预算由 subprocess_budget() 逐项汇总，覆盖
+    # goto / 窗口 / 校验 / 收尾，避免子进程最坏 ~130s 却只等 105s 被 kill（P3）。
     deadline = time.monotonic() + timeout
     log.info("[THS-Cookie] 正在打开同花顺登录窗口，请扫码或输入账号（等待上限 %gs）…", timeout)
     with sync_playwright() as p:
@@ -514,8 +514,8 @@ def interactive_login(timeout=None, headless=False):
                 page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=goto_ms)
             except Exception as e:          # noqa: BLE001 —— 加载慢/预算耗尽不该炸 traceback
                 log.info("[THS-Cookie] 登录页未在 %dms 内加载完（%s），继续等 Cookie", goto_ms, e)
-            # 用户窗口从「页面可见」起算：把页面加载的真实耗时补回预算，
-            # `THS_LOGIN_TIMEOUT` 仍是用户看到窗口后的可操作秒数，不被 goto 吃掉。
+            # 用户窗口从「页面可见」起算：补回 goto 耗时，不被页面加载吃掉；
+            # 启动开销仍在窗口外 ⇒ 实际 ≈ timeout − 1s（≤ 等待上限，契约成立）。
             deadline += time.monotonic() - goto_start
 
             last_sig = None
@@ -617,8 +617,8 @@ def subprocess_budget(timeout):
     子进程的最坏耗时逐项列出，父子共用同一口径（P3 根因就是父进程只写
     `timeout+15`，把页面加载与 Cookie 校验漏掉了）：
       · 页面加载 ≤ GOTO_TIMEOUT_MAX_MS/1000 (30s)
-      · 用户窗口 = timeout（页面可见后才起算，见 `interactive_login`）
-      · 一次联网校验 ≤ PROBE_TIMEOUT (8s)
+      · 用户窗口 ≈ timeout（页面可见后才起算；启动 ~1s 落在窗口外，见 `interactive_login`）
+      · 一次联网校验 ≤ PROBE_TIMEOUT (8s)：循环内已被截断，实为启动开销缓冲
       · 收尾（storage_state / browser.close / 解释器退出）≤ SUBPROCESS_GRACE (20s)
     这是 `communicate` 的**超时上限**，不是正常等待时长：登录成功会立刻退出。
     """

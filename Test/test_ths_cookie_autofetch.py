@@ -47,6 +47,8 @@
      `THS_LOGIN_TIMEOUT` 仍是看到窗口后的可操作秒数；goto 超时按**毫秒**换算
      （写成秒会得到 8ms 白屏）。
   ㉔ `page.goto` 超时/加载失败不得冒泡成 traceback：预算耗尽要正常返回空 Cookie。
+  ㉕ 循环内 `probe_cached` 的 timeout 必须服从剩余预算（短预算临近 deadline 时被
+     截断、下限 0.5s）；去掉截断会让子进程最坏墙钟越过父预算，且原实现无护栏。
 
 运行：python Test/test_ths_cookie_autofetch.py     # 非 0 退出即失败
 """
@@ -322,12 +324,13 @@ with Case(file_cookie="OLD=1", valid=set(), probe=_net_probe,
 #    本用例**真跑** interactive_login 的函数体（此前的 ⑤ 把 ensure_interactive_login
 #    整个打桩，函数体零执行），只把 playwright 与联网校验换成假件。
 def _run_interactive_login(rounds, valid_values, goto_cost=0.0,
-                           goto_log=None, goto_raises=False):
+                           goto_log=None, goto_raises=False,
+                           login_timeout=8, probe_log=None):
     """用假 playwright 跑真实 interactive_login；返回 (cookie, probe 记录, write 记录)。
 
-    `goto_cost` 让假 goto 推进虚拟时钟，用于验证「goto 的耗时算不算进预算」；
-    `goto_log` 记录 goto 收到的 kwargs（钉住毫秒单位）；`goto_raises` 模拟加载超时。
-    三者默认关闭，⑪ 的原始行为不变。
+    `goto_cost` 推进虚拟时钟（goto 耗时是否算进预算）；`goto_log` 钉住毫秒单位；
+    `goto_raises` 模拟加载超时；`login_timeout` 供 ㉕ 造短预算，`probe_log` 另记
+    (cookie, ttl, timeout) 三元组（不改 `probes` 结构）；新增参数默认关闭，⑪ 不变。
     """
     import types
 
@@ -398,9 +401,14 @@ def _run_interactive_login(rounds, valid_values, goto_cost=0.0,
     fake_pw = types.ModuleType("playwright.sync_api")
     fake_pw.sync_playwright = lambda: _PW()
     snapshot = {k: sys.modules.get(k) for k in ("playwright", "playwright.sync_api")}
+    def _stub_probe(cookie, ttl=S.VALIDATE_TTL, timeout=S.PROBE_TIMEOUT):
+        probes.append(cookie)
+        if probe_log is not None:
+            probe_log.append((cookie, ttl, timeout))
+        return cookie in valid_values, "OK（自选 1 只）"
+
     restore = _patch(
-        probe_cached=lambda cookie, ttl=S.VALIDATE_TTL, timeout=S.PROBE_TIMEOUT: (
-            probes.append(cookie) or (cookie in valid_values, "OK（自选 1 只）")),
+        probe_cached=_stub_probe,
         write_cookie_file=lambda cookie, path=None: writes.append(cookie) or True,
         state_file=lambda: os.path.join(tmpdir, "no_state.json"),
         _launch_browser=lambda p, headless=False: p.chromium.launch(),
@@ -409,7 +417,7 @@ def _run_interactive_login(rounds, valid_values, goto_cost=0.0,
     sys.modules["playwright"] = types.ModuleType("playwright")
     sys.modules["playwright.sync_api"] = fake_pw
     try:
-        cookie = S.interactive_login(timeout=8, headless=True)
+        cookie = S.interactive_login(timeout=login_timeout, headless=True)
     finally:
         restore()
         for k, v in snapshot.items():
@@ -994,8 +1002,7 @@ rec("㉑", "登录子进程超时：已落盘 Cookie 读回 / 失效 Cookie 仍�
     _got_valid == "FRESH_AFTER_LOGIN=1" and _no_cooldown
     and _got_stale == "" and _cooldown_set
     and _probe_seen == [("FRESH_AFTER_LOGIN=1", 0), ("STALE=0", 0)]
-    and all(p.comm[0] == 59.0 for p in _procs)
-    and S.SUBPROCESS_GRACE >= S.PROBE_TIMEOUT + 5,
+    and all(p.comm[0] == 59.0 for p in _procs),
     f"有效返回={_got_valid!r} 冷却未刷新={_no_cooldown} "
     f"失效返回={_got_stale!r} 冷却已刷新={_cooldown_set} "
     f"probe={_probe_seen} 首轮communicate={[p.comm[:1] for p in _procs]}")
@@ -1032,7 +1039,10 @@ rec("㉓", "P3 预算自洽：父预算覆盖子进程最坏 / 用户窗口不�
     and _goto_cookie == "userid=u1; ticket=NEW"
     and _goto_writes == ["userid=u1; ticket=NEW"]
     and _budget90 == 148.0
-    and _budget90 > 90 + 30 + S.PROBE_TIMEOUT,
+    and _budget90 > 90 + 30 + S.PROBE_TIMEOUT
+    # §4 承重不等式：父预算须覆盖「窗口 + 页面加载 + probe 越界 0.5s + 收尾 + 启动 ~1s」
+    and _budget90 >= (90 + S.GOTO_TIMEOUT_MAX_MS / 1000.0
+                      + 0.5 + S.SUBPROCESS_GRACE + 1.0),
     f"goto_kw={_GOTO_LOG} 返回={_goto_cookie!r} write={_goto_writes} "
     f"probe={_goto_probes} 父预算(90)={_budget90}（须 ≥148）")
 
@@ -1049,6 +1059,34 @@ rec("㉔", "page.goto 超时不冒泡：仍能等到 Cookie 并正常写回",
     and _raise_cookie == "userid=u1; ticket=NEW"
     and _raise_writes == ["userid=u1; ticket=NEW"],
     f"返回={_raise_cookie!r} write={_raise_writes} 异常={_raise_err!r}")
+
+
+# ㉕ P5.2：循环内 `probe_budget` 的截断是**承重**的（§4：去掉后子进程最坏
+# 148.3s > 父预算 148s），却是本轮唯一「新增且无护栏」的分支 —— 评审 M3 变异
+# 全绿实证。用假时钟跑短预算：第一轮换值时剩 3.2s，sleep(2) 后第二轮只剩
+# 1.2s ⇒ probe 的 timeout 必须跟着收紧，且不得退回 PROBE_TIMEOUT；再用
+# 2.05s 预算钉住 0.5s 下限（剩余 0.05s 时不得把 timeout 压成 0）。
+_PL25 = []
+_c25, _p25, _w25 = _run_interactive_login(
+    _ROUND_VALUE_ONLY, {"userid=u1; ticket=NEW"},
+    login_timeout=3.2, probe_log=_PL25)
+_b25 = [x[2] for x in _PL25]
+_PL25B = []
+_c25b, _p25b, _w25b = _run_interactive_login(
+    _ROUND_VALUE_ONLY, {"userid=u1; ticket=NEW"},
+    login_timeout=2.05, probe_log=_PL25B)
+_b25b = [x[2] for x in _PL25B]
+rec("㉕", "probe 服从剩余预算：临近 deadline 时 timeout 被截断（下限 0.5s）",
+    len(_b25) == 2 and abs(_b25[0] - 3.2) < 0.05
+    and 0.5 <= _b25[-1] <= 1.3 and _b25[-1] < _b25[0]
+    and all(b <= S.PROBE_TIMEOUT for b in _b25)
+    and _c25 == "userid=u1; ticket=NEW"
+    and _w25 == ["userid=u1; ticket=NEW"]
+    and len(_b25b) == 2 and abs(_b25b[-1] - 0.5) < 1e-6
+    and _c25b == "userid=u1; ticket=NEW"
+    and _w25b == ["userid=u1; ticket=NEW"],
+    f"probe_budgets={_b25} 下限场景={_b25b} 返回={_c25!r}/{_c25b!r} "
+    f"write={_w25}/{_w25b}")
 
 
 # ── 汇总 ──────────────────────────────────────────────────────────────

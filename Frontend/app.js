@@ -8556,9 +8556,9 @@
             return '<span class="scan-col-chk" onclick="event.stopPropagation()"><input type="checkbox" value="' + code + '" onchange="updateScanSaveBtn()" ' + (checked ? 'checked' : '') + '/></span>';
         }
 
-        // 「保存到自选」进行中标志。保存链路会在服务端同步等一个最长 90s 的
-        // 同花顺登录窗口，期间勾选框 onchange 会调 updateScanSaveBtn() 把按钮文案
-        // 与禁用态改回「保存到自选(N)」——用这个标志把按钮写入权收归 saveScanToZxg。
+        // 「保存到自选」进行中标志。保存链路会在服务端同步等一个登录窗口（时长由后端
+        // THS_LOGIN_TIMEOUT 决定，默认 90s；卡死另有超时兜底，整次保存可能远长于窗口
+        // 时长）；期间 onchange 会改按钮文案，故用此标志把写入权收归 saveScanToZxg。
         var _scanSaving = false;
 
         // 收集勾选的代码并更新按钮状态
@@ -8588,8 +8588,8 @@
             var slowTimer = setTimeout(function() {
                 btn.textContent = "保存中(同花顺可能需要登录)...（点此取消）";
             }, 4000);
-            // 请求可取消：后端最坏要等「浏览器通道一轮 + 登录窗口 90s」，而旧实现
-            // 既没有 signal 也没有可点的取消入口，用户只能干等、且无法重试。
+            // 请求可取消：后端最坏等待由 subprocess_budget() 给出（窗口 90s + 页面
+            // 加载 + 校验 + 收尾），旧实现无 signal 也无取消入口，只能干等、无法重试。
             var ctrl = (typeof AbortController === "function") ? new AbortController() : null;
             var cancelled = false;
             // 统一收尾：解除取消绑定 → 把按钮交回 updateScanSaveBtn。
