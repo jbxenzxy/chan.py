@@ -33,19 +33,26 @@ class CThsCloudZxg:
 
     BASE_URL = "https://t.10jqka.com.cn"
 
-    # 市场代码映射（通过 API 探测确认）
+    # 市场代码映射。**只用于显示**，判定一律走 `_SEG_*` 表。
+    # 36 / 49 / 180 由真实自选股快照反查得出（见 Test/test_ths_market_oracle.py
+    # 的 `ORACLE` fixture）：159530/161725 在服务端就是 36（深市基金），
+    # 884069/884218 是 49（二级行业板块），HK3441 是 180。旧表缺这三项，
+    # `get_market_id` 也从不会返回 20/36/49——添上后 `market_name` 才有值。
     MARKET_ID = {
         "16": "沪市(指数)",
         "17": "沪市",
         "20": "沪市(ETF等)",
         "32": "深市(指数)",
         "33": "深市",
+        "36": "深市(基金)",
         "48": "板块/概念",
+        "49": "板块(二级)",
         "151": "北交所",
         "87": "北交所(旧)",
         "169": "美股",
         "176": "港股(指数)",
         "177": "港股",
+        "180": "港股(其他)",
         "0": "未知",
     }
 
@@ -274,14 +281,17 @@ class CThsCloudZxg:
 def _as_suffix_form(code_upper: str) -> str:
     """把 `sz002523` / `SH600519` 这类**市场前缀式**代码转成 `002523.SZ` / `600519.SH`。
 
-    只有「前缀 + 纯数字」才转换，因此不会误伤 `SH`/`SZ` 开头的非 A 股代码；已是
-    后缀式（`002523.SZ`）或不带市场标记（`002523`）时原样返回。项目内部主键是
+    只按「`SH`/`SZ`/`BJ` 前缀 + **数字开头**的主体」转换：主体首字符必须是数字，
+    因此 `SH`/`SZ` 开头的非 A 股代码（美股 `SHAK` 之类）不会被误伤，而同花顺专用
+    码 `1A0001`/`1B0300`（首字符是 `1`）能被正确带过去——**不能要求主体全是数字**，
+    否则 `sh1A0001` 会原样留下 `SH1A0001`，一路落到兜底 17。已是后缀式
+    （`002523.SZ`）或不带市场标记（`002523`）时原样返回。项目内部主键是
     `sz002523` 这种小写前缀式，而同花顺的市场判定只认后缀分支，故先归一。
     """
     for pre in ("SH", "SZ", "BJ"):
         if code_upper.startswith(pre):
             rest = code_upper[len(pre):]
-            if rest.isdigit():
+            if rest and rest[0].isdigit():
                 return rest + "." + pre
     return code_upper
 
@@ -299,83 +309,123 @@ def _is_hk_form(s: str) -> bool:
     return False
 
 
+# ── 代码段 → 市场号（唯一 SSOT） ──────────────────────────────────────
+# 为什么是表而不是 if/elif 链：旧实现里 `88`（板块 48）排在 `8`（北交所 151）
+# **之后**，`88` 分支永远不可达；`5`（沪市 ETF 20）被塞进 `6` 的 17；`159/16`
+# （深市基金 36）被 `1` 的 33 先截走。链式写法下新增一段要同时改多处、且错序
+# 没有任何提示——这正是「920 之外的新段只能等出现后逐个实测」的根源。
+# 改成显式表后，`Test/test_ths_code_normalize.py` ⑦ 组可以机械校验
+# 「表内无遮蔽 / 段全覆盖 / 三种写法同解 / 全空间输出合法」。
+#
+# 表里的市场号**全部来自真实自选股反查**（`getSelfStockWithMarket` 返回的
+# `marketid` 是服务端真值），不是按代码段猜的。对不上的段见
+# `Test/test_ths_market_oracle.py` 的 `EXEMPT`（信息不足，无法从代码推断）。
+
+# 与沪深市场无关的编号段：同花顺专用指数码 / 板块。带不带 .SH/.SZ 后缀同解。
+_SEG_MARKET_FREE = (
+    ("884", "49", "同花顺二级行业板块（884069/884218）"),
+    ("88", "48", "同花顺板块/概念（881121/883421/886015…）"),
+    ("1A", "16", "同花顺沪指专用码 1A0001"),
+    ("1B", "16", "同花顺沪指专用码 1B0300/1B0688/1B0852/1B0905"),
+    ("399", "32", "深证指数 399001/399006"),
+)
+
+# 沪市段（.SH 或无后缀；裸 000xxx 是沪指、深市同号段是股票，只能靠后缀消歧）
+_SEG_SH = (
+    ("6", "17", "沪市主板/科创板"),
+    ("5", "20", "沪市 ETF/LOF（516020/520500）"),
+    ("11", "17", "沪市可转债 110/111/113/118（深市转债是 12x，不冲突）"),
+)
+
+# 深市段（.SZ 或无后缀）
+_SEG_SZ = (
+    ("15", "36", "深市基金/LOF（159530）"),
+    ("16", "36", "深市 LOF（161725）"),
+    ("12", "33", "深市可转债 123/127/128"),
+    ("0", "33", "深市主板"),
+    ("3", "33", "创业板"),
+    ("1", "33", "深市 1 开头兜底（其余转债/其他）"),
+)
+
+# 北交所段（.BJ 或无后缀）
+_SEG_BJ = (
+    ("92", "151", "北交所 920 新段"),
+    ("83", "151", "北交所 83xxxx"),
+    ("87", "151", "北交所 87xxxx"),
+    ("43", "151", "北交所/新三板 43xxxx"),
+    ("8", "151", "新三板 80/81/82xxxx（88x 已先被板块表拦下）"),
+    ("4", "151", "老三板 400xxx"),
+)
+
+
+def _match_seg(c: str, table):
+    """按表内顺序返回首个命中的市场号；表内顺序即优先级（长前缀在前）。"""
+    for pre, mid, _why in table:
+        if c.startswith(pre):
+            return mid
+    return None
+
+
 def get_market_id(code: str) -> str:
     """
     根据股票代码推断同花顺市场ID
     - 沪市股票=17, 沪市指数=16, 沪市ETF=20
-    - 深市股票=33, 深市指数=32
+    - 深市股票=33, 深市指数=32, 深市基金=36
     - 北交所=151
     - 港股=177, 港股指数=176
     - 美股=169
-    - 板块/概念=48
+    - 板块/概念=48, 二级行业板块=49
 
     兼容三种写法：`sz002523`（项目内部主键）/ `002523.SZ`（东财式）/ `002523`。
+    **同一标的三种写法必须同解**（`Test/test_ths_code_normalize.py` ⑦d 钉住），
+    裸代码无法消歧的段（如 `000001` 沪指 vs 深股）由 `.SH`/`.SZ` 后缀决定。
+
+    推断不出来时返回 "17"（沪市）而不是抛错：同花顺对错市场号只回
+    「传入股票代码有误」，抛错会让整批 `batch_add` 中断，代价更大。
     """
     code_upper = _as_suffix_form(code.strip().upper())
 
-    # 港股：带 .HK 后缀 或 HK+数字 或 K+数字
-    if code_upper.endswith(".HK"):
+    # 港股 / 港股指数 / 美股：靠字母形状判定，优先于数字段
+    if code_upper.endswith(".HK") or _is_hk_form(code_upper):
         return "177"
-    if _is_hk_form(code_upper):
-        return "177"
-    # 港股指数：HS+数字
     if code_upper.startswith("HS"):
         return "176"
-    # 美股：纯字母
     if code_upper.isalpha() and len(code_upper) >= 2:
         return "169"
 
-    # 根据后缀确定市场基础，再细分为指数/股票
-    if code_upper.endswith(".SH"):
-        c = code_upper[:-3]  # 去掉 .SH
-        # 沪市指数：000xxx, 1A/1B, 880xxx, 881xxx 等
-        if c.startswith(("000", "1A", "1B", "88")) or len(c) < 6:
-            return "16"
-        return "17"
-    if code_upper.endswith(".SZ"):
-        c = code_upper[:-3]  # 去掉 .SZ
-        if c.startswith("399"):
-            return "32"
-        return "33"
-    if code_upper.endswith(".BJ"):
-        return "151"
-
-    # 无后缀：按纯数字推断
-    c = code_upper
+    suffix = ""
+    for suf in (".SH", ".SZ", ".BJ", ".HK"):
+        if code_upper.endswith(suf):
+            suffix = suf
+            break
+    c = code_upper[:-len(suffix)] if suffix else code_upper
     if not c:
         return "17"
 
-    # 港股：HK+数字 或 K+数字（港股通）
-    if _is_hk_form(c):
-        return "177"
-    # 港股指数：HS+数字
-    if c.startswith("HS"):
-        return "176"
-    # 美股：纯字母
-    if c.isalpha() and len(c) >= 2:
-        return "169"
+    # 与市场无关的段（板块 / 同花顺专用码）先判，避免被 8/1 的兜底吞掉
+    mid = _match_seg(c, _SEG_MARKET_FREE)
+    if mid:
+        return mid
 
-    # 沪深指数
-    if c.startswith("1A") or c.startswith("1B"):
-        return "16"
-    if c.startswith("399"):
-        return "32"
+    if suffix == ".BJ":
+        return "151"
 
-    # 纯数字股票代码
+    if suffix == ".SH":
+        # 沪指 000xxx 与深市 000xxx 股票同号，只能靠后缀消歧
+        if c.startswith("000") or len(c) < 6:
+            return "16"
+        return _match_seg(c, _SEG_SH) or "17"
+
+    if suffix == ".SZ":
+        return _match_seg(c, _SEG_SZ) or "33"
+
+    # 无后缀：北交所 → 沪市 → 深市 → 兜底。不足 6 位的短码保持旧口径（沪市）。
     if len(c) < 6:
         return "17"
-    if c.startswith(("6", "688", "689", "5")):
-        return "17"   # 沪市（主板、科创板、ETF）
-    elif c.startswith(("0", "3", "1", "159", "16")):
-        return "33"   # 深市（主板、创业板、ETF/LOF）
-    elif c.startswith(("8", "4", "43")):
-        return "151"  # 北交所/新三板
-    elif c.startswith("920"):
-        # 北交所 920 段（新代码段）。不认它会一路落到末尾兜底 return "17"，
-        # 即把北交所票当沪市发出去（同花顺要么报错、要么加到不存在的市场）。
-        return "151"
-    elif c.startswith("88"):
-        return "48"   # 板块/概念
+    for table in (_SEG_BJ, _SEG_SH, _SEG_SZ):
+        mid = _match_seg(c, table)
+        if mid:
+            return mid
     return "17"
 
 

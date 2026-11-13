@@ -8617,7 +8617,21 @@
             };
             fetch("/api/stocks/scan/save/zxg?codes=" + encodeURIComponent(codes.join(",")),
                   { method: "POST", signal: ctrl ? ctrl.signal : undefined })
-            .then(function(r) { return r.json(); })
+            // 必须先判 HTTP 状态：后端 `zxg_save` 的 except 分支回 **500 + {"error": ...}**，
+            // 而 500 的 body 依然是合法 JSON——直接 `r.json()` 会把它当成功数据喂给下面的
+            // 渲染：`tdx_saved` 取不到 → 走 else 分支显示「通达信： 已保存」，
+            // 于是整次保存失败在界面上显示为成功。真浏览器 E2E（Test/e2e/）抓到的就是这条。
+            .then(function(r) {
+                return r.json().catch(function() { return {}; }).then(function(body) {
+                    if (!r.ok) {
+                        throw new Error((body && body.error) ? String(body.error) : ("HTTP " + r.status));
+                    }
+                    if (body && body.ok === false) {
+                        throw new Error(body.error ? String(body.error) : "保存失败");
+                    }
+                    return body;
+                });
+            })
             .then(function(data) {
                 clearTimeout(slowTimer);
                 if (cancelled) return;                 // abort 后不再渲染结果

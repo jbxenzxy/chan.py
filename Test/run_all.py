@@ -167,6 +167,14 @@ CI / 迁移每阶段的验收门禁）。
                                                     的 3 个不带）/ 买卖点
                                                     复合串只认 0-3 / 440 面板
                                                     列宽预算实测
+ 43. 保存链路真浏览器  test_scan_panel_e2e.py   真 app.html + 真 app.js + Edge
+                                                    headless（CDP）：真 4000ms
+                                                    定时器文案切换 / disabled
+                                                    元素不派发 click（取消点不
+                                                    动）/ &nbsp; 的 textContent
+                                                    形态 / 500 与 5xx-非JSON
+                                                    必须判失败 / 取消只发 1 次
+                                                    请求 / finish 交回 onclick
 每组件独立子进程执行，超时 300s 按失败终止（防死循环挂死）。
 
 登记在 `CLEAN_CREDENTIALS_COMPONENTS` 的组件（当前 p20 / p60）额外**清空凭据
@@ -1035,6 +1043,16 @@ COMPONENTS = [
     #   × 的 computed display（最小化态 === 'none'）。
     ("scan_panel_collapse",
      [sys.executable, os.path.join("Test", "test_scan_panel_collapse.py")]),
+    # 「保存到自选」真浏览器端到端（2026-11-13）：
+    #   上面那条 node 桩测的是**状态机分支**（假时钟 + 手写 DOM），测不到四件事：
+    #   ① 真 4000ms 定时器那一帧的文案切换；② `disabled` 元素在真浏览器里不派发
+    #   click（"保存中置灰 ⇒ 取消点不动"的真实后果）；③ `&nbsp;` 在 textContent
+    #   里是 \u00a0、三列渲染的真实文本；④ `fetch` 返回 500 时 `r.json()` 仍成功
+    #   解析 ⇒ 旧代码把失败渲染成「已保存」（本用例首跑就抓到了这条真 bug）。
+    #   依赖 Node≥22 + Edge/Chrome；缺依赖时该脚本打印 [SKIP] 并 exit 0，
+    #   不会在没装浏览器的机器上把环境缺失判成代码缺陷。
+    ("scan_panel_e2e",
+     [sys.executable, os.path.join("Test", "test_scan_panel_e2e.py")]),
     # 扫描结果面板版式归一（2026-10-31，用户 5 条决策）：
     #   8 种模式（标注/均线/放量/连涨/RSI/底分型/买·卖点/回测）此前各拼各的行、
     #   各拼各的口径行、各写各的标题 —— 同一个「结果行」有 8 份实现 ⇒ 加一列要改
