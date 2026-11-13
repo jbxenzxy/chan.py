@@ -556,6 +556,32 @@ def ensure_interactive_login(timeout=None):
         _login_lock.release()
 
 
+def _kill_login_process_tree(proc):
+    """超时后终止登录子进程**及其浏览器孙进程**。
+
+    Windows 上 ``Popen.kill()`` 只 ``TerminateProcess`` 直接子进程；Playwright
+    的 node driver 与浏览器窗口是孙进程，会变成无主孤儿窗口（用户看得到、
+    Cookie 却已经读不回来）。先按进程树 ``taskkill /F /T /PID`` 连根杀，
+    再用 ``proc.kill()`` 兜住 taskkill 不可用/失败的情形。
+
+    与 ``App/AppTrader.py::_taskkill`` 是同一范式，但此处就地实现而不 import：
+    DataAPI 层不得反向依赖 App（单向依赖，见 ``test_ths_cookie_autofetch`` ⑧）。
+    """
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except Exception as e:          # noqa: BLE001 —— 兜底失败不能盖掉 proc.kill()
+            log.info("[THS-Cookie] 进程树回收失败（%s），退回 proc.kill()", e)
+    try:
+        proc.kill()
+    except Exception:                   # noqa: BLE001 —— 已被 taskkill 杀掉也属正常
+        pass
+
+
 def _login_via_subprocess(script, timeout):
     cmd = [sys.executable, script, "--login", "--timeout", str(timeout)]
     if (os.environ.get("THS_LOGIN_HEADLESS") or "").strip().lower() in ("1", "true", "yes"):
@@ -571,11 +597,18 @@ def _login_via_subprocess(script, timeout):
         out, _ = proc.communicate(timeout=timeout + 15)
     except subprocess.TimeoutExpired:
         log.info("[THS-Cookie] 登录子进程超时，终止")
-        proc.kill()
+        _kill_login_process_tree(proc)
         try:
             proc.communicate(timeout=10)
         except Exception:                       # noqa: BLE001
             pass
+        # 登录可能已经成功并写盘：kill 落在 write_cookie_file 之后时这份 Cookie
+        # 仍然有效。不读盘会把一次成功的登录判成失败，并触发 600s 冷却。
+        cookie = read_cookie_file()
+        if cookie:
+            ok, _msg = probe_cached(cookie, ttl=0)
+            if ok:
+                return cookie
         return ""
     tail = (out or b"").decode("utf-8", "replace").strip().splitlines()[-5:]
     log.info("[THS-Cookie] 登录子进程退出码=%s%s", proc.returncode,

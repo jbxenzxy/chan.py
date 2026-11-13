@@ -39,6 +39,9 @@
      保存接口的 `ths_msg`；旧写法只取 `str(e)`，面板与日志都看不到是哪条通道坏的。
   ⑳ `Script/ths_capture_cookie.py` 的 `--login` 也跟随 `THS_LOGIN_TIMEOUT`、显式
      `--timeout` 优先、`nan`/`inf` 在 argparse 边界被拒（不留 traceback）。
+  ㉑ 登录子进程超时但 Cookie 已落盘：必须读回并用 `ttl=0` 校验，且不刷新
+     `_last_login_fail`；对照组（Cookie 失效）仍判失败并进冷却 —— 别吞真失败。
+  ㉒ 超时后连进程树一起回收：`proc.kill()` + Windows `taskkill /F /T /PID`。
 
 运行：python Test/test_ths_cookie_autofetch.py     # 非 0 退出即失败
 """
@@ -888,6 +891,106 @@ rec("⑳", "CLI --login 跟随 THS_LOGIN_TIMEOUT / 显式优先 / nan 被拒 / �
     and _cli_seen == [7.5, 3.0] and _cmd_timeout == "0.6",
     f"rc={_rc_env},{_rc_explicit} nan_rc={_rc_nan}(应2) "
     f"登录窗收到={_cli_seen}(应 [7.5, 3.0]) 子进程 --timeout={_cmd_timeout!r}(应 '0.6')")
+
+
+# ㉑/㉒ 登录子进程超时：Cookie 已落盘仍要读回，并回收整棵进程树
+# 复现条件（P2）：用户在上限内登录成功、Cookie 已原子落盘，但父进程的
+# communicate(timeout+15) 先超时。旧实现 kill 后直接 return "" → 本次保存失败
+# 且 _last_login_fail 被刷新 → 600s 冷却期内不再弹窗。
+class _TimeoutProc:
+    """communicate 首次抛 TimeoutExpired；第二次（收尾）返回空输出。"""
+
+    pid = 424242
+
+    def __init__(self):
+        self.kills = 0
+        self.comm = []
+
+    def communicate(self, timeout=None):
+        self.comm.append(timeout)
+        if len(self.comm) == 1:
+            raise S.subprocess.TimeoutExpired("ths_capture_cookie.py --login",
+                                             timeout)
+        return b"", None
+
+    def kill(self):
+        self.kills += 1
+
+
+_orig_run = S.subprocess.run
+_orig_popen_timeout = S.subprocess.Popen
+_last_fail_bak = S._last_login_fail
+_procs = []
+_taskkill_cmds = []
+_probe_seen = []
+_got_valid = _got_stale = ""
+_no_cooldown = False
+_cooldown_set = False
+try:
+    with tempfile.TemporaryDirectory() as _tmpd:
+        _cookie_path = os.path.join(_tmpd, "ths_captured_cookie.txt")
+
+        def _fake_run(cmd, **kw):
+            _taskkill_cmds.append(list(cmd))
+            return None
+
+        def _fake_popen(cmd, **kw):
+            p = _TimeoutProc()
+            _procs.append(p)
+            return p
+
+        S.subprocess.run = _fake_run
+        S.subprocess.Popen = _fake_popen
+
+        # A) 磁盘上是一份「登录已成功」的有效 Cookie
+        S.write_cookie_file("FRESH_AFTER_LOGIN=1", _cookie_path)
+        _r = _patch(candidate_cookie_files=lambda: [_cookie_path],
+                    probe_cached=lambda cookie, ttl=S.VALIDATE_TTL,
+                                       timeout=S.PROBE_TIMEOUT: (
+                        _probe_seen.append((cookie, ttl)) or (True, "OK")))
+        try:
+            S._last_login_fail = 0.0
+            _got_valid = S.ensure_interactive_login(timeout=1.0)
+            _no_cooldown = (S._last_login_fail == 0.0)
+        finally:
+            _r()
+
+        # B) 对照：磁盘上是失效 Cookie，仍须判失败并进冷却（别把真失败吞掉）
+        S.write_cookie_file("STALE=0", _cookie_path)
+        _r2 = _patch(candidate_cookie_files=lambda: [_cookie_path],
+                     probe_cached=lambda cookie, ttl=S.VALIDATE_TTL,
+                                        timeout=S.PROBE_TIMEOUT: (
+                         _probe_seen.append((cookie, ttl)) or (False, "未登录")))
+        try:
+            S._last_login_fail = 0.0
+            _got_stale = S.ensure_interactive_login(timeout=1.0)
+            _cooldown_set = (S._last_login_fail > 0.0)
+        finally:
+            _r2()
+finally:
+    S.subprocess.run = _orig_run
+    S.subprocess.Popen = _orig_popen_timeout
+    S._last_login_fail = _last_fail_bak
+
+rec("㉑", "登录子进程超时：已落盘 Cookie 读回 / 失效 Cookie 仍判失败",
+    _got_valid == "FRESH_AFTER_LOGIN=1" and _no_cooldown
+    and _got_stale == "" and _cooldown_set
+    and _probe_seen == [("FRESH_AFTER_LOGIN=1", 0), ("STALE=0", 0)]
+    and all(p.comm[0] == 16.0 for p in _procs),
+    f"有效返回={_got_valid!r} 冷却未刷新={_no_cooldown} "
+    f"失效返回={_got_stale!r} 冷却已刷新={_cooldown_set} "
+    f"probe={_probe_seen} 首轮communicate={[p.comm[:1] for p in _procs]}")
+
+_tree_cmds = [c for c in _taskkill_cmds if c and "taskkill" in c[0]]
+_tree_ok = (bool(_procs) and all(p.kills >= 1 for p in _procs)
+            and (os.name != "nt" or (
+                len(_tree_cmds) >= len(_procs)
+                and all("/F" in c and "/T" in c
+                        and str(_procs[0].pid) in c for c in _tree_cmds))))
+rec("㉒", "超时后进程树被回收（proc.kill + Windows taskkill /F /T /PID）",
+    _tree_ok,
+    f"procs={len(_procs)} kills={[p.kills for p in _procs]} "
+    f"taskkill={_tree_cmds} os.name={os.name}")
 
 
 # ── 汇总 ──────────────────────────────────────────────────────────────
