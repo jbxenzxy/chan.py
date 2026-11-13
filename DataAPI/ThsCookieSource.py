@@ -58,7 +58,7 @@ API_PATH = "/newcircle/group/getSelfStockWithMarket/"
 USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0")
 
-PROBE_TIMEOUT = 8.0             # 单次联网校验超时（秒）
+PROBE_TIMEOUT = 8.0             # 校验的 requests timeout 参数（秒；connect/read 间隔，非总墙钟）
 VALIDATE_TTL = 120.0            # 同一份 Cookie 的校验结论缓存时长（秒）
 INTERACTIVE_COOLDOWN = 600.0    # 交互登录失败后的冷却（秒）
 DEFAULT_LOGIN_TIMEOUT = 90.0    # 登录窗口等待上限（秒）；THS_LOGIN_TIMEOUT 可覆盖
@@ -618,7 +618,10 @@ def subprocess_budget(timeout):
     `timeout+15`，把页面加载与 Cookie 校验漏掉了）：
       · 页面加载 ≤ GOTO_TIMEOUT_MAX_MS/1000 (30s)
       · 用户窗口 ≈ timeout（页面可见后才起算；启动 ~1s 落在窗口外，见 `interactive_login`）
-      · 一次联网校验 ≤ PROBE_TIMEOUT (8s)：循环内已被截断，实为启动开销缓冲
+      · 一次联网校验的**名义**槽位 = PROBE_TIMEOUT (8s)：循环内按剩余预算截断
+        传给 probe_cached 的 timeout；但 requests 的 timeout 约束 connect 与每次
+        read 的间隔、不是总墙钟，慢响应下墙钟可超该槽位（由 SUBPROCESS_GRACE
+        收尾余量兜底；极端慢响应转入父进程超时救援分支，不会丢已写盘的 Cookie）
       · 收尾（storage_state / browser.close / 解释器退出）≤ SUBPROCESS_GRACE (20s)
     这是 `communicate` 的**超时上限**，不是正常等待时长：登录成功会立刻退出。
     """

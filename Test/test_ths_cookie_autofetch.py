@@ -44,11 +44,11 @@
   ㉒ 超时后连进程树一起回收：`proc.kill()` + Windows `taskkill /F /T /PID`。
   ㉓ P3 父子预算自洽：父预算由 `subprocess_budget()` 逐项汇总（页面加载 30 +
      用户窗口 timeout + 校验 8 + 收尾 20），且 goto 的真实耗时补回 deadline ——
-     `THS_LOGIN_TIMEOUT` 仍是看到窗口后的可操作秒数；goto 超时按**毫秒**换算
-     （写成秒会得到 8ms 白屏）。
+     `THS_LOGIN_TIMEOUT` 是等待上限（启动开销落在窗口外，实际可操作秒数略少）；
+     goto 超时按**毫秒**换算（写成秒会得到 8ms 白屏）。
   ㉔ `page.goto` 超时/加载失败不得冒泡成 traceback：预算耗尽要正常返回空 Cookie。
   ㉕ 循环内 `probe_cached` 的 timeout 必须服从剩余预算（短预算临近 deadline 时被
-     截断、下限 0.5s）；去掉截断会让子进程最坏墙钟越过父预算，且原实现无护栏。
+     截断、下限 0.5s）；断言按常量参数化，不钉死轮询轮数 / 校验槽位具体值。
 
 运行：python Test/test_ths_cookie_autofetch.py     # 非 0 退出即失败
 """
@@ -1023,8 +1023,8 @@ rec("㉒", "超时后进程树被回收（proc.kill + Windows taskkill /F /T /PI
 # 旧实现父进程只等 timeout+15（默认 105s），而子进程最坏 = 页面加载 30
 # + 用户窗口 90 + 校验 8 + 收尾 ≈ 130s ⇒ 登录成功却在写盘前被 kill（600s 冷却）。
 # 修法：父预算由 subprocess_budget() 逐项汇总；子进程把 goto 的真实耗时补回
-# deadline，保证 THS_LOGIN_TIMEOUT 仍是「看到窗口后的可操作秒数」。
-# 这里用假时钟让 goto 真的花掉 30s：用户窗口必须仍是完整 8s（能登录成功）。
+# deadline，保证页面加载不侵占 THS_LOGIN_TIMEOUT 这个等待上限。
+# 假时钟启动开销为 0，本例窗口恰为完整 8s；生产环境约为上限减启动开销。
 # 同时钉住 goto 的 timeout 是**毫秒**：写成 remaining（秒）会得到 8ms 白屏。
 _GOTO_LOG = []
 _goto_cookie, _goto_probes, _goto_writes = _run_interactive_login(
@@ -1040,7 +1040,7 @@ rec("㉓", "P3 预算自洽：父预算覆盖子进程最坏 / 用户窗口不�
     and _goto_writes == ["userid=u1; ticket=NEW"]
     and _budget90 == 148.0
     and _budget90 > 90 + 30 + S.PROBE_TIMEOUT
-    # §4 承重不等式：父预算须覆盖「窗口 + 页面加载 + probe 越界 0.5s + 收尾 + 启动 ~1s」
+    # 相对量护栏：金标准被刷成实现值 + 公式丢 PROBE_TIMEOUT 项时，它是唯一防线
     and _budget90 >= (90 + S.GOTO_TIMEOUT_MAX_MS / 1000.0
                       + 0.5 + S.SUBPROCESS_GRACE + 1.0),
     f"goto_kw={_GOTO_LOG} 返回={_goto_cookie!r} write={_goto_writes} "
@@ -1063,26 +1063,32 @@ rec("㉔", "page.goto 超时不冒泡：仍能等到 Cookie 并正常写回",
 
 # ㉕ P5.2：循环内 `probe_budget` 的截断是**承重**的（§4：去掉后子进程最坏
 # 148.3s > 父预算 148s），却是本轮唯一「新增且无护栏」的分支 —— 评审 M3 变异
-# 全绿实证。用假时钟跑短预算：第一轮换值时剩 3.2s，sleep(2) 后第二轮只剩
-# 1.2s ⇒ probe 的 timeout 必须跟着收紧，且不得退回 PROBE_TIMEOUT；再用
-# 2.05s 预算钉住 0.5s 下限（剩余 0.05s 时不得把 timeout 压成 0）。
+# 全绿实证。断言按常量参数化，不写死 3.2 / 8 / 轮询轮数：调 PROBE_TIMEOUT 或
+# sleep 节奏时正确实现不该被误判。0.5s 下限另用「首轮即有效 Cookie + 0.2s 预算」
+# 钉住，不依赖 time.sleep(min(2.0, remaining)) 里的 2.0。
+_T25 = 3.2
+_cap25 = min(_T25, S.PROBE_TIMEOUT)
 _PL25 = []
 _c25, _p25, _w25 = _run_interactive_login(
     _ROUND_VALUE_ONLY, {"userid=u1; ticket=NEW"},
-    login_timeout=3.2, probe_log=_PL25)
+    login_timeout=_T25, probe_log=_PL25)
 _b25 = [x[2] for x in _PL25]
+_ROUND_VALID_FIRST = [
+    [{"name": "userid", "domain": ".10jqka.com.cn", "value": "u1"},
+     {"name": "ticket", "domain": ".10jqka.com.cn", "value": "NEW"}]]
 _PL25B = []
 _c25b, _p25b, _w25b = _run_interactive_login(
-    _ROUND_VALUE_ONLY, {"userid=u1; ticket=NEW"},
-    login_timeout=2.05, probe_log=_PL25B)
+    _ROUND_VALID_FIRST, {"userid=u1; ticket=NEW"},
+    login_timeout=0.2, probe_log=_PL25B)
 _b25b = [x[2] for x in _PL25B]
 rec("㉕", "probe 服从剩余预算：临近 deadline 时 timeout 被截断（下限 0.5s）",
-    len(_b25) == 2 and abs(_b25[0] - 3.2) < 0.05
-    and 0.5 <= _b25[-1] <= 1.3 and _b25[-1] < _b25[0]
+    len(_b25) >= 2 and abs(_b25[0] - _cap25) < 0.05
+    and _b25[-1] < _b25[0]
+    and all(b <= _cap25 + 1e-9 for b in _b25)
     and all(b <= S.PROBE_TIMEOUT for b in _b25)
     and _c25 == "userid=u1; ticket=NEW"
     and _w25 == ["userid=u1; ticket=NEW"]
-    and len(_b25b) == 2 and abs(_b25b[-1] - 0.5) < 1e-6
+    and len(_b25b) == 1 and abs(_b25b[-1] - 0.5) < 1e-6
     and _c25b == "userid=u1; ticket=NEW"
     and _w25b == ["userid=u1; ticket=NEW"],
     f"probe_budgets={_b25} 下限场景={_b25b} 返回={_c25!r}/{_c25b!r} "

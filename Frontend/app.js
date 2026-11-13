@@ -8588,8 +8588,8 @@
             var slowTimer = setTimeout(function() {
                 btn.textContent = "保存中(同花顺可能需要登录)...（点此取消）";
             }, 4000);
-            // 请求可取消：后端最坏等待由 subprocess_budget() 给出（窗口 90s + 页面
-            // 加载 + 校验 + 收尾），旧实现无 signal 也无取消入口，只能干等、无法重试。
+            // 请求可取消：子进程预算由 subprocess_budget() 给出（窗口上限 + 加载 +
+            // 校验槽位 + 收尾），超时后还有进程树终止与读盘救援；旧实现无 signal 只能干等。
             var ctrl = (typeof AbortController === "function") ? new AbortController() : null;
             var cancelled = false;
             // 统一收尾：解除取消绑定 → 把按钮交回 updateScanSaveBtn。
