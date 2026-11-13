@@ -67,7 +67,7 @@ CASES = [
     ("sz000001", "000001", "33", "深主板"),
     ("sh600519", "600519", "17", "沪主板"),
     ("sh688111", "688111", "17", "科创板"),
-    ("sh510300", "510300", "17", "沪市 ETF"),
+    ("sh510300", "510300", "20", "沪市 ETF（20，见 ⑦ oracle：516020/520500 服务端就是 20）"),
     ("sh000300", "000300", "16", "沪市指数"),
     ("sz399001", "399001", "32", "深市指数"),
     ("bj430047", "430047", "151", "北交所"),
@@ -212,6 +212,152 @@ rec("⑤b", "港股 HK+4 位拼接只在 split_ths_code 内",
     'zfill(4)' in inspect.getsource(T.split_ths_code)
     and 'zfill(4)' not in save_body,
     "save_scan 内 zfill(4) 残留" if 'zfill(4)' in save_body else "单一实现")
+
+# ── ⑥ 真实自选股 oracle：段级对照 ───────────────────────────────────
+# 来源：`getSelfStockWithMarket` 真实返回的 142 条 (code, marketid)，按 3 位/2 位
+# 前缀聚合成段。**只存段 + 代表代码，不存全量持仓**（自选股清单属于用户隐私）。
+# 刷新：`python Test/gen_ths_oracle.py`（只读拉取，不写账号）。
+#
+# 这张表的作用是把「920 以外的新段只能等出现后逐个实测」变成可回归的断言：
+# 旧实现在这 19 个 3 位段里错了 7 个（881/883/886→151 应 48、884→151 应 49、
+# 159/161→33 应 36、516/520→17 应 20），占 oracle 的 13%——不是未来风险，是
+# 当下就在错。新段出现时，只要它进了自选股，重跑 gen_ths_oracle.py 就会把
+# 差异列出来，不需要人工猜段。
+SEG_ORACLE_3 = [
+    ("000", "33", "000001"), ("002", "33", "002007"), ("003", "33", "003021"),
+    ("159", "36", "159530"), ("161", "36", "161725"),
+    ("300", "33", "300015"), ("301", "33", "301606"), ("399", "32", "399001"),
+    ("516", "20", "516020"), ("520", "20", "520500"),
+    ("600", "17", "600004"), ("601", "17", "601021"), ("603", "17", "603259"),
+    ("605", "17", "605598"), ("688", "17", "688017"),
+    ("881", "48", "881121"), ("883", "48", "883421"), ("884", "49", "884069"),
+    ("886", "48", "886015"),
+]
+SEG_ORACLE_2 = [
+    ("00", "33", "000001"), ("15", "36", "159530"), ("16", "36", "161725"),
+    ("30", "33", "300015"), ("39", "32", "399001"), ("51", "20", "516020"),
+    ("52", "20", "520500"), ("60", "17", "600004"), ("68", "17", "688017"),
+]
+SEG_ORACLE_SHAPE = [
+    ("1A0001", "16", "同花顺沪指码"), ("1B0300", "16", "同花顺沪指码"),
+    ("HK0700", "177", "港股"), ("HS2083", "176", "港股指数"),
+    ("SOXL", "169", "美股"),
+]
+# 信息不足、**无法**从代码推断的 3 条：断言「当前推断值」而不是服务端值，
+# 这样实现一旦变动（比如有人给 URSI 加了特判）会立刻提示复核，而不是静默漂移。
+SEG_ORACLE_EXEMPT = [
+    ("830000", "151", "URSI", "服务端标记为退市/未识别，代码段本身是北交所"),
+    ("HK3441", "177", "180", "港股个股级子市场，同代码段其余 13 只都是 177"),
+    ("NBI", "169", "UNSI", "美股未识别占位"),
+]
+
+bad6 = []
+for pre, want, sample in SEG_ORACLE_3 + SEG_ORACLE_2:
+    got = T.get_market_id(sample)
+    if got != want:
+        bad6.append(f"{pre}*({sample}) 期望 {want} 实得 {got}")
+rec("⑥a", f"oracle 数字段 {len(SEG_ORACLE_3) + len(SEG_ORACLE_2)} 条", not bad6,
+    "；".join(bad6) or "全部与服务端 marketid 一致")
+
+bad6b = []
+for code, want, why in SEG_ORACLE_SHAPE:
+    got = T.get_market_id(code)
+    if got != want:
+        bad6b.append(f"{code}({why}) 期望 {want} 实得 {got}")
+rec("⑥b", f"oracle 非数字形态 {len(SEG_ORACLE_SHAPE)} 条", not bad6b,
+    "；".join(bad6b) or "1A/1B/HK/HS/美股 全部命中")
+
+bad6c = []
+for code, infer, srv, why in SEG_ORACLE_EXEMPT:
+    got = T.get_market_id(code)
+    if got != infer:
+        bad6c.append(f"{code} 推断 {got}（曾为 {infer}，服务端 {srv}）— {why}")
+rec("⑥c", f"豁免项 {len(SEG_ORACLE_EXEMPT)} 条推断值未漂移", not bad6c,
+    "；".join(bad6c) or f"830000→151 / HK3441→177 / NBI→169（服务端分别为 URSI/180/UNSI）")
+
+
+# ── ⑦ 结构护栏：表自身不得有死规则，输出空间必须合法 ────────────────
+# 旧实现的 `88` 分支排在 `8` 之后永远不可达，这正是「新段加了等于没加」的
+# 自伤方式。以下四条是**性质**断言，不依赖具体段清单，新加段自动受约束。
+
+TABLES = [
+    ("_SEG_MARKET_FREE", T._SEG_MARKET_FREE),
+    ("_SEG_SH", T._SEG_SH),
+    ("_SEG_SZ", T._SEG_SZ),
+    ("_SEG_BJ", T._SEG_BJ),
+]
+
+# ⑦a 同表内不得有被前序规则完全遮蔽的项（否则该规则永远不可达）
+shadowed = []
+for name, table in TABLES:
+    pres = [p for p, _m, _w in table]
+    for j, later in enumerate(pres):
+        for i, earlier in enumerate(pres[:j]):
+            if later.startswith(earlier):
+                shadowed.append(f"{name}: '{later}' 被前序 '{earlier}' 遮蔽")
+rec("⑦a", "段表内无不可达规则（旧实现 88 被 8 遮蔽）", not shadowed,
+    "；".join(shadowed) or f"四张表共 {sum(len(t) for _n, t in TABLES)} 条，长度降序且无遮蔽")
+
+# ⑦b 判定只看前缀 ⇒ 3 位段抽样即可覆盖全空间；输出必须落在 MARKET_ID 且非 "0"
+illegal, vacant = [], []
+for p in range(1000):
+    pre = f"{p:03d}"
+    for tail in ("000", "001", "500", "999"):
+        out = T.get_market_id(pre + tail)
+        if out not in T.CThsCloudZxg.MARKET_ID:
+            illegal.append(f"{pre}{tail}→{out}")
+rec("⑦b", "全 1000 个 3 位段 × 4 个边界尾，输出均为已登记市场号", not illegal,
+    "；".join(illegal[:5]) or f"4000 次判定全部 ∈ MARKET_ID（{len(T.CThsCloudZxg.MARKET_ID)} 项）")
+_ = vacant
+
+# ⑦c 段内不得跳跃（同一 3 位前缀内输出必须恒定，否则说明规则用了更长前缀却漏了边界）
+jumpy = []
+for p in range(1000):
+    pre = f"{p:03d}"
+    outs = {T.get_market_id(pre + t) for t in ("000", "001", "500", "999")}
+    if len(outs) > 1:
+        jumpy.append(f"{pre}*→{sorted(outs)}")
+rec("⑦c", "同一 3 位段内市场号恒定", not jumpy,
+    "；".join(jumpy[:6]) or "1000 段全部单值")
+
+# ⑦d 三种写法同解，且**值**必须落在该写法声明的市场里（只同解不够：
+# 把沪市转债从 17 改成 33，三种写法会"一致地错"，必须同时钉住归属）
+FORM_CASES = [
+    # (裸代码, 前缀式, 后缀式, 允许的市场号)
+    ("600519", "sh600519", "600519.SH", {"17"}),
+    ("688017", "sh688017", "688017.SH", {"17"}),
+    ("510300", "sh510300", "510300.SH", {"20"}),
+    ("110059", "sh110059", "110059.SH", {"17"}),
+    ("1A0001", "sh1A0001", "1A0001.SH", {"16"}),
+    ("881121", "sh881121", "881121.SH", {"48"}),
+    ("884069", "sh884069", "884069.SH", {"49"}),
+    ("002523", "sz002523", "002523.SZ", {"33"}),
+    ("300750", "sz300750", "300750.SZ", {"33"}),
+    ("159530", "sz159530", "159530.SZ", {"36"}),
+    ("161725", "sz161725", "161725.SZ", {"36"}),
+    ("399001", "sz399001", "399001.SZ", {"32"}),
+    ("430047", "bj430047", "430047.BJ", {"151"}),
+    ("920002", "bj920002", "920002.BJ", {"151"}),
+]
+drift7d, wrong7d = [], []
+for bare, pre, suf, allow in FORM_CASES:
+    got = {T.get_market_id(bare), T.get_market_id(pre), T.get_market_id(suf)}
+    if len(got) > 1:
+        drift7d.append(f"{bare}: 裸={T.get_market_id(bare)} 前缀={T.get_market_id(pre)} "
+                       f"后缀={T.get_market_id(suf)}")
+    if not got <= allow:
+        wrong7d.append(f"{bare}: 实得 {sorted(got)} 应属 {sorted(allow)}")
+rec("⑦d", f"三种写法同解且归属正确 {len(FORM_CASES)} 组", not drift7d and not wrong7d,
+    "；".join(drift7d + wrong7d) or "裸/前缀式/后缀式 同市场，且落在声明市场内")
+
+# ⑦e stockcode 里不得残留市场前缀（同花顺会报「传入股票代码有误」）
+leak = []
+for bare, pre, suf, _allow in FORM_CASES:
+    code, _mid = T.split_ths_code(pre)
+    if any(code.upper().startswith(m) for m in ("SH", "SZ", "BJ")) or "." in code:
+        leak.append(f"{pre}→{code}")
+rec("⑦e", "前缀式代码归一后不含市场标记", not leak,
+    "；".join(leak) or f"{len(FORM_CASES)} 组 stockcode 均为裸代码")
 
 # ── 汇总 ──────────────────────────────────────────────────────────
 failed = [r for r in results if not r[0]]

@@ -167,7 +167,7 @@ async function main() {
   assert(btn.textContent === during, "T3 保存中 updateScanSaveBtn 直接 return，文案不被抢写");
 
   // ── T4 成功 → finish(2000) 复位 ──
-  pending.resolve({ json: function () {
+  pending.resolve({ ok: true, status: 200, json: function () {
     return Promise.resolve({ tdx_saved: 2, ths_saved: 2, ths_msg: "ok" });
   } });
   await tick(); await tick(); await tick();
@@ -185,6 +185,36 @@ async function main() {
   flush(1500);
   assert(api.isSaving() === false, "T5 finish(1500) 后 _scanSaving 复位为 false");
   assert(btn.onclick === api.save, "T5 finish 后 onclick 交回 saveScanToZxg");
+
+  // ── T6 HTTP 500 必须走失败分支 ──
+  // 后端 `App/AppScan.py::zxg_save` 的 except 分支回 **500 + {"error": ...}**，
+  // 而 500 的 body 依然是合法 JSON：旧实现直接 `r.json()` 后就当成功数据渲染，
+  // `tdx_saved` 取不到 → 显示「通达信： 已保存」，把整次失败显示成成功。
+  // 这条只在真浏览器 E2E 里先被发现，这里补一条快测（E2E 依赖 Edge，慢）。
+  api.save();
+  pending.resolve({ ok: false, status: 500, json: function () {
+    return Promise.resolve({ error: "boom500" });
+  } });
+  await tick(); await tick(); await tick();
+  assert(btn.textContent === "保存失败",
+         "T6 500 走失败分支，实得 " + JSON.stringify(btn.textContent));
+  assert(String(btn.title).indexOf("boom500") >= 0,
+         "T6 失败原因挂 title，实得 " + JSON.stringify(btn.title));
+  flush(1500);
+  assert(api.isSaving() === false, "T6 finish(1500) 后 _scanSaving 复位为 false");
+  assert(btn.onclick === api.save, "T6 finish 后 onclick 交回 saveScanToZxg");
+
+  // ── T7 500 且 body 不是 JSON（网关/反代常见）也必须判失败 ──
+  api.save();
+  pending.resolve({ ok: false, status: 502, json: function () {
+    return Promise.reject(new SyntaxError("Unexpected token <"));
+  } });
+  await tick(); await tick(); await tick();
+  assert(btn.textContent === "保存失败",
+         "T7 非 JSON 的 5xx 仍判失败，实得 " + JSON.stringify(btn.textContent));
+  assert(String(btn.title).indexOf("502") >= 0,
+         "T7 title 退化为 HTTP 状态码，实得 " + JSON.stringify(btn.title));
+  flush(1500);
 
   process.exit(fails ? 1 : 0);
 }
@@ -364,7 +394,7 @@ def part_save_state():
     out = (proc.stdout or "").strip()
     for line in out.splitlines():
         print("  " + line)      # node 侧自带 PASS/FAIL 前缀，缩进对齐本文件风格
-    check("③ 保存按钮状态机行为：5 条路径全绿（node 桩，rc=0）",
+    check("③ 保存按钮状态机行为：7 条路径全绿（node 桩，rc=0，含 500/非 JSON 5xx）",
           proc.returncode == 0,
           "rc=%s，末段输出：%s" % (proc.returncode, out[-400:]))
 
