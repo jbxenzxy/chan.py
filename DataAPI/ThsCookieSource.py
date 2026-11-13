@@ -61,6 +61,11 @@ USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 PROBE_TIMEOUT = 8.0             # 校验的 requests timeout 参数（秒；connect/read 间隔，非总墙钟）
 VALIDATE_TTL = 120.0            # 同一份 Cookie 的校验结论缓存时长（秒）
 INTERACTIVE_COOLDOWN = 600.0    # 交互登录失败后的冷却（秒）
+# 登录窗口内，同一份 Cookie **校验失败**后的重试间隔（秒）。
+# 旧实现把「已尝试」当成「已通过」：签名一变就先记下来，校验失败也不回滚，
+# 于是同一份 Cookie 在窗口剩余的 80 多秒里再也不会被重试，一次瞬时网络抖动
+# 就等于白等一场。改成「成功的签名才记、失败的按间隔重试」。
+LOGIN_PROBE_RETRY = 10.0
 DEFAULT_LOGIN_TIMEOUT = 90.0    # 登录窗口等待上限（秒）；THS_LOGIN_TIMEOUT 可覆盖
 # 登录子进程的收尾余量（秒）：storage_state / browser.close / 解释器退出。
 # 父进程总预算由 `subprocess_budget()` 逐项汇总，父子不再各写一份魔数 ——
@@ -464,9 +469,12 @@ def interactive_login(timeout=None, headless=False):
 
     登录成功的判定信号 = 「同域 Cookie 的 (name, domain, value) 集合发生变化」。
     含 value 是必须的：`new_context(storage_state=...)` 会带进旧 Cookie，首轮
-    信号即非空并把 `last_sig` 锁定；用户登录时往往**只换同一批 Cookie 的值**
+    信号即非空并进入校验；用户登录时往往**只换同一批 Cookie 的值**
     （名字/域不变），只看 (name, domain) 就恒等、永远检测不到 —— 表现为登录
     窗口等到超时、随即进入 10 分钟失败冷却。
+    校验未通过的签名只记「尝试过」并按 `LOGIN_PROBE_RETRY` 间隔重试；只有
+    **校验通过**的签名才被锁定（旧实现把「尝试过」当「已通过」，一次瞬时失败
+    后同一份 Cookie 在窗口剩余时间内再也不会被重试）。
 
     `timeout=None` 时按 `THS_LOGIN_TIMEOUT` 解析（见 `resolve_login_timeout()`）；
     显式传值优先，供子进程 / CLI 原样透传。
@@ -518,14 +526,19 @@ def interactive_login(timeout=None, headless=False):
             # 启动开销仍在窗口外 ⇒ 实际 ≈ timeout − 1s（≤ 等待上限，契约成立）。
             deadline += time.monotonic() - goto_start
 
-            last_sig = None
+            ok_sig = None                    # 已**校验通过**的签名：只有它不再重试
+            tried_sig, tried_at = None, 0.0  # 最近一次**尝试**校验的签名与时刻
             while time.monotonic() < deadline:
                 cookies = context.cookies()
                 sig = tuple(sorted((c.get("name"), c.get("domain"),
                                     c.get("value") or "")
                                    for c in cookies if THS_DOMAIN in (c.get("domain") or "")))
-                if sig and sig != last_sig:
-                    last_sig = sig
+                now = time.monotonic()
+                # 签名一变立刻校验；同一份 Cookie 校验失败过，按 LOGIN_PROBE_RETRY
+                # 间隔重试 —— 既不把一次瞬时失败当终局，也不把接口当轮询打。
+                due = (sig != tried_sig) or (now - tried_at >= LOGIN_PROBE_RETRY)
+                if sig and sig != ok_sig and due:
+                    tried_sig, tried_at = sig, now
                     cookie = build_cookie_string(
                         [(c.get("name"), c.get("value") or "") for c in cookies
                          if THS_DOMAIN in (c.get("domain") or "")])
@@ -536,13 +549,22 @@ def interactive_login(timeout=None, headless=False):
                                                     deadline - time.monotonic()))
                         ok, msg = probe_cached(cookie, ttl=0, timeout=probe_budget)
                         if ok:
-                            write_cookie_file(cookie)
+                            ok_sig = sig
+                            # 写盘失败不能谎报成功：只读安装目录下 write_cookie_file
+                            # 返回 False，但本次会话仍拿得到 cookie —— 明说「本次可用、
+                            # 下次要重登」，而不是打一条「已写入」让用户以为存住了。
+                            written = write_cookie_file(cookie)
                             try:
                                 context.storage_state(path=state)
                             except Exception as e:      # noqa: BLE001 —— 状态留存失败不影响 Cookie
                                 log.info("[THS-Cookie] 会话状态留存失败：%s", e)
-                            log.info("[THS-Cookie] ✅ 登录成功，Cookie 已写入 %s（%s）",
-                                     cookie_file(), msg)
+                            if written:
+                                log.info("[THS-Cookie] ✅ 登录成功，Cookie 已写入 %s（%s）",
+                                         cookie_file(), msg)
+                            else:
+                                log.warning("[THS-Cookie] ⚠ 登录成功，但 Cookie 写盘失败"
+                                            "（%s）：本次会话可用，下次需重新登录",
+                                            cookie_file())
                             return cookie
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -728,9 +750,16 @@ def resolve_cookie(validate=False, force=False, timeout=PROBE_TIMEOUT,
                 return cookie, f"browser:{name}", details
             ok, msg = probe_cached(cookie, ttl=0, timeout=timeout)
             if ok:
-                write_cookie_file(cookie)
-                log.info("[THS-Cookie] ✅ 从 %s 取到有效 Cookie（%d 条，%s），已写回 %s",
-                         name, count, msg, cookie_file())
+                # 写回是「顺手缓存」，失败不影响本次使用；但日志不能说「已写回」——
+                # 只读目录/磁盘满时用户会以为存住了，下次还得再扫一遍浏览器。
+                written = write_cookie_file(cookie)
+                if written:
+                    log.info("[THS-Cookie] ✅ 从 %s 取到有效 Cookie（%d 条，%s），已写回 %s",
+                             name, count, msg, cookie_file())
+                else:
+                    log.warning("[THS-Cookie] ⚠ 从 %s 取到有效 Cookie（%d 条，%s），"
+                                "但写回 %s 失败：本次可用，下次仍需重新读取",
+                                name, count, msg, cookie_file())
                 return cookie, f"browser:{name}", details
             details.append(f"browser:{name}: {msg}")
             log.info("[THS-Cookie] 浏览器 %s 的 Cookie 不可用：%s", name, msg)

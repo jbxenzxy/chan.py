@@ -370,6 +370,10 @@ def get_market_id(code: str) -> str:
         return "33"   # 深市（主板、创业板、ETF/LOF）
     elif c.startswith(("8", "4", "43")):
         return "151"  # 北交所/新三板
+    elif c.startswith("920"):
+        # 北交所 920 段（新代码段）。不认它会一路落到末尾兜底 return "17"，
+        # 即把北交所票当沪市发出去（同花顺要么报错、要么加到不存在的市场）。
+        return "151"
     elif c.startswith("88"):
         return "48"   # 板块/概念
     return "17"

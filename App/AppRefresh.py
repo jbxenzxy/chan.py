@@ -200,6 +200,12 @@ def _fetch_names_from_sina_once(codes_dict):
 # 「期望条数」是第二道闸：接口返回 0 或截断时按失败处理、保留旧值，
 # 不再像改造前那样打一条「✅ 成功获取 0只」然后照样落盘。
 _INDEX_BELONG_EXPECTED = {"000300": 300, "000905": 500, "000852": 1000, "000688": 50}
+# 期望条数的**下界容差**（只）：指数样本在两次定期调整之间可能合法地少几只
+# （样本股退市即从样本中剔除，下一次定期调整才补足），严格相等会让这种指数
+# 每次刷新都判失败并保留旧值 —— 与「单指数失败固化旧值」是同一个后果。
+# 上界仍然是硬约束：多于期望只可能是分页重复或指错了表。
+# 2 只对 50 只的科创50 已是 4%，对 1000 只的中证1000 只有 0.2%，够挡真截断。
+_INDEX_BELONG_TOLERANCE = 2
 # 4 个指数并发后的**整体**预算（不是每个指数各一份）
 _INDEX_BELONG_BUDGET = 30.0
 
@@ -249,7 +255,8 @@ def _fetch_one_index_belong(index_code, index_name, box):
                     # `save_index_belong_cache` 只过滤「6 位纯数字」一种旧格式 key，
                     # 脏 key 会**永久落盘**，K 线页标签取到的就是一个不存在的标的。
                     # 4 个固定指数都不含北交所票，宁可丢这一只也不写错 key ——
-                    # 丢弃计入 app_dropped，条数判据仍是「有效 + 丢弃 == 期望」。
+                    # 丢弃计入 app_dropped，条数判据仍以「映射后只数 + 丢弃行数」
+                    # 的原始行数为守恒量（见下方 raw_rows 的上下界说明）。
                     # 不动 `_infer_bare_code_market`：它是沪深同号消歧的单一事实源，
                     # 牵动搜索与 K 线兜底，收益（仅在交易所字段缺失时生效）远小于风险。
                     continue
@@ -265,10 +272,30 @@ def _fetch_one_index_belong(index_code, index_name, box):
                         "映射 %d 只", index_name, index_code, dropped,
                         source_dropped, app_dropped, len(mapping))
         expected = _INDEX_BELONG_EXPECTED.get(index_code)
-        accounted = len(mapping) + dropped
-        if expected is not None and accounted != expected:
-            box["error"] = (f"{source} 有效 {len(mapping)} 只 + 丢弃 {dropped} 行"
-                            f"= {accounted}，期望 {expected} 只")
+        # 守恒量是**服务端原始行数**（= 映射后只数 + 丢弃行数）：合法过滤/去重行
+        # 必须加回来，否则一行脏数据就把整个指数误判成「成分不全」。
+        # 但判据不能是严格相等：上下界要分开管 ——
+        #   · 多于期望 → 失败（分页重复 / 指错表，只可能是异常）；
+        #   · 少于期望超过容差 → 失败（截断）；
+        #   · 只少 1~2 只 → 放过（样本股退市到下次调仓之间的合法空档），
+        #     否则该指数会永久判失败、旧值（含已退市票）一直留在缓存里。
+        raw_rows = len(mapping) + dropped
+        if expected is not None:
+            if raw_rows > expected:
+                box["error"] = (f"{source} 返回 {raw_rows} 行 > 期望 {expected} 只，"
+                                f"疑似分页重复或指数错配")
+                return
+            if raw_rows < expected - _INDEX_BELONG_TOLERANCE:
+                box["error"] = (f"{source} 返回 {raw_rows} 行 < 期望 {expected} 只"
+                                f"（下界容差 {_INDEX_BELONG_TOLERANCE} 只），判定截断")
+                return
+        # 行数齐但一行都没映射成：兜底源的交易所字段与代码首位同时失效。
+        # 必须在这里单列原因 —— 否则 box 里没有 error、mapping 又是空，
+        # 外层 `box.get("error") or "超过总预算"` 会把「映射为 0」报成超预算，
+        # 排查方向被直接带偏（真正的预算超时反而查不出来）。
+        if not mapping:
+            box["error"] = (f"{source} 返回 {len(items)} 行全部判不出市场，"
+                            f"有效成分 0 只")
             return
     except Exception as e:              # noqa: BLE001 —— 线程体内异常必须落到 box
         # 构造 mapping 也放进 try：异常一旦逃出线程体，线程静默死亡，外层只看到
@@ -334,6 +361,10 @@ def _refresh_index_belong():
     替换在单个指数抓取失败时会把它名下全部票的归属一并抹掉并落盘固化。
     """
     _set_refresh_status(step="刷新指数归属...")
+    # 本轮自己的失败要自己清：error 清零原来只发生在 _refresh_stock_names 开头，
+    # 靠「指数归属总排在股名之后」这一编排顺序代清。一旦给它独立入口（或调整
+    # 编排顺序），上一轮的「部分失败」就会永久挂在 UI 上，而本轮其实已经成功。
+    _set_refresh_status(error=None)
     load_index_belong_cache()   # 先加载已有缓存（含新旧文件名一次性迁移）
     log.info("[指数归属] ========== 开始刷新指数归属 ==========")
     try:

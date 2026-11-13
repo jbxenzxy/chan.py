@@ -15,9 +15,12 @@ stock_index_belong.json 里 500 只中证500 成分股一条不剩。根因不�
 本用例锁住改造后的下列性质（**全程打桩，不联网**）：
   ① 主源 eltdx 成功时不碰 AKShare（调用计数为 0）；
   ② 主源失败 / 返回空 → AKShare 兜底；
-  ③ 条数≠期望（含 0 只、条数多出）→ 该指数判失败、不进 accepted（旧值可保留）；
+  ③ 条数越界（0 只 / 多出 / 低于期望且超出下界容差）→ 该指数判失败、不进
+     accepted（旧值可保留）；
   ③b 合法过滤：`dropped` 随主源返回值透出并与映射后条数一起对齐期望值，
       不误判「成分不全」、不额外联网（回滚自证：换回旧判据本用例必须红）；
+  ③c 上下界分开管：少 1~2 只（样本股退市到下次调仓之间）**放行**，少 3 只判
+      截断；行数齐但一行都没映射成时**单列原因**，不许落到「超过总预算」；
   ④ 超整体预算 → 该指数判失败，总耗时不超预算；
   ⑤ 合并语义：成功指数整体换新、失败指数旧值保留；
   ⑤b 跨指数重叠票按 per_index 插入顺序后写覆盖（把现状钉住，改语义必须改断言）；
@@ -159,8 +162,9 @@ def test_dropped_accounting():
     """③b 合法过滤不算「成分不全」：dropped 随主源返回值透出，零额外联网。
 
     主源 300 行里 2 行被过滤 → 映射后 298 只 + dropped=2，合计仍 300，
-    必须 accepted 且 AKShare 一次都不调。判据刻意用 == 不是 >=：③ 的
-    「条数多出」用例仍须全失败。
+    必须 accepted 且 AKShare 一次都不调。上界仍是「不许比期望多」（③ 的
+    「条数多出」用例仍须全失败），下界留给 `_INDEX_BELONG_TOLERANCE` 只容差，
+    因为样本股退市到下次定期调整之间会合法少几只。
     回滚自证：把 `_fetch_one_index_belong` 换回「只看 len(mapping)」的旧
     判据，本用例必须红（沪深300 会被误判失败）。
     """
@@ -390,12 +394,55 @@ def test_partial_failure_reports():
     rec("⑩", "部分失败挂到刷新状态（不再只 log）", ok, f"error={err!r}")
 
 
+def test_count_tolerance_and_empty_mapping():
+    """③c 下界容差放行「合法少几只」；映射全空必须单列原因（不许落到超预算）。
+
+    两个后果同源于旧判据「原始行数 == 期望」：
+      · 严格相等 → 样本股退市少 1~2 只时整指数判失败，旧值（含已退市票）永久保留；
+      · 行数齐但映射为空 → box 里没有 error，外层把「映射为 0」报成「超过总预算」。
+    回滚自证：判据改回 `accounted != expected`，前半必红；
+              删掉 `if not mapping` 分支，后半必红（原因变成「超过总预算」）。
+    """
+    def ak_never(code):
+        raise AssertionError("不该走兜底")
+
+    # 少 2 只（= 容差）→ 放行，映射 298 只
+    with _Patched(lambda c: _mk_items(EXPECTED[c] - 2 if c == "000300" else EXPECTED[c]),
+                  _Counter(ak_never)):
+        acc, failed = R._fetch_index_belong_from_sources()
+    ok_loose = ("沪深300" in acc and len(acc["沪深300"]) == EXPECTED["000300"] - 2
+                and not failed)
+
+    # 少 3 只（超出容差）→ 判截断
+    with _Patched(lambda c: _mk_items(EXPECTED[c] - 3 if c == "000300" else EXPECTED[c]),
+                  _Counter(ak_never)):
+        acc2, failed2 = R._fetch_index_belong_from_sources()
+    ok_strict = ("沪深300" in failed2 and "沪深300" not in acc2
+                 and "截断" in failed2.get("沪深300", ""))
+
+    # 行数齐但映射全空：code 首位 7 推不出市场 + market 字段缺失
+    def unmappable(code):
+        return _mk_items(EXPECTED[code], market="", start=700000)
+
+    with _Patched(unmappable, _Counter(ak_never)):
+        acc3, failed3 = R._fetch_index_belong_from_sources()
+    reasons = " | ".join(failed3.values())
+    ok_empty = (not acc3 and len(failed3) == len(NAMES)
+                and "判不出市场" in reasons and "超过总预算" not in reasons)
+
+    rec("③c", "下界容差 2 只 + 空映射单列原因",
+        ok_loose and ok_strict and ok_empty,
+        f"少2只映射 {len(acc.get('沪深300', {}))}(应 298)/失败{bool(failed)}；"
+        f"少3只失败={failed2.get('沪深300')}；空映射原因={reasons[:60]}")
+
+
 def main():
     print("=" * 64)
     print("指数归属取数路径验证（eltdx 主源 / AKShare 兜底）")
     print("=" * 64)
     for fn in (test_expected_truth, test_eltdx_primary, test_akshare_fallback,
                test_empty_falls_back, test_count_guard, test_dropped_accounting,
+               test_count_tolerance_and_empty_mapping,
                test_bj_920_no_bad_key, test_budget, test_merge_semantics, test_merge_overlap,
                test_no_whole_replace, test_eltdx_total_mismatch,
                test_partial_failure_reports):
