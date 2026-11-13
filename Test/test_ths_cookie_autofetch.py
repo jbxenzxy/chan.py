@@ -49,6 +49,10 @@
   ㉔ `page.goto` 超时/加载失败不得冒泡成 traceback：预算耗尽要正常返回空 Cookie。
   ㉕ 循环内 `probe_cached` 的 timeout 必须服从剩余预算（短预算临近 deadline 时被
      截断、下限 0.5s）；断言按常量参数化，不钉死轮询轮数 / 校验槽位具体值。
+  ㉖ probe 缓存满员淘汰**最旧一条**（FIFO，`PROBE_CACHE_MAX`）：不再整表 clear()
+     —— 多 Cookie 通道顶满缓存时其余通道的结论不能被连坐清空（P3-3 锯齿抖动）。
+  ㉗ 进程内登录兜底拒绝**事件循环线程**（冻结版/脚本缺失分支同样遵守理由①）：
+     `_thread_has_running_loop()` 在普通线程 False、在 asyncio.run 内 True。
 
 运行：python Test/test_ths_cookie_autofetch.py     # 非 0 退出即失败
 """
@@ -1093,6 +1097,64 @@ rec("㉕", "probe 服从剩余预算：临近 deadline 时 timeout 被截断（�
     and _w25b == ["userid=u1; ticket=NEW"],
     f"probe_budgets={_b25} 下限场景={_b25b} 返回={_c25!r}/{_c25b!r} "
     f"write={_w25}/{_w25b}")
+
+
+# ㉖ P3-3：probe 缓存满员淘汰最旧一条（FIFO），不再整表 clear()。
+# 旧实现 len>8 时 `_probe_cache.clear()`：多 Cookie 通道（env/文件/四个浏览器）
+# 逐个 probe 把缓存顶满后，整表清空让其余通道刚拿到的结论全部失效 ——
+# 下一轮全量重新联网校验（每通道一个 8s 槽位），缓存锯齿抖动。
+S.invalidate()
+_calls26 = []
+restore = _patch(probe=lambda cookie, timeout=S.PROBE_TIMEOUT:
+                 _calls26.append(cookie) or (True, "OK"))
+try:
+    for _i in range(S.PROBE_CACHE_MAX):
+        S.probe_cached(f"C{_i}")
+    _n_full = len(_calls26)                     # 恰好满员：8 条各探 1 次
+    S.probe_cached("CNEW")                      # 第 9 个不同 cookie → 只淘汰 C0
+    _keys26 = list(S._probe_cache.keys())
+    S.probe_cached("C1")                        # 未被淘汰的旧 cookie 回访必须仍命中
+    _n_revisit = len(_calls26)
+    S.probe_cached("C1ND")                      # 第 10 个 → 只淘汰此时最旧的 C1
+    _keys26b = list(S._probe_cache.keys())
+finally:
+    restore()
+    S.invalidate()
+rec("㉖", "probe 缓存满员淘汰最旧一条（FIFO），旧结论不被整表清空",
+    _n_full == S.PROBE_CACHE_MAX
+    and "C0" not in _keys26 and "C1" in _keys26 and "CNEW" in _keys26
+    and len(_keys26) == S.PROBE_CACHE_MAX
+    and _n_revisit == _n_full + 1               # 回访命中：只多 CNEW 那 1 次探网
+    and "C1" not in _keys26b and "C2" in _keys26b and "C1ND" in _keys26b
+    and len(_keys26b) == S.PROBE_CACHE_MAX,
+    f"满员probe数={_n_full} 淘汰后keys={_keys26} 回访probe数={_n_revisit} "
+    f"二次淘汰keys={_keys26b}")
+
+
+# ㉗ P3-2：冻结版/脚本缺失的**进程内兜底**同样拒绝事件循环线程。
+# Playwright 同步 API 在带运行中 loop 的线程上直接抛错、事件循环被登录窗口
+# 时长卡住 —— 与子进程路径的理由①一致；线程池工作线程（无 loop）不受影响。
+import asyncio as _aio                             # noqa: E402
+
+_no_loop = S._thread_has_running_loop()
+
+
+async def _loop_probe():
+    return S._thread_has_running_loop()
+
+
+_in_loop = _aio.run(_loop_probe())
+# 静态断言：ensure_interactive_login 的冻结兜底分支**必须真的调用**检测并
+# 放弃登录（行为断言只咬「函数对不对」，这条咬「生产代码真的用它」——
+# 把分支拆掉、直接 interactive_login 的变异必须在这里红）。
+import inspect as _insp                          # noqa: E402
+
+_login_src27 = _insp.getsource(S.ensure_interactive_login)
+_static27 = ("if _thread_has_running_loop()" in _login_src27
+             and 'cookie = ""' in _login_src27)
+rec("㉗", "进程内登录兜底拒绝事件循环线程（冻结兜底遵守理由①）",
+    _no_loop is False and _in_loop is True and _static27,
+    f"普通线程={_no_loop} loop线程={_in_loop} 兜底分支存在={_static27}")
 
 
 # ── 汇总 ──────────────────────────────────────────────────────────────

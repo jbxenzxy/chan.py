@@ -20,6 +20,8 @@ Firefox 打开 https://t.10jqka.com.cn 登录 → 保持登录态 → 运行
      登录成功即写回 ①，会话状态留存 `Script/ths_storage_state.json`。
      ③ 由**子进程**执行（`Script/ths_capture_cookie.py --login`）：Playwright
      同步 API 不进入 uvicorn worker 线程，且卡死可 kill，不留不可回收线程。
+     冻结版（PyInstaller）/脚本缺失时退化为进程内兜底，但同样拒绝事件循环
+     线程（有运行中 loop 就不弹窗，见 `_thread_has_running_loop`）。
      可用 `THS_AUTO_LOGIN=0` 关闭、`THS_LOGIN_TIMEOUT`（秒，默认 90）调整等待上限；
      失败后有 10 分钟冷却，避免每点一次保存就弹一次窗。
 
@@ -38,6 +40,7 @@ Firefox 打开 https://t.10jqka.com.cn 登录 → 保持登录态 → 运行
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
@@ -60,6 +63,11 @@ USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 
 PROBE_TIMEOUT = 8.0             # 校验的 requests timeout 参数（秒；connect/read 间隔，非总墙钟）
 VALIDATE_TTL = 120.0            # 同一份 Cookie 的校验结论缓存时长（秒）
+# 校验结论缓存的容量上限。满员时**淘汰最旧一条**（FIFO），不整表 clear()：
+# 多 Cookie 通道（env/文件/四个浏览器）逐个 probe 会把缓存顶满，整表清空让
+# 其余通道刚拿到的结论全部失效，下一轮全量重新联网校验（每通道一个 8s 槽位）
+# ——缓存锯齿抖动（P3-3）。
+PROBE_CACHE_MAX = 8
 INTERACTIVE_COOLDOWN = 600.0    # 交互登录失败后的冷却（秒）
 # 登录窗口内，同一份 Cookie **校验失败**后的重试间隔（秒）。
 # 旧实现把「已尝试」当成「已通过」：签名一变就先记下来，校验失败也不回滚，
@@ -276,8 +284,9 @@ def probe_cached(cookie, ttl=VALIDATE_TTL, timeout=PROBE_TIMEOUT):
             return hit[0], hit[1]
     ok, msg = probe(cookie, timeout=timeout)
     with _cache_lock:
-        if len(_probe_cache) > 8:
-            _probe_cache.clear()
+        # 满员时淘汰最旧一条（dict 插入序 = FIFO），见 PROBE_CACHE_MAX 注释。
+        if cookie not in _probe_cache and len(_probe_cache) >= PROBE_CACHE_MAX:
+            _probe_cache.pop(next(iter(_probe_cache)), None)
         _probe_cache[cookie] = (ok, msg, now)
     return ok, msg
 
@@ -577,13 +586,28 @@ def interactive_login(timeout=None, headless=False):
                 pass
 
 
+def _thread_has_running_loop():
+    """当前线程是否有**运行中**的事件循环。
+
+    Playwright 同步 API 在带运行中 loop 的线程上会直接抛错，且事件循环被
+    登录窗口时长卡住 —— 见 `ensure_interactive_login` 理由①。
+    """
+    try:
+        asyncio.get_running_loop()
+        return True
+    except RuntimeError:
+        return False
+
+
 def ensure_interactive_login(timeout=None):
     """弹一次登录窗口（子进程），返回可用 Cookie；失败/超时返回 ""。
 
     走子进程的两个理由：
       · Playwright 同步 API 不进 uvicorn 的 worker 线程，避免事件循环冲突；
       · 卡死/浏览器崩溃可被 kill —— 不留回收不了的线程（指数归属那次的教训）。
-    冻结版（PyInstaller）没有 .py 可跑，退化为进程内调用。
+    冻结版（PyInstaller）没有 .py 可跑、脚本缺失时退化为进程内调用；该兜底
+    **同样遵守理由①**：当前线程有运行中的事件循环时不弹窗（返回 ""，走冷却
+    与重试），只在线程池工作线程（无 loop）里进程内跑。
 
     `timeout=None` 时按 `THS_LOGIN_TIMEOUT` 解析（见 `resolve_login_timeout()`）。
     """
@@ -595,7 +619,12 @@ def ensure_interactive_login(timeout=None):
     try:
         script = os.path.join(_REPO_ROOT, "Script", "ths_capture_cookie.py")
         if getattr(sys, "frozen", False) or not os.path.exists(script):
-            cookie = interactive_login(timeout=timeout)
+            if _thread_has_running_loop():
+                log.info("[THS-Cookie] 当前线程有运行中的事件循环，"
+                         "跳过进程内登录窗口（冻结版无法子进程化），稍后重试")
+                cookie = ""
+            else:
+                cookie = interactive_login(timeout=timeout)
         else:
             cookie = _login_via_subprocess(script, timeout)
         if not cookie:
