@@ -8560,6 +8560,10 @@
         // THS_LOGIN_TIMEOUT 决定，默认 90s；卡死另有超时兜底，整次保存可能远长于窗口
         // 时长）；期间 onchange 会改按钮文案，故用此标志把写入权收归 saveScanToZxg。
         var _scanSaving = false;
+        // 保存请求代号：每次 saveScanToZxg 递增。finish/slowTimer 捕获自己那一次的
+        // 代号，定时器触发时若已被更新的请求顶掉（seq !== _scanSaveSeq）就放弃 ——
+        // 旧请求的收尾不得覆盖新请求的按钮状态与标志（P2-1 时序问题的另一半）。
+        var _scanSaveSeq = 0;
 
         // 收集勾选的代码并更新按钮状态
         window.updateScanSaveBtn = function() {
@@ -8578,6 +8582,7 @@
             var codes = [];
             checks.forEach(function(cb) { codes.push(cb.value); });
             var btn = document.getElementById("scan-save-btn");
+            var seq = ++_scanSaveSeq;     // 本次请求代号（finish/slowTimer 的归属判据）
             _scanSaving = true;
             // 不置 disabled：保存中这个按钮的点击被改绑成「取消」，禁用会让它点不动。
             btn.disabled = false;
@@ -8586,6 +8591,7 @@
             // 同花顺 Cookie 由后端自动获取；万一要弹登录窗口，请求会停在服务端等登录，
             // 这里补一句说明，避免用户以为卡死（4s 内回来的请求看不到这句）。
             var slowTimer = setTimeout(function() {
+                if (seq !== _scanSaveSeq) return;   // 已被更新的请求顶掉：不覆写文案
                 btn.textContent = "保存中(同花顺可能需要登录)...（点此取消）";
             }, 4000);
             // 请求可取消：子进程预算由 subprocess_budget() 给出（窗口上限 + 加载 +
@@ -8596,6 +8602,7 @@
             // 漏掉这一步会让按钮永久停在取消分支（再点只显示「已取消保存」）。
             function finish(delay) {
                 setTimeout(function() {
+                    if (seq !== _scanSaveSeq) return;   // 旧请求的收尾不得覆盖新请求
                     btn.onclick = window.saveScanToZxg;
                     btn.style.cursor = "";
                     btn.style.opacity = "";
@@ -8666,7 +8673,11 @@
             .catch(function(err) {
                 clearTimeout(slowTimer);
                 if (cancelled) return;                 // 取消的收尾已由 onCancel 做完
-                btn.onclick = window.saveScanToZxg;
+                // 失败展示期点击无效（与成功分支一致）：这里若立即交回
+                // saveScanToZxg，「保存失败」后的 1.5s 内可再次点击，而 _scanSaving
+                // 要等 finish(1500) 才清 —— 两个并发保存请求 + 新旧收尾定时器互相
+                // 踩踏（P2-1）。统一由 finish(1500) 复位，展示期点击一律 no-op。
+                btn.onclick = function(ev) { if (ev) { ev.preventDefault(); } };
                 btn.textContent = "保存失败";
                 btn.title = (err && err.message) ? String(err.message) : "请求失败（详见服务端日志）";
                 btn.disabled = false;

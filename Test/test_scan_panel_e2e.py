@@ -18,8 +18,10 @@
 依赖与降级
 ----------
 需要 Node ≥ 22（内置 fetch/WebSocket）与 Edge/Chrome（CDP）。缺任一项打印
-`[SKIP]` 并 **exit 0**：门禁要能在没装浏览器的机器上跑通，而不是把环境缺失
-判成代码缺陷。跳过原因会写进输出，不会静默。
+`[SKIPPED]` 哨兵并 **exit 0**：门禁要能在没装浏览器的机器上跑通，而不是把
+环境缺失判成代码缺陷。`[SKIPPED]` 是门禁（`Test/run_all.py::run_component`）
+的「单列跳过」标记 —— 跳过的组件在汇总里以 SKIP 单列，绝不与真正跑过的
+PASS 混在一起被当成绿灯（P3-2：0 覆盖不得冒充全绿）。
 
   python Test/test_scan_panel_e2e.py            # 正常跑
   WB_SKIP_E2E=1 python Test/test_scan_panel_e2e.py   # 强制跳过（离线/慢机器）
@@ -58,8 +60,9 @@ def _find_edge():
 
 
 def _skip(msg):
-    print(f"[SKIP] 保存链路真浏览器 E2E：{msg}")
-    print("[SKIP] 这不是通过，也不代表已覆盖——只是本机缺依赖。")
+    # [SKIPPED] 哨兵：门禁据此把本组件单列成 SKIP（exit 0 但不算覆盖）。
+    print(f"[SKIPPED] 保存链路真浏览器 E2E：{msg}")
+    print("[SKIPPED] 这不是通过，也不代表已覆盖——只是本机缺依赖。")
     sys.exit(0)
 
 

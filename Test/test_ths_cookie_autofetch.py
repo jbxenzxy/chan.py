@@ -70,6 +70,7 @@ sys.path.insert(0, _REPO_ROOT)
 os.environ.pop("THS_COOKIE", None)          # 环境变量会抢占最高优先级，先摘掉
 
 from DataAPI import ThsCookieSource as S    # noqa: E402
+from DataAPI import ThsCloudZxgAPI as Zxg   # noqa: E402
 
 results = []
 
@@ -1155,6 +1156,102 @@ _static27 = ("if _thread_has_running_loop()" in _login_src27
 rec("㉗", "进程内登录兜底拒绝事件循环线程（冻结兜底遵守理由①）",
     _no_loop is False and _in_loop is True and _static27,
     f"普通线程={_no_loop} loop线程={_in_loop} 兜底分支存在={_static27}")
+
+
+# ㉘ P2-2 回归：保存链路的登录态检查必须**打穿** 120s 校验缓存（force 探测）
+# 缺陷形态（2026-11-14 评审 §4 P2-2 实测）：Cookie 在上次校验后的
+# VALIDATE_TTL=120s 内被服务端失效（异地登录 / 会话超时 / 服务端轮换）时：
+#   · ensure_cookie 命中缓存 → 返回「可用」；
+#   · check_login() 走 probe_cached(ttl=120) 同样命中 → 返回 True、零网络请求；
+#   · batch_add 的 get_self_stocks() 把 errorCode≠0 吞成 []，逐票 add 全失败；
+#   · 全程不 invalidate、不重取 ⇒ 面板只显示「同花顺：失败」，120s 内无法自愈。
+# 修法（评审 §8 方案②）：save_scan_to_ths_cloud 首道检查改 check_login(force=True)
+# （probe_cached(ttl=0)，每次保存多 1 次 GET 换确定性）；拿到 False 后才进入
+# 既有失效重取分支。本用例：真实 probe_cached 逻辑整段照跑，只打桩最底层
+# `S.probe`（联网探测），用「缓存命中不真探 vs force 真探」的行为差当判据。
+probe_calls28 = []
+state28 = {"valid": True}
+
+
+def _fake_probe28(cookie, timeout=S.PROBE_TIMEOUT):
+    """probe_cached 底层的联网探测替身：valid 开关模拟服务端失效。"""
+    probe_calls28.append(cookie)
+    if state28["valid"]:
+        return True, "OK（自选 3 只）"
+    return False, "服务端拒绝: HTTP 401"
+
+
+class _Resp28:
+    def __init__(self, text):
+        self.text = text
+
+    def raise_for_status(self):
+        pass
+
+
+class _FakeReq28:
+    """Zxg.requests 替身：即使未来有人把 force 检查改回缓存版（回归形态），
+    保存链路也不会把请求打到真网络 —— 回归只会表现为断言红，不是联网挂死。"""
+
+    class exceptions:
+        class Timeout(Exception):
+            pass
+
+        class RequestException(Exception):
+            pass
+
+    def __init__(self):
+        self.get_calls = 0
+
+    def get(self, *a, **k):
+        self.get_calls += 1
+        return _Resp28('selfStock({"errorCode":0,"result":'
+                       '[{"code":"600519","marketid":"17"}]})')
+
+    def post(self, *a, **k):
+        return _Resp28('modifyStock({"errorCode":0,"errorMsg":""})')
+
+
+_a28 = _b28 = _c28 = _d28 = False
+restore28 = _patch(probe=_fake_probe28)          # 只桩最底层：真实 probe_cached 照跑
+try:
+    api28 = Zxg.CThsCloudZxg(cookie="CK28")      # 显式 Cookie：构造期不联网
+    api28.check_login()                          # 首次校验：真探 1 次、写入缓存
+    api28.check_login()                          # TTL 内再来：必须命中缓存、零真探
+    _a28 = len(probe_calls28) == 1               # 缺陷前提在位：缓存的「有效」是陈旧的
+    state28["valid"] = False                     # —— 此刻服务端失效了这份 Cookie
+    _ok28 = api28.check_login(force=True)        # force 必须打穿缓存、真探得 False
+    _b28 = (_ok28 is False and len(probe_calls28) == 2)
+    _c28_res = Zxg.save_scan_to_ths_cloud(["sz002523"], cookie="CK28")
+    _c28 = isinstance(_c28_res, dict) and "登录状态失效" in str(_c28_res.get("error", ""))
+finally:
+    restore28()
+    S.invalidate()
+# 行为B'：有效 Cookie 的正常路径不被 force 误伤（走完 batch_add、added 正确）
+probe_calls28.clear()
+state28["valid"] = True
+restore28b = _patch(probe=_fake_probe28)
+_old_req28 = Zxg.requests
+Zxg.requests = _FakeReq28()
+try:
+    _d28_res = Zxg.save_scan_to_ths_cloud(["sz002523"], cookie="CK28")
+    _d28 = (_d28_res.get("source") == "explicit"
+            and _d28_res.get("added") == ["002523"]
+            and not _d28_res.get("failed"))
+finally:
+    Zxg.requests = _old_req28
+    restore28b()
+    S.invalidate()
+# 静态：save 路径首道检查必须带 force=True，且失效重取分支在其后（防只改一半）
+_src28 = _read("DataAPI/ThsCloudZxgAPI.py")
+_i28_force = _src28.find("check_login(force=True)")
+_i28_refetch = _src28.find("_open_api(force=True", _i28_force)
+rec("㉘", "P2-2 保存链路打穿 120s 缓存：缓存命中不真探 / force 真探得失效 / "
+          "失效在首道检查被拦 / 有效 Cookie 不误伤 / save 路径静态接线",
+    _a28 and _b28 and _c28 and _d28
+    and 0 <= _i28_force < _i28_refetch,
+    f"缓存前提={_a28} force真探={_b28} 失效被拦={_c28} 正常不误伤={_d28} "
+    f"静态接线 force@{_i28_force} < 重取@{_i28_refetch}")
 
 
 # ── 汇总 ──────────────────────────────────────────────────────────────

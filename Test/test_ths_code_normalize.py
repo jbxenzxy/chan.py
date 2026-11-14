@@ -124,7 +124,9 @@ class _FakeApi:
         self.login_calls = 0
         self.batch_calls = []
 
-    def check_login(self):
+    # force 参数：save 路径自 P2-2 起首道检查走 check_login(force=True)，
+    # 桩签名必须跟着真接口走（不吃 force 会 TypeError）。
+    def check_login(self, force=False):
         self.login_calls += 1
         return True
 

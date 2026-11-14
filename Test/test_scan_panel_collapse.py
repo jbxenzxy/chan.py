@@ -25,7 +25,7 @@
          不拦截、判定锚点唯一、window 面零新增 —— 防 test_phase6_guards 白名单红）；
  [状态机] 「保存到自选」按钮：进入保存 → 可取消 → finish() 复位三行。静态层钉
          唯一状态变量与三处出口，行为层（node 桩 DOM/fetch/定时器）跑真实函数体，
-         验取消 / 成功 / 失败三条路径的复位与守卫；
+         验取消 / 成功 / 失败 / 失败态重入拒绝（P2-1）/ 旧收尾不覆盖新请求；
  [真渲染] 无头 Chrome 打开真实页面：真点绘图区 / 面板内 / 顶部按钮 / Esc，
          断言 minimized 状态迁移 + 最小化态 × 的 computed display === 'none'
          + 禁用态样式生效 + 事件未被吞（容器 mousedown 计数）。
@@ -76,10 +76,12 @@ def _slice(text, start_marker, end_marker="});"):
 
 
 # 「保存到自选」状态机的行为级探针：把 app.js 里**真实**的
-# `updateScanSaveBtn` / `saveScanToZxg` 两函数体灌进 node，桩掉 DOM / fetch /
-# 定时器 / AbortController，跑「进入 → 取消 → 复位」「守卫」「成功」「失败」。
+ # `updateScanSaveBtn` / `saveScanToZxg` 两函数体灌进 node，桩掉 DOM / fetch /
+# 定时器 / AbortController，跑「进入 → 取消 → 复位」「守卫」「成功」「失败」
+# 「失败态重入拒绝」「旧收尾不覆盖新请求」。
 # 静态断言只能防删除（删一行 `_scanSaving = false;` 会红），防不住语义回退
-# （例如把 finish() 改成只在成功分支调用、或去掉保存中的 return 守卫）。
+# （例如把 finish() 改成只在成功分支调用、或去掉保存中的 return 守卫、或让
+# catch 立即交回 onclick 重开并发请求 —— P2-1 的原始缺陷形态）。
 _SAVE_NODE = r'''
 const fs = require("fs");
 const file = process.argv[process.argv.length - 1];
@@ -123,7 +125,9 @@ const ACs = [];
 function FakeAC() { this.signal = { aborted: false }; this.aborted = false; ACs.push(this); }
 FakeAC.prototype.abort = function () { this.aborted = true; this.signal.aborted = true; };
 let pending = null;
+let fetchCalls = 0;
 function fakeFetch(url, opts) {
+  fetchCalls += 1;
   return new Promise(function (resolve, reject) {
     pending = { url: url, opts: opts, resolve: resolve, reject: reject };
   });
@@ -215,6 +219,38 @@ async function main() {
   assert(String(btn.title).indexOf("502") >= 0,
          "T7 title 退化为 HTTP 状态码，实得 " + JSON.stringify(btn.title));
   flush(1500);
+
+  // ── T8 失败展示期（finish(1500) 未 flush）点击不得重入（P2-1）────────
+  // 缺陷形态（2026-11-14 评审实测）：catch 立即交回 onclick，而 _scanSaving
+  // 要等 finish(1500) 才清 ⇒ 1.5s 内再点 = 两个并发 POST + 新旧收尾互踩。
+  api.save();
+  pending.reject(new Error("boom"));
+  await tick(); await tick(); await tick();
+  assert(btn.textContent === "保存失败", "T8 前置：失败文案已显示");
+  fetchCalls = 0;
+  btn.onclick({ preventDefault: function () {} });   // 收尾期内用户再点
+  assert(fetchCalls === 0, "T8 失败展示期点击不得打开第二个请求，实得 " + fetchCalls);
+  assert(api.isSaving() === true, "T8 展示期 _scanSaving 仍为 true");
+  assert(btn.textContent === "保存失败", "T8 展示期点击不改文案");
+  flush(1500);
+  assert(api.isSaving() === false && btn.onclick === api.save,
+         "T8 finish(1500) 后正常复位、可重试");
+
+  // ── T9 旧请求的 finish 定时器不得覆盖新请求（finish 请求 token）──────
+  api.save();
+  pending.reject(new Error("boom1"));
+  await tick(); await tick(); await tick();   // 失败，finish(1500) 挂起
+  api.save();                                  // 收尾期内重入第二个请求
+  flush(1500);                                 // 旧请求的 finish 此时触发
+  assert(api.isSaving() === true, "T9 旧 finish 不得清掉新请求的 _scanSaving");
+  assert(btn.onclick !== api.save, "T9 旧 finish 不得把按钮交回 save（新请求仍绑取消）");
+  assert(btn.textContent === "保存中...（点此取消）",
+         "T9 新请求文案不被旧收尾覆写，实得 " + JSON.stringify(btn.textContent));
+  pending.reject(new Error("boom2"));
+  await tick(); await tick(); await tick();
+  flush(1500);
+  assert(api.isSaving() === false && btn.onclick === api.save,
+         "T9 新请求自己的 finish 正常复位");
 
   process.exit(fails ? 1 : 0);
 }
@@ -367,6 +403,15 @@ def part_static():
     check("③ slowTimer 三个出口都 clear（防 4s 定时器在收尾后覆写文案）",
           _blk.count("clearTimeout(slowTimer);") == 3,
           _blk.count("clearTimeout(slowTimer);"))
+    _catch = _slice(_blk, ".catch(function(err) {", "});")
+    check("③ 失败分支不立即交回 onclick（统一由 finish(1500) 复位，P2-1 防回潮）",
+          bool(_catch) and "window.saveScanToZxg" not in _catch
+          and "preventDefault" in _catch, _catch[:240])
+    check("③ finish/slowTimer 带请求 token（旧请求的收尾不得覆盖新请求）",
+          _fin.count("seq !== _scanSaveSeq") == 1
+          and _slice(_blk, "var slowTimer = setTimeout", "}, 4000);")
+          .count("seq !== _scanSaveSeq") == 1,
+          _fin[:240])
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -394,7 +439,7 @@ def part_save_state():
     out = (proc.stdout or "").strip()
     for line in out.splitlines():
         print("  " + line)      # node 侧自带 PASS/FAIL 前缀，缩进对齐本文件风格
-    check("③ 保存按钮状态机行为：7 条路径全绿（node 桩，rc=0，含 500/非 JSON 5xx）",
+    check("③ 保存按钮状态机行为：9 条路径全绿（node 桩，rc=0，含 500/非 JSON 5xx/失败态重入/旧收尾不覆盖新请求）",
           proc.returncode == 0,
           "rc=%s，末段输出：%s" % (proc.returncode, out[-400:]))
 

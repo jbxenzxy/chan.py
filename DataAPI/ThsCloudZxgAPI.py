@@ -18,6 +18,7 @@ import os
 import logging
 from DataAPI.ThsCookieSource import (
     ThsCookieUnavailable,
+    VALIDATE_TTL,
     ensure_cookie,
     parse_jsonp,
     probe_cached,
@@ -109,10 +110,18 @@ class CThsCloudZxg:
         """解析 JSONP 响应（实现统一在 `ThsCookieSource.parse_jsonp`）。"""
         return parse_jsonp(text, callback_name)
 
-    def check_login(self) -> bool:
-        """检查登录状态（走 `probe_cached`，与 Cookie 供给层共享 2 分钟校验缓存，
-        因此「刚取到的 Cookie」不会在这里再打一次同样的请求）"""
-        ok, msg = probe_cached(self.cookie)
+    def check_login(self, force: bool = False) -> bool:
+        """检查登录状态。
+
+        默认走 `probe_cached`，与 Cookie 供给层共享 2 分钟校验缓存（因此
+        「刚取到的 Cookie」不会在这里再打一次同样的请求）。
+        `force=True` 跳过缓存强制联网校验（ttl=0）。保存链路用它换确定性：
+        Cookie 可能在上次校验后的 `VALIDATE_TTL`（120s）内被服务端失效
+        （异地登录 / 会话超时 / 服务端轮换），缓存里的「有效」这时是假的 ——
+        不把缓存结论打穿，`batch_add` 只会逐票失败，且 120s 内不会触发
+        下方的失效重取分支（评审 P2-2）。
+        """
+        ok, msg = probe_cached(self.cookie, ttl=0 if force else VALIDATE_TTL)
         if not ok:
             log.info(f"[THS-API] 登录态无效: {msg}")
         return ok
@@ -509,7 +518,12 @@ def save_scan_to_ths_cloud(
             # 数十秒才弹出登录窗口的原因。
             api, source = _open_api(force=True, allow_interactive=True, skip_browser=True)
 
-    if not api.check_login():
+    # 首道检查必须 force：`ensure_cookie` 的「当场校验」结论会进 120s 缓存，
+    # Cookie 在校验后的窗口内被服务端失效时（异地登录 / 会话超时），缓存结论
+    # 是假的 —— 不打穿它，下面 `batch_add` 的 `get_self_stocks()` 会把
+    # errorCode≠0 吞成 []，逐票 add 全失败且不触发重取（评审 P2-2）。
+    # 代价是每次保存多 1 次 GET（≤8s 超时），换来「保存前登录态确定性」。
+    if not api.check_login(force=True):
         if cookie or cookie_file:
             return {"error": "登录状态失效（显式指定的 Cookie 不可用），请更新后重试"}
         log.info("[THS-API] Cookie 已失效，强制重新获取…")

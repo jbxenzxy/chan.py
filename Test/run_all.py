@@ -1049,7 +1049,8 @@ COMPONENTS = [
     #   click（"保存中置灰 ⇒ 取消点不动"的真实后果）；③ `&nbsp;` 在 textContent
     #   里是 \u00a0、三列渲染的真实文本；④ `fetch` 返回 500 时 `r.json()` 仍成功
     #   解析 ⇒ 旧代码把失败渲染成「已保存」（本用例首跑就抓到了这条真 bug）。
-    #   依赖 Node≥22 + Edge/Chrome；缺依赖时该脚本打印 [SKIP] 并 exit 0，
+    #   依赖 Node≥22 + Edge/Chrome；缺依赖时该脚本打印 [SKIPPED] 哨兵并 exit 0，
+    #   run_component 据此把该组件单列成 SKIP（P3-2：0 覆盖不得冒充绿灯），
     #   不会在没装浏览器的机器上把环境缺失判成代码缺陷。
     ("scan_panel_e2e",
      [sys.executable, os.path.join("Test", "test_scan_panel_e2e.py")]),
@@ -1221,11 +1222,22 @@ def run_component(name, cmd, update=False, env=None):
     # ✗ 断言行常出现在输出中部而非结尾，只留尾部会把关键证据截掉
     # （product_fee [3g]、p59 [13e] 都为此多花一轮才定位）。
     _lines = (out or "").strip().splitlines()
+    # P3-2 护栏：组件 exit 0 但输出带 [SKIPPED] 哨兵 = 本机缺依赖、这一轮
+    # **没有真的验**。记成 skipped 单列，不与真正的 PASS 混算 —— 否则
+    # 「0 覆盖」会被当成绿灯（`scan_panel_e2e` 缺 Node/Edge 时的原始形态）。
+    _skip_reason = ""
+    if ok:
+        for _l in _lines:
+            if _l.startswith("[SKIPPED]"):
+                _skip_reason = _l
+                break
     rec = {
         "name": name,
         "cmd": " ".join(_safe_relpath(c, REPO_ROOT) if os.path.isabs(c) else c
                         for c in real_cmd),
         "ok": ok,
+        "skipped": bool(_skip_reason),
+        "skip_reason": _skip_reason,
         "exit_code": exit_code,
         "timed_out": timed_out,
         "elapsed_s": round(elapsed, 2),
@@ -1263,6 +1275,7 @@ def main():
         print(f"──── {'PASS' if rec['ok'] else 'FAIL'} ({rec['elapsed_s']}s) ────")
 
     n_ok = sum(1 for r in records if r["ok"])
+    n_skipped = sum(1 for r in records if r.get("skipped"))
     n_all = len(records)
     summary = {
         "phase": "7",
@@ -1271,6 +1284,7 @@ def main():
         "python": sys.version.split()[0],
         "total": n_all,
         "passed": n_ok,
+        "skipped": n_skipped,
         "failed": n_all - n_ok,
         "components": records,
     }
@@ -1281,9 +1295,12 @@ def main():
 
     print("\n" + "=" * 64)
     for r in records:
-        print(f"  [{'PASS' if r['ok'] else 'FAIL'}] {r['name']:<24} {r['elapsed_s']:>6}s")
+        _tag = "FAIL" if not r["ok"] else ("SKIP" if r.get("skipped") else "PASS")
+        _note = ("  ← " + r["skip_reason"][:70]) if r.get("skipped") else ""
+        print(f"  [{_tag}] {r['name']:<24} {r['elapsed_s']:>6}s{_note}")
     print("=" * 64)
-    print(f"结果: {n_ok}/{n_all} 通过 | 报告: {_safe_relpath(report_path, REPO_ROOT)}")
+    print(f"结果: {n_ok}/{n_all} 通过（其中 {n_skipped} 项 SKIPPED：缺依赖未验，"
+          f"不得当覆盖）| 报告: {_safe_relpath(report_path, REPO_ROOT)}")
     if args.update:
         print("注意: 基线已重新冻结，请 git diff Test/snapshots/ 逐项审查后提交。")
     return n_ok == n_all
