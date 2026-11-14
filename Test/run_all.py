@@ -1225,6 +1225,7 @@ def run_component(name, cmd, update=False, env=None):
     # P3-2 护栏：组件 exit 0 但输出带 [SKIPPED] 哨兵 = 本机缺依赖、这一轮
     # **没有真的验**。记成 skipped 单列，不与真正的 PASS 混算 —— 否则
     # 「0 覆盖」会被当成绿灯（`scan_panel_e2e` 缺 Node/Edge 时的原始形态）。
+    # 统计与退出码的三分口径见 main() 里 n_ok / n_failed 的 P3-1 注释。
     _skip_reason = ""
     if ok:
         for _l in _lines:
@@ -1272,11 +1273,18 @@ def main():
         rec = run_component(name, cmd, update=args.update, env=env)
         records.append(rec)
         print("\n".join(rec["output_tail"]))
-        print(f"──── {'PASS' if rec['ok'] else 'FAIL'} ({rec['elapsed_s']}s) ────")
+        print(f"──── {'FAIL' if not rec['ok'] else ('SKIP' if rec.get('skipped') else 'PASS')}"
+              f" ({rec['elapsed_s']}s) ────")
 
-    n_ok = sum(1 for r in records if r["ok"])
+    # P3-1（复审 8a98cd7）：统计口径必须三分自洽 —— passed 不含 skipped，
+    # failed = total - passed - skipped，否则 report.json 会出现
+    # passed + skipped > total 的账目矛盾（skip 组件 ok=True，旧公式把它
+    # 同时算进 passed 和 skipped）。退出码仍只看 failed == 0：缺依赖不该
+    # 阻断 CI，但也不再出现「N/N 通过（其中 K 项 SKIPPED）」的自相矛盾。
+    n_ok = sum(1 for r in records if r["ok"] and not r.get("skipped"))
     n_skipped = sum(1 for r in records if r.get("skipped"))
     n_all = len(records)
+    n_failed = n_all - n_ok - n_skipped
     summary = {
         "phase": "7",
         "mode": "update" if args.update else "verify",
@@ -1285,7 +1293,7 @@ def main():
         "total": n_all,
         "passed": n_ok,
         "skipped": n_skipped,
-        "failed": n_all - n_ok,
+        "failed": n_failed,
         "components": records,
     }
 
@@ -1299,11 +1307,11 @@ def main():
         _note = ("  ← " + r["skip_reason"][:70]) if r.get("skipped") else ""
         print(f"  [{_tag}] {r['name']:<24} {r['elapsed_s']:>6}s{_note}")
     print("=" * 64)
-    print(f"结果: {n_ok}/{n_all} 通过（其中 {n_skipped} 项 SKIPPED：缺依赖未验，"
-          f"不得当覆盖）| 报告: {_safe_relpath(report_path, REPO_ROOT)}")
+    print(f"结果: {n_all} 项 = {n_ok} 通过 + {n_skipped} 跳过 + {n_failed} 失败"
+          f"（SKIPPED = 缺依赖未验，不得当覆盖）| 报告: {_safe_relpath(report_path, REPO_ROOT)}")
     if args.update:
         print("注意: 基线已重新冻结，请 git diff Test/snapshots/ 逐项审查后提交。")
-    return n_ok == n_all
+    return n_failed == 0
 
 
 if __name__ == "__main__":

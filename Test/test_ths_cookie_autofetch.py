@@ -1190,8 +1190,9 @@ class _Resp28:
 
 
 class _FakeReq28:
-    """Zxg.requests 替身：即使未来有人把 force 检查改回缓存版（回归形态），
-    保存链路也不会把请求打到真网络 —— 回归只会表现为断言红，不是联网挂死。"""
+    """Zxg.requests 替身，A/B 两段都装：拦截保存链路的任何 batch_add 流量
+    （回归形态只会表现为断言红，不是联网挂死），并给 A 段提供 get_calls
+    取证 —— 首道 force 检查拦下时 get_calls 必须 == 0（复审 8a98cd7 P3-2b）。"""
 
     class exceptions:
         class Timeout(Exception):
@@ -1212,8 +1213,9 @@ class _FakeReq28:
         return _Resp28('modifyStock({"errorCode":0,"errorMsg":""})')
 
 
-_a28 = _b28 = _c28 = _d28 = False
+_a28 = _b28 = _c28 = _d28 = _e28 = False
 restore28 = _patch(probe=_fake_probe28)          # 只桩最底层：真实 probe_cached 照跑
+_old_req28 = Zxg.requests
 try:
     api28 = Zxg.CThsCloudZxg(cookie="CK28")      # 显式 Cookie：构造期不联网
     api28.check_login()                          # 首次校验：真探 1 次、写入缓存
@@ -1222,9 +1224,24 @@ try:
     state28["valid"] = False                     # —— 此刻服务端失效了这份 Cookie
     _ok28 = api28.check_login(force=True)        # force 必须打穿缓存、真探得 False
     _b28 = (_ok28 is False and len(probe_calls28) == 2)
+    # 重污染（复审 8a98cd7 P3-2a）：force 真探会把缓存刷成 False，恰好抹掉
+    # 回归形态的「陈旧 True」前提 —— 首道检查若被改回缓存版，命中的是这份
+    # False 缓存，照样拦下，行为判据全部照常通过、判别力归零（首轮修法用
+    # 普通 check_login() 重污染，实测它 ttl=120 命中刚写入的 False 直接返回、
+    # 没真探，M7 变异下行为判据仍全 True —— 判别力依旧为零）。修法：重污染
+    # 也必须 force=True 打穿 —— 先恢复服务端、force 真探把 True 写回缓存，
+    # 再让服务端失效。无论首道检查是 force 版还是回归成缓存版，看到的都是
+    # 同一份「陈旧 True」，回归才会真正走进 batch_add、被行为判据咬住。
+    state28["valid"] = True
+    api28.check_login(force=True)                # 真探第 3 次：ttl=0 打穿、把 True 写回缓存
+    state28["valid"] = False                     # 服务端再失效；缓存里的 True 已陈旧
+    _req28 = _FakeReq28()
+    Zxg.requests = _req28                        # 网络替身提到 A 段（原只装 B' 段）
     _c28_res = Zxg.save_scan_to_ths_cloud(["sz002523"], cookie="CK28")
     _c28 = isinstance(_c28_res, dict) and "登录状态失效" in str(_c28_res.get("error", ""))
+    _e28 = _req28.get_calls == 0                 # 反向自证：首道检查拦下 ⇒ batch_add 零请求
 finally:
+    Zxg.requests = _old_req28
     restore28()
     S.invalidate()
 # 行为B'：有效 Cookie 的正常路径不被 force 误伤（走完 batch_add、added 正确）
@@ -1247,11 +1264,11 @@ _src28 = _read("DataAPI/ThsCloudZxgAPI.py")
 _i28_force = _src28.find("check_login(force=True)")
 _i28_refetch = _src28.find("_open_api(force=True", _i28_force)
 rec("㉘", "P2-2 保存链路打穿 120s 缓存：缓存命中不真探 / force 真探得失效 / "
-          "失效在首道检查被拦 / 有效 Cookie 不误伤 / save 路径静态接线",
-    _a28 and _b28 and _c28 and _d28
+          "失效在首道检查被拦（batch_add 零请求）/ 有效 Cookie 不误伤 / save 路径静态接线",
+    _a28 and _b28 and _c28 and _d28 and _e28
     and 0 <= _i28_force < _i28_refetch,
-    f"缓存前提={_a28} force真探={_b28} 失效被拦={_c28} 正常不误伤={_d28} "
-    f"静态接线 force@{_i28_force} < 重取@{_i28_refetch}")
+    f"缓存前提={_a28} force真探={_b28} 失效被拦={_c28} 零batch_add={_e28} "
+    f"正常不误伤={_d28} 静态接线 force@{_i28_force} < 重取@{_i28_refetch}")
 
 
 # ── 汇总 ──────────────────────────────────────────────────────────────

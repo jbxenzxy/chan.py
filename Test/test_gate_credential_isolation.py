@@ -17,6 +17,8 @@
   ⑤ 行为：未登记组件不受影响（凭据原样带入）
   ⑥ 行为：清凭据不改调用方那份 env（后续组件不被污染）
   ⑦ 发现式 docstring 的组件数 == len(COMPONENTS)（评审 P2-2：已陈旧三次）
+  ⑧ SKIP 统计三分口径：passed 不含 skipped、failed = total−passed−skipped、
+    退出码只看 failed（复审 8a98cd7 P3-1：旧口径 passed+skipped>total 自相矛盾）
 """
 import importlib.util
 import os
@@ -137,6 +139,56 @@ _n_comp = len(gate.COMPONENTS)
 rec("⑦", f"发现式 docstring 的组件数 == len(COMPONENTS)（{_n_comp}）",
     f"{_n_comp} 个组件" in _discover_src,
     f"run_all_tests.py 顶部须写「{_n_comp} 个组件」（加/删 COMPONENTS 时同步）")
+
+
+# ── ⑧ SKIP 统计三分口径（复审 8a98cd7 P3-1） ─────────────────────────
+#     背景：run_all.py 引入 [SKIPPED] 哨兵后，main() 的统计公式一度仍是
+#     n_ok = sum(... if r["ok"]) —— skip 组件 ok=True，被同时算进 passed
+#     与 skipped，report.json 出现 passed+skipped>total 的账目矛盾，且
+#     打印「N/N 通过（其中 K 项 SKIPPED…）」自相矛盾。本条钉死三件事：
+#     ① run_component 对带哨兵的 exit 0 输出必须判 skipped（行为）；
+#     ② 统计公式必须排除 skipped、failed 按 total−passed−skipped（静态）；
+#     ③ 退出码只看 failed == 0，缺依赖不阻断 CI（静态）。
+def _run_with_stdout(stdout_text):
+    """桩 subprocess.run 喂指定 stdout，跑 run_component 拿 rec。"""
+    seen = []
+
+    class _FakeProc8:
+        returncode = 0
+        stdout = stdout_text
+
+    def _fake_run8(cmd, **kw):
+        seen.append(1)
+        return _FakeProc8()
+
+    orig = gate.subprocess
+    gate.subprocess = types.SimpleNamespace(
+        run=_fake_run8, PIPE=orig.PIPE, STDOUT=orig.STDOUT,
+        TimeoutExpired=orig.TimeoutExpired)
+    try:
+        return gate.run_component("stub_skip_stat", [sys.executable, "stub.py"],
+                                  env=dict(SAMPLE_ENV))
+    finally:
+        gate.subprocess = orig
+
+
+_rec_skip = _run_with_stdout("[SKIPPED] fake dependency missing\n")
+_rec_pass = _run_with_stdout("[stub] ordinary output, no sentinel\n")
+_ok8a = (_rec_skip["ok"] is True and _rec_skip["skipped"] is True
+         and "SKIPPED" in _rec_skip["skip_reason"])
+_ok8b = (_rec_pass["ok"] is True and not _rec_pass["skipped"])
+# 按新公式对这两条 rec 复算：passed 不含 skip 项，三分恒等。
+_ok8c = (sum(1 for r in (_rec_skip, _rec_pass) if r["ok"] and not r.get("skipped")) == 1
+         and sum(1 for r in (_rec_skip, _rec_pass) if r.get("skipped")) == 1
+         and (2 - 1 - 1) == 0)
+with open(GATE_PATH, encoding="utf-8") as _f:
+    _gate_src8 = _f.read()
+_ok8d = ('n_ok = sum(1 for r in records if r["ok"] and not r.get("skipped"))' in _gate_src8
+         and "n_failed = n_all - n_ok - n_skipped" in _gate_src8
+         and "return n_failed == 0" in _gate_src8)
+rec("⑧", "SKIP 统计三分口径：哨兵→skipped / passed 排除 skip / failed 恒等 / 退出码只看 failed",
+    _ok8a and _ok8b and _ok8c and _ok8d,
+    f"哨兵识别={_ok8a} 普通输出不误判={_ok8b} 三分复算={_ok8c} 静态公式与退出码={_ok8d}")
 
 
 def main():
