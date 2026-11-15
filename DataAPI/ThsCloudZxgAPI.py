@@ -35,8 +35,10 @@ class CThsCloudZxg:
     BASE_URL = "https://t.10jqka.com.cn"
 
     # 市场代码映射。**只用于显示**，判定一律走 `_SEG_*` 表。
-    # 36 / 49 / 180 由真实自选股快照反查得出（见 Test/test_ths_code_normalize.py
-    # 的 `SEG_ORACLE_3`，刷新命令 `python Test/gen_ths_oracle.py`）：
+    # 36 / 49 见 Test/test_ths_code_normalize.py::SEG_ORACLE_3
+    #   （刷新段差异：python Test/gen_ths_oracle.py）；180 见同文件
+    #   ::SEG_ORACLE_EXEMPT —— HK3441 的服务端 marketid，本地段表判 177，
+    #   且非数字代码不进 gen_ths_oracle.py 的段聚合，需人工核对。
     # 159530/161725 在服务端就是 36（深市基金），
     # 884069/884218 是 49（二级行业板块），HK3441 是 180。旧表缺这三项，
     # `get_market_id` 也从不会返回 20/36/49——添上后 `market_name` 才有值。

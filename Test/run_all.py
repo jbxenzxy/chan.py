@@ -1148,6 +1148,14 @@ COMPONENTS = [
     ("akshare_import_lazy_selfcheck",
      [sys.executable, os.path.join("Test", "test_akshare_import_lazy.py"),
       "--self-check", "--allow-skip"]),
+    # 源码注释「Test/ 引用存在性」棘轮（2026-11-15，复审 8a1defa §7.2）：注释里
+    #   引用的测试文件/符号必须真实存在 —— 上一轮悬空注释（指向从未入库的
+    #   oracle 测试文件）活过 23 个提交，复审反向变异证明现有 6 组件全不拦截。
+    #   判据：Test 前缀引用（仓库根 + 祖先目录多锚点解析）+ AST 顶层符号配对；
+    #   存量悬空冻结在 BASELINE 只减不增，新增即红。M-A/M-B 变异自证有牙、
+    #   M-C 合法引用不误报。
+    ("comment_ref_guard",
+     [sys.executable, os.path.join("Test", "test_comment_ref_guard.py")]),
     # ── 暂不注册（注册即恒红 / 无拦截力，注册了门禁形同虚设）──────────
     #   Test/repro_n4_cleanup_race.py          N4 未修，且脚本只有 return 0
     #                                          （恒通过、无拦截力，须先改成
