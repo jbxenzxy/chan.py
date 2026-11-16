@@ -15,7 +15,9 @@
        阈值漂移对护栏不可见）；K6 钉 render→事件侧几何接线（防 _measureGeom
        登记被删后功能整体静默失效）；
      · 手势不互抢：Ctrl+点击落回原区间选择 / 双窗 Ctrl+拖动归红框 / 出界照常平移；
-     · mouseleave 分态：拖拽中取消、落定保留。
+     · mouseleave 分态：拖拽中取消、落定保留；
+     · 越界渲染：整体出界不画 / 三边夹取（含非零原点绘图区防 area.x/area.y 轴混淆
+       与写死 0）/ 双窗下窗不画。
   ② click 守卫（P3-2 改一次性 flag 后的行为）：
      · 拖框 mouseup 武装 `_measureClickGuardArmed` → 浏览器补发的那次 click 被
        chip 监听器吞掉一次且**消费即复位**；
@@ -400,6 +402,26 @@ ctx._rects.length = 0; ctx._texts.length = 0;
 drawMeasureRect(AREA, { min: 3600, max: 3800 }, 80, 0);   // y1=(3800-3500)*2=600 探出下界
 const bB = boxOf();
 check("H3d 下界夹到 area.y+area.h", bB && bB.y + bB.h, 400.5);
+
+// ══ H3e/H3f. 非零原点绘图区（复审4 §2）：AREA 的 x=y=0 让 area.x 与 area.y
+//    数值不可区分——「拿另一轴当夹取原点」「把原点写死 0」两类改动在
+//    H3a~H3d 下恒绿（swap_left_origin / swap_top_origin / clip_left_noop）。
+//    真实 getChartArea() 给 x=PADDING.left=10 / y=PADDING.top=20（单窗），
+//    二者不等 ⇒ 可达的 10px 级可见错位。══
+const AREA2 = { x: 10, y: 20, w: 800, h: 400 };
+
+finalizeBox();
+viewOffset = 2.5;                       // 日期重定位 gs=2 → x0=10-160+... 夹到 AREA2.x=10
+ctx._rects.length = 0; ctx._texts.length = 0;
+drawMeasureRect(AREA2, PR, 80, 0);
+const bL2 = boxOf();
+check("H3e 左界夹到 area.x(=10)，未与 area.y 混淆、未写死 0", bL2 && bL2.x, 10.5);
+
+finalizeBox();                          // resetGesture 已复位 viewOffset=0
+ctx._rects.length = 0; ctx._texts.length = 0;
+drawMeasureRect(AREA2, { min: 3400, max: 3600 }, 80, 0);   // y0=20+(3600-3750)*2=-280 → 夹到 AREA2.y=20
+const bT2 = boxOf();
+check("H3f 上界夹到 area.y(=20)，未与 area.x 混淆", bT2 && bT2.y, 20.5);
 
 // ══ I. 双窗/出界不抢手势 ══
 resetGesture();
