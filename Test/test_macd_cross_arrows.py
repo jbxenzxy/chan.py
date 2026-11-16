@@ -106,9 +106,6 @@ def norm_color(s):
 
 def find_node():
     cand = [os.environ.get("NODE_EXE"), shutil.which("node")]
-    cand += glob.glob(os.path.expanduser(
-        "~/.workbuddy/binaries/node/versions/*/node.exe"))
-    cand += [r"C:\Program Files\nodejs\node.exe"]
     for c in cand:
         if c and os.path.isfile(c):
             return c

@@ -63,7 +63,6 @@
 
 零网络、零浏览器、秒级。跑法：python Test/test_bottom_slots.py
 """
-import glob
 import io
 import json
 import os
@@ -194,9 +193,6 @@ def strip_comments(src):
 
 def find_node():
     cand = [os.environ.get("NODE_EXE"), shutil.which("node")]
-    cand += glob.glob(os.path.expanduser(
-        "~/.workbuddy/binaries/node/versions/*/node.exe"))
-    cand += [r"C:\Program Files\nodejs\node.exe"]
     for c in cand:
         if c and os.path.isfile(c):
             return c

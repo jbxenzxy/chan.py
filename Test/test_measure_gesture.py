@@ -27,7 +27,6 @@
 与 test_crosshair_readout.py 同型；零网络、零浏览器、秒级。
 跑法：python Test/test_measure_gesture.py
 """
-import glob
 import io
 import json
 import os
@@ -118,10 +117,9 @@ def click_listener_src(src):
 
 
 def find_node():
+    # 复审3 必修4：NODE_EXE + shutil.which 已足够（本机 which 命中 WorkBuddy 自带 node）；
+    # 硬编码本机路径是环境泄漏。仓库其余 5 处同款硬编码本轮一并同步清理（消除分叉）。
     cand = [os.environ.get("NODE_EXE"), shutil.which("node")]
-    cand += glob.glob(os.path.expanduser(
-        "~/.workbuddy/binaries/node/versions/*/node.exe"))
-    cand += [r"C:\Program Files\nodejs\node.exe"]
     for c in cand:
         if c and os.path.isfile(c):
             return c
@@ -372,13 +370,36 @@ finalizeBox();
 viewOffset = 10;                       // 框整体平移出绘图区左界
 ctx._rects.length = 0; ctx._texts.length = 0;
 drawMeasureRect(AREA, PR, 80, 0);
-check("H1 框整体出界→只裁剪不漏画到轴/底带", ctx._rects.length, 0);
+check("H1 框整体出界→完全不画（三边裁剪由 H3 覆盖）", ctx._rects.length, 0);
 finalizeBox();
 window._isRenderingBottom = true;      // 双窗副图渲染：测量框属主图，不画
 ctx._rects.length = 0; ctx._texts.length = 0;
 drawMeasureRect(AREA, PR, 80, 0);
 check("H2 下窗渲染不画测量框", ctx._rects.length, 0);
 window._isRenderingBottom = false;
+
+// ══ H3. 部分出界：三边各被夹到绘图区（vR 右界不可达：_measurePointAt 夹住 mx
+//        且 viewOffset 只增 ⇒ 框只会从左出界，复审3 §6 明确不要求）══
+const boxOf = () => ctx._rects.filter(r => r.w > 50 && r.h > 50)[0] || null;
+
+finalizeBox();                          // 框锚定 viewOffset=0：x=[100,240] y=[100,200]
+viewOffset = 2.5;                       // 日期重定位 gs=floor(2.5)=2 → 框左移 160px，x0=-60 探出 area.x=0
+ctx._rects.length = 0; ctx._texts.length = 0;
+drawMeasureRect(AREA, PR, 80, 0);
+const bL = boxOf();
+check("H3a 左界夹到 area.x", bL && bL.x, 0.5);
+
+finalizeBox();                          // resetGesture 已复位 viewOffset=0
+ctx._rects.length = 0; ctx._texts.length = 0;
+drawMeasureRect(AREA, { min: 3400, max: 3600 }, 80, 0);   // y0=(3600-3750)*2=-300 探出上界
+const bT = boxOf();
+check("H3b 上界夹到 area.y", bT && bT.y, 0.5);
+
+finalizeBox();
+ctx._rects.length = 0; ctx._texts.length = 0;
+drawMeasureRect(AREA, { min: 3600, max: 3800 }, 80, 0);   // y1=(3800-3500)*2=600 探出下界
+const bB = boxOf();
+check("H3d 下界夹到 area.y+area.h", bB && bB.y + bB.h, 400.5);
 
 // ══ I. 双窗/出界不抢手势 ══
 resetGesture();
@@ -416,7 +437,9 @@ DRIVER = DRIVER_PREAMBLE + "\n%s\n" + "\n" + DRIVER_SCENARIOS + "\nconsole.log(J
 
 
 def build_driver(js):
-    m = re.search(r"const\s+MEASURE_MIN_DRAG\s*=\s*(\d+)\s*;", js)
+    # 阈值抽取放宽到任意表达式（[^;]+）：4.5 / 2*2 等变异注入后行为对不受干扰，
+    # 由 K7 钉值判红——报错形态干净（复审3 §6 顺带项）。
+    m = re.search(r"const\s+MEASURE_MIN_DRAG\s*=\s*([^;]+?)\s*;", js)
     if not m:
         raise AssertionError("未找到 const MEASURE_MIN_DRAG（app.js）")
     names = ["_measureDataKey", "_measureFindAbs", "_measureAnchor", "_measureDateMs",
@@ -445,11 +468,12 @@ def test_source_contracts(js):
     rec("K5", "chip 监听器消费即复位（吞一次不影响下一个真实点击）",
         "if (_measureClickGuardArmed) { _measureClickGuardArmed = false; return; }" in js)
     # K6：render→事件侧的几何接线（上轮变异 no_geom_registration 的假绿缺口）。
-    #   resetGesture 在驱动里手动设 _measureGeom 会旁路真值来源，只有静态契约能钉住。
     #   render() 是薄分发器，登记块在主图渲染真身 _renderChart 内。
+    #   结构断言而非双子串：「赋值挪出守卫块」变异下两个子串都还在，弱断言恒绿
+    #   （复审3 §3.1 geom_outside_if）；正则钉死「赋值位于 _isRenderingBottom 块内」。
     rnd = fn_src(js, "_renderChart")
-    rec("K6", "主图 _renderChart 登记 _measureGeom（下窗不登记）",
-        "_measureGeom = {" in rnd and "if (!window._isRenderingBottom)" in rnd)
+    rec("K6", "主图 _renderChart 在下窗守卫块内登记 _measureGeom",
+        re.search(r"if \(!window\._isRenderingBottom\) \{\s*(?://[^\n]*\n\s*)*_measureGeom = \{", rnd) is not None)
     # K7：阈值数值钉死（配合 B0a/B0b 行为对与驱动注入——三件套才咬得住阈值漂移）
     rec("K7", "阈值常量钉死为 4px",
         "const MEASURE_MIN_DRAG = 4;" in js)
