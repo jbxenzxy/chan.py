@@ -218,6 +218,26 @@
 
         let _mouseDownX = 0, _mouseDownY = 0;
 
+        // ══ 区间测量（Ctrl + 左键拖拽，天狼50 同款）══════════════════════
+        //   _measureRect 拖拽中存「窗口内小数索引 + 价格」（跟手），松手时折算成
+        //   「日期 + 相对 K 线中心偏移」（跟 K 线）：期货实时刷新每帧都整份替换
+        //   chartData 且视图会跟着最新价右移，只有日期锚点在刷新 / 平移 / 缩放后
+        //   仍指同一批 K 线。价差与耗时都是**数据事实**，不该随视口漂移。
+        //   null = 无；dragging=true = 拖拽中（虚线框，随鼠标实时变）；
+        //   dragging=false = 已松手（框留在图上，实线）。
+        let _measureRect = null;
+        //   Ctrl 按下那一刻**不建框**，只记待定起点：位移过 MEASURE_MIN_DRAG 才升级
+        //   为拖框。否则「Ctrl+点击 = 区间选择起点」会被这个手势抢走（既有功能）。
+        let _measurePending = null;
+        //   换算基准「像素 ↔ (索引, 价格)」必须与本次渲染逐项一致（barStep 取决于
+        //   effectiveCount、subPixelOffset 取决于小数视口）⇒ 渲染侧登记真值、
+        //   事件侧只读，绝不另算一遍（否则缩放后框与读数会各自漂移）。
+        let _measureGeom = null;
+        //   拖框松手后浏览器仍会补发一次 click（落点可能在底部 chip 上）⇒ 短时忽略，
+        //   否则「拉个框」会顺手把底部指标切掉。
+        let _measureClickGuardUntil = 0;
+        const MEASURE_MIN_DRAG = 4;   // 升级为拖框的最小位移（px），与点击阈同量级
+
         // 区间选择状态机: IDLE(空闲) | SELECTED_A(已选起点)
         let _rangeSelect = { mode: 'IDLE', startIdx: null, startFreq: null, startSymbol: null };
 
@@ -851,6 +871,8 @@
             // 底部指标区槽位 chip：单击沿 BOTTOM_ORDER 切换该槽的指标
             canvas.addEventListener("click", function(e) {
                 if (!chartData) return;
+                // 拖框松手后浏览器会补发一次 click（落点可能压在 chip 上）⇒ 忽略
+                if (Date.now() < _measureClickGuardUntil) return;
                 // 双击的第二次点击（click.detail > 1）不重复切换 —— 浏览器必然先发
                 // 两次 click 才发 dblclick；不看 detail 会让双击 chip 连切两位。
                 if (e.detail > 1) return;
@@ -1818,6 +1840,13 @@
             const barStep = area.w / effectiveCount;
             const MACD_BAR_WIDTH = Math.max(3, barStep * 0.5);  // MACD红绿柱宽度随K线间距缩放（原固定2px）
             const subPixelOffset = (viewOffset - Math.floor(viewOffset)) * barStep;
+            // 区间测量的换算基准：鼠标事件要立刻做「像素 ↔ (索引, 价格)」换算，
+            // 口径必须与本次渲染逐项相同 ⇒ 渲染侧登记真值、事件侧只读。
+            // 下窗（双窗副图）不登记：测量只属于主图手势。
+            if (!window._isRenderingBottom) {
+                _measureGeom = { area: area, priceRange: priceRange,
+                                 barStep: barStep, subPixelOffset: subPixelOffset };
+            }
             // 双窗口红框：笔外沿区间（分型左肩→右肩，跳过中间灰框部分）
             // 调试：记录到全局状态供侧边调试面板读取（保留 calcRedRange 之前设置的原因）
             var _prevReason = window._lastRedFrameStatus ? window._lastRedFrameStatus.reason : undefined;
@@ -1968,6 +1997,7 @@
             _overlayData = null;
             drawCrosshair(klinesToDraw, area, priceRange, bottomBottomY, barStep, subPixelOffset,
                 slotAreas, slotRanges);
+            drawMeasureRect(area, priceRange, barStep, subPixelOffset);
             drawPriceAxis(area, priceRange);
             for (let si = 0; si < slotCount; si++) {
                 BOTTOM_INDICATORS[_slotAt(si)].axis(slotAreas[si], slotRanges[si]);
@@ -3370,6 +3400,222 @@
             }
         }
 
+        // ══════════════════════════════════════════════════════════════
+        // 区间测量（Ctrl + 左键拖拽）：天狼50 同款矩形框
+        //   · 框内三行读数：价差（点） / 幅度% / 耗时
+        //   · 价差口径 = **视觉上方点 − 视觉下方点**，恒为正 —— 正好覆盖两种
+        //     拖法：「向右下拖，左上角 − 右下角」、「向右上拖，右上角 − 左下角」，
+        //     本质都是「上减下」，所以只写一条口径。翻转视图（_isMirrorMode）下
+        //     视觉上下与价格高低相反，abs 之后自然成立，不写第二套方向判断。
+        //   · 幅度% 基数取**下方点价格**（涨幅口径；前复权负价 / 零价 → "--"）
+        //   · 耗时 = 两端所落 K 线的时间差（分钟线得分秒，日线得天）
+        // 几何一律由 (idx, price) 反算，与 drawCrosshair 的 cx 同一映射：
+        //   x = area.x + barStep·idx + barStep/2 − subPixelOffset
+        // 其中 idx 是**窗口内**索引（= 绝对索引 − viewOffset）：拖拽时跟手用它，
+        // 落定后一律用日期锚点重算（见 _measureAnchor / drawMeasureRect）。
+        //   y = priceToY(price, area, priceRange)
+        // ══════════════════════════════════════════════════════════════
+
+        // 测量框的「数据身份」：换标的 / 换周期 / 换市场 ⇒ 旧框作废。
+        // 不能拿 chartData 对象引用判失效 —— 期货实时刷新每帧整份替换（全量快照），
+        // 那只是同一条行情在生长，拖完不到一秒框就没了。
+        function _measureDataKey(d) {
+            if (!d || !d.meta) return null;
+            return (d.meta.symbol || "") + "|" + (d.meta.freq || "") + "|" + (d.meta.market || "");
+        }
+
+        // 日期 → 绝对索引。hint 是上次命中的索引（实时只在尾部追加，命中点不会远走），
+        // 未命中再从 hint 向两侧扩。找不到返回 -1：该时刻已不在数据里（不拿旧价挂新图）。
+        function _measureFindAbs(arr, date, hint) {
+            if (!date || !arr || !arr.length) return -1;
+            const at = function (i) { return i >= 0 && i < arr.length && arr[i].date === date; };
+            const h = Math.max(0, Math.min(arr.length - 1, Math.floor(hint || 0)));
+            if (at(h)) return h;
+            for (let d = 1; d < arr.length; d++) {
+                if (at(h + d)) return h + d;
+                if (at(h - d)) return h - d;
+            }
+            return -1;
+        }
+
+        // 松手落定：窗口内小数索引 → 「绝对索引 + 相对中心偏移」+ 日期。
+        // 窗口内索引 = 绝对索引 − viewOffset ⇒ 实时追加（视图贴右整体右移）或手动平移
+        // 之后它会指到别的 K 线；日期不会。off0 是起框时的视口（拖拽中视图不动，
+        // 但实时刷新可能挪一格，起点的绝对位置要以起框时为基准）。
+        function _measureAnchor() {
+            const m = _measureRect, arr = chartData && chartData.klines;
+            if (!m || !arr || !arr.length) return;
+            const gsNow = Math.max(0, Math.floor(viewOffset));
+            const gs0 = (m.off0 == null) ? gsNow : m.off0;
+            const put = function (ii, gs, kA, kT, kF) {
+                let a = Math.floor(gs + ii + 0.5);      // 与 drawMeasureRect 的 gi() 同口径
+                a = Math.max(0, Math.min(arr.length - 1, a));
+                m[kA] = a;
+                m[kT] = arr[a].date;
+                m[kF] = (gs + ii) - a;                  // 保留鼠标落点在 K 线内的偏移
+            };
+            put(m.i0, gs0, "a0", "t0", "f0");
+            put(m.i1, gsNow, "a1", "t1", "f1");
+        }
+
+        // "YYYY-MM-DD HH:MM[:SS]" / "YYYY/MM/DD" → 毫秒；解析不出返回 null
+        // （不编造时间：宁可显示 "--"，也不拿当前时间顶替）
+        function _measureDateMs(dateStr) {
+            const m = String(dateStr || "").match(
+                /(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+            if (!m) return null;
+            return new Date(+m[1], +m[2] - 1, +m[3],
+                +(m[4] || 0), +(m[5] || 0), +(m[6] || 0)).getTime();
+        }
+
+        // 耗时写法（天狼50 口径「20分37秒」）：<1分→秒；<1时→分秒；<1天→时分；
+        // 再往上→天时。整单位不带尾零（不出现「20分0秒」）。
+        function _measureSpanText(ms) {
+            const s = Math.max(0, Math.round(ms / 1000));
+            if (s < 60) return s + "秒";
+            const mi = Math.floor(s / 60), rs = s % 60;
+            if (mi < 60) return mi + "分" + (rs ? rs + "秒" : "");
+            const h = Math.floor(mi / 60), rm = mi % 60;
+            if (h < 24) return h + "小时" + (rm ? rm + "分" : "");
+            const d = Math.floor(h / 24), rh = h % 24;
+            return d + "天" + (rh ? rh + "小时" : "");
+        }
+
+        // 像素 → { i: 小数索引, p: 价格 }：夹回绘图区，拖出界也仍是合法读数
+        // （夹的是像素，不是索引 —— 反算后 x 恰好还原成夹过的像素）
+        function _measurePointAt(mx, my) {
+            const g = _measureGeom, a = g.area;
+            const cx = Math.max(a.x + 0.5, Math.min(a.x + a.w - 0.5, mx));
+            const cy = Math.max(a.y + 0.5, Math.min(a.y + a.h - 0.5, my));
+            return {
+                i: (cx - a.x + g.subPixelOffset) / g.barStep - 0.5,
+                p: yToPrice(cy, a, g.priceRange),
+            };
+        }
+
+        // 手势入口之一：Ctrl 按下时只登记待定起点（还不建框，见 MEASURE_MIN_DRAG）。
+        // 起点必须落在 K 线主图绘图区内 —— 价格轴与底部指标区没有可测的价格。
+        function _armMeasure(mx, my) {
+            const g = _measureGeom;
+            if (!g || !chartData) return false;
+            const a = g.area;
+            if (mx < a.x || mx > a.x + a.w || my < a.y || my > a.y + a.h) return false;
+            _measurePending = { x: mx, y: my };
+            return true;
+        }
+
+        // 手势入口之二：位移过阈值，正式起框（起点 = 按下点，终点 = 当前点）
+        function _startMeasure(mx0, my0, mx1, my1) {
+            const p0 = _measurePointAt(mx0, my0);
+            const p1 = _measurePointAt(mx1, my1);
+            _measureRect = {
+                i0: p0.i, p0: p0.p, i1: p1.i, p1: p1.p,
+                dragging: true,
+                // 数据身份（换标的 / 周期才作废）与起框时的视口，见 _measureAnchor
+                key: _measureDataKey(chartData),
+                off0: Math.max(0, Math.floor(viewOffset)),
+            };
+            canvas.style.cursor = "crosshair";
+        }
+
+        // 拖拽中：只更新终点（起点不动）
+        function _dragMeasure(mx, my) {
+            const pt = _measurePointAt(mx, my);
+            _measureRect.i1 = pt.i;
+            _measureRect.p1 = pt.p;
+        }
+
+        function drawMeasureRect(area, priceRange, barStep, subPixelOffset) {
+            const m = _measureRect;
+            if (!m) return;
+            // 只画主图：双窗副图（_isRenderingBottom）不参与测量手势；
+            // 数据身份变了（换标的 / 周期 / 市场）也不画 —— 旧价挂在新图上会骗人。
+            // 判身份不判对象引用：期货实时刷新每帧都整份替换 chartData。
+            if (window._isRenderingBottom) return;
+            if (m.key !== _measureDataKey(chartData)) return;
+
+            // 落定后按日期重新定位：实时追加（视图贴右整体右移）、窗口滑动、
+            // 手动平移缩放之后，框都还贴在同一批 K 线上；拖拽中仍跟手。
+            let i0 = m.i0, i1 = m.i1;
+            const arr = chartData && chartData.klines;
+            if (!m.dragging && arr && arr.length && m.t0 != null && m.t1 != null) {
+                const gs = Math.max(0, Math.floor(viewOffset));
+                const a0 = _measureFindAbs(arr, m.t0, m.a0);
+                const a1 = _measureFindAbs(arr, m.t1, m.a1);
+                if (a0 < 0 || a1 < 0) return;   // 该时刻已不在数据里
+                i0 = a0 + (m.f0 || 0) - gs;
+                i1 = a1 + (m.f1 || 0) - gs;
+            }
+
+            const x0 = area.x + barStep * i0 + barStep / 2 - subPixelOffset;
+            const x1 = area.x + barStep * i1 + barStep / 2 - subPixelOffset;
+            const y0 = priceToY(m.p0, area, priceRange);
+            const y1 = priceToY(m.p1, area, priceRange);
+            const L = Math.min(x0, x1), R = Math.max(x0, x1);
+            const T = Math.min(y0, y1), B = Math.max(y0, y1);
+            if (R - L < 1 || B - T < 1) return;   // 退化成线 = 误触，不画
+            // 视图平移到别处后框会整体跑出绘图区 ⇒ 只画与绘图区相交的部分
+            // （读数仍按完整两点算：价差是数据事实，不因裁剪而变）
+            const vL = Math.max(L, area.x), vR = Math.min(R, area.x + area.w);
+            const vT = Math.max(T, area.y), vB = Math.min(B, area.y + area.h);
+            if (vR - vL < 1 || vB - vT < 1) return;
+
+            const pTop = yToPrice(T, area, priceRange);
+            const pBot = yToPrice(B, area, priceRange);
+            const diff = Math.abs(pTop - pBot);
+            const pctText = pBot > 0 ? (diff / pBot * 100).toFixed(2) + "%" : "--";
+
+            let spanText = "--";
+            if (arr && arr.length) {
+                const gs = Math.max(0, Math.floor(viewOffset));
+                const gi = (ii) => Math.max(0, Math.min(arr.length - 1, Math.floor(gs + ii + 0.5)));
+                const t0 = _measureDateMs(arr[gi(i0)].date);
+                const t1 = _measureDateMs(arr[gi(i1)].date);
+                if (t0 !== null && t1 !== null) spanText = _measureSpanText(Math.abs(t1 - t0));
+            }
+
+            ctx.save();
+            // 框：拖拽中虚线（还在拖），松手后实线（结果已定）
+            ctx.setLineDash(m.dragging ? [3, 3] : []);
+            ctx.lineWidth = 1;
+            ctx.strokeStyle = "rgba(255,255,255,0.85)";
+            ctx.strokeRect(Math.round(vL) + 0.5, Math.round(vT) + 0.5,
+                Math.round(vR - vL), Math.round(vB - vT));
+            ctx.setLineDash([]);
+            ctx.fillStyle = "rgba(120,170,255,0.10)";
+            ctx.fillRect(vL, vT, vR - vL, vB - vT);
+
+            // 三行读数：贴框内左上、竖直居中；放不下就夹回绘图区（读数永不出画布）
+            const lines = [
+                { t: diff.toFixed(2) + "点", f: "bold 12px monospace", c: COLORS.bi },
+                { t: pctText, f: "11px monospace", c: "#dcdcdc" },
+                { t: spanText, f: "11px monospace", c: "#dcdcdc" },
+            ];
+            const lineH = 15, padX = 6, padY = 4;
+            let textW = 0;
+            for (let i = 0; i < lines.length; i++) {
+                ctx.font = lines[i].f;
+                textW = Math.max(textW, ctx.measureText(lines[i].t).width);
+            }
+            const boxW = Math.ceil(textW) + padX * 2;
+            const boxH = lines.length * lineH + padY * 2;
+            let bx = vL + 4;
+            if (bx + boxW > area.x + area.w - 2) bx = vR - boxW - 4;   // 右侧放不下 → 贴右
+            bx = Math.max(area.x + 2, Math.min(bx, area.x + area.w - boxW - 2));
+            let by = (vT + vB) / 2 - boxH / 2;
+            by = Math.max(area.y + 2, Math.min(by, area.y + area.h - boxH - 2));
+            ctx.fillStyle = "rgba(0,0,0,0.72)";
+            ctx.fillRect(bx, by, boxW, boxH);
+            ctx.textAlign = "left";
+            ctx.textBaseline = "middle";
+            for (let i = 0; i < lines.length; i++) {
+                ctx.font = lines[i].f;
+                ctx.fillStyle = lines[i].c;
+                ctx.fillText(lines[i].t, bx + padX, by + padY + lineH * i + lineH / 2);
+            }
+            ctx.restore();
+        }
+
         function drawPriceAxis(area, priceRange) {
             ctx.fillStyle = COLORS.text; ctx.font = "11px monospace"; ctx.textBaseline = "alphabetic"; ctx.textAlign = "left";
             if (_logScale && priceRange.min > 0) {
@@ -3800,14 +4046,44 @@
         }
 
         function onMouseDown(e) {
-            isDragging = true; dragStartX = e.clientX; dragStartOffset = viewOffset; canvas.style.cursor = "grabbing";
             _mouseDownX = e.clientX; _mouseDownY = e.clientY;
+            // 新手势一律先收掉上一次的测量框（按下即「重新开始」）
+            if (_measureRect) { _measureRect = null; render(); }
+            _measurePending = null;
+            // Ctrl+左键 → 待定测量，本手势**不平移**（否则边拉框边滚图）。
+            // 只认单窗：双窗口下 Ctrl+拖动 已被「红框求新中枢」占用
+            // （_ctrlPressed → dualRedRange），同一手势不能两用。
+            if (e.button === 0 && e.ctrlKey && !isDualWindow) {
+                const rect = canvas.getBoundingClientRect();
+                if (_armMeasure(e.clientX - rect.left, e.clientY - rect.top)) {
+                    e.preventDefault();
+                    return;
+                }
+            }
+            isDragging = true; dragStartX = e.clientX; dragStartOffset = viewOffset; canvas.style.cursor = "grabbing";
             if (isDualWindow) { activeDualWindow = 'main'; updateActiveWindowClass(); updateSlider(); updateFreqButtonStates(chartData && chartData.meta && chartData.meta.market === 'futures'); }
         }
 
         function onMouseMove(e) {
             const rect = canvas.getBoundingClientRect();
             mouseX = e.clientX - rect.left; mouseY = e.clientY - rect.top;
+            // 待定测量：位移过阈值才升级成拖框（不到阈值时照常走下面的十字渲染，
+            // 且因 mousedown 没置 isDragging，图不会平移 ⇒ 「Ctrl+点击」原样落回区间选择）
+            if (_measurePending) {
+                if (Math.abs(mouseX - _measurePending.x) >= MEASURE_MIN_DRAG
+                    || Math.abs(mouseY - _measurePending.y) >= MEASURE_MIN_DRAG) {
+                    _startMeasure(_measurePending.x, _measurePending.y, mouseX, mouseY);
+                    _measurePending = null;
+                    render();
+                    return;
+                }
+            }
+            // 测量拖拽中：只更新终点，全程不平移（矩形随鼠标实时变）
+            if (_measureRect && _measureRect.dragging) {
+                _dragMeasure(mouseX, mouseY);
+                render();
+                return;
+            }
             if (isDragging) { viewOffset = dragStartOffset - (e.clientX - dragStartX) / (getChartArea().w / viewCount); viewOffset = Math.max(0, Math.min(chartData.klines.length - viewCount, viewOffset)); }
             // 双窗口红框：直接用 MouseEvent.ctrlKey 检测，比 keydown/keyup 跟踪更可靠
             if (isDualWindow) {
@@ -3828,6 +4104,30 @@
         }
 
         function onMouseUp(e) {
+            // 区间测量收尾：松手即定格（框留在图上，同天狼50）；两点几乎重合按误触丢弃
+            if (_measureRect && _measureRect.dragging) {
+                _measureRect.dragging = false;
+                // 拖框尾巴上那次 click 不是「点击」⇒ 短时忽略，别去切底部 chip
+                _measureClickGuardUntil = Date.now() + 300;
+                const g = _measureGeom;
+                if (!g) {
+                    _measureRect = null;
+                } else {
+                    const a = g.area;
+                    const dx = Math.abs(_measureRect.i1 - _measureRect.i0) * g.barStep;
+                    const dy = Math.abs(priceToY(_measureRect.p1, a, g.priceRange)
+                        - priceToY(_measureRect.p0, a, g.priceRange));
+                    if (dx < MEASURE_MIN_DRAG || dy < MEASURE_MIN_DRAG) {
+                        _measureRect = null;
+                    } else {
+                        _measureAnchor();   // 落定即挂日期锚点：实时刷新别再把它冲掉
+                    }
+                }
+                render();
+                return;   // 测量手势不落进下面的点击分支
+            }
+            // Ctrl+单击（从未升级为拖框）：清掉待定态，下面「Ctrl+点击 = 区间选择」照旧
+            _measurePending = null;
             isDragging = false; canvas.style.cursor = "crosshair";
             // 只处理左键点击（非拖拽）
             if (e.button !== 0 || Math.abs(e.clientX - _mouseDownX) >= 5 || Math.abs(e.clientY - _mouseDownY) >= 5) return;
@@ -3891,7 +4191,13 @@
             }
         }
 
-        function onMouseLeave() { isDragging = false; mouseX = -1; mouseY = -1; canvas.style.cursor = "crosshair"; if (isDualWindow) { dualOffscreenState = false; dualHighlightRange = null; dualRedRange = null; dualNewZsData = null; dualShowNewZs = false; renderTop(); } else { render(); } }
+        function onMouseLeave() {
+            isDragging = false;
+            // 移出画布：只取消「还在拖」的框（松手可能落在画布外，留着会一直挂着
+            // dragging 态）；已落定的框保留 —— 用户常常是拖完把鼠标挪开去看别处。
+            if (_measureRect && _measureRect.dragging) _measureRect = null;
+            _measurePending = null;
+            mouseX = -1; mouseY = -1; canvas.style.cursor = "crosshair"; if (isDualWindow) { dualOffscreenState = false; dualHighlightRange = null; dualRedRange = null; dualNewZsData = null; dualShowNewZs = false; renderTop(); } else { render(); } }
 
         // ══════════════════════════════════════════════════════════
         // 轻提示（K线交互反馈 / 自动下单告警共用）
@@ -10581,6 +10887,7 @@
                 _isMirrorMode: { get: function(){ return _isMirrorMode; }, set: function(v){ _isMirrorMode = v; } },
                 activeDualWindow: { get: function(){ return activeDualWindow; }, set: function(v){ activeDualWindow = v; } },
                 _ctrlPressed: { get: function(){ return _ctrlPressed; }, set: function(v){ _ctrlPressed = v; } },
+                _measureRect: { get: function(){ return _measureRect; }, set: function(v){ _measureRect = v; } },
             });
             s.loadOverlaySettings = loadOverlaySettings;
             s.saveOverlaySettings = saveOverlaySettings;
@@ -10700,6 +11007,12 @@
         //    必须显式点 ×）
         document.addEventListener('keydown', function(e) {
             if (e.key === 'Escape') {
+                // 测量框最靠上（直接画在图上）⇒ 一次 Esc 先收它
+                if (_measureRect) {
+                    _measureRect = null;
+                    render();
+                    return;
+                }
                 var drawer = document.getElementById("bsp-filter-dialog");
                 if (drawer.classList.contains("show")) {
                     closeBspSettings();
