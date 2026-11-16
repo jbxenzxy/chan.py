@@ -233,9 +233,11 @@
         //   effectiveCount、subPixelOffset 取决于小数视口）⇒ 渲染侧登记真值、
         //   事件侧只读，绝不另算一遍（否则缩放后框与读数会各自漂移）。
         let _measureGeom = null;
-        //   拖框松手后浏览器仍会补发一次 click（落点可能在底部 chip 上）⇒ 短时忽略，
-        //   否则「拉个框」会顺手把底部指标切掉。
-        let _measureClickGuardUntil = 0;
+        //   拖框松手后浏览器仍会补发一次 click（落点可能在底部 chip 上）⇒ 吞掉一次，
+        //   否则「拉个框」会顺手把底部指标切掉。判据用**一次性 flag**（armed）不用时间窗：
+        //   任何真实点击都带自己的 mousedown（先清 flag）；只有拖框尾巴那次 click 与
+        //   置位它的 mouseup 同属一对按下/抬起、中间无新 mousedown ⇒ 恰好只吞那一次。
+        let _measureClickGuardArmed = false;
         const MEASURE_MIN_DRAG = 4;   // 升级为拖框的最小位移（px），与点击阈同量级
 
         // 区间选择状态机: IDLE(空闲) | SELECTED_A(已选起点)
@@ -871,8 +873,9 @@
             // 底部指标区槽位 chip：单击沿 BOTTOM_ORDER 切换该槽的指标
             canvas.addEventListener("click", function(e) {
                 if (!chartData) return;
-                // 拖框松手后浏览器会补发一次 click（落点可能压在 chip 上）⇒ 忽略
-                if (Date.now() < _measureClickGuardUntil) return;
+                // 拖框松手后浏览器会补发一次 click（落点可能压在 chip 上）⇒ 吞一次
+                // （一次性 flag：消费即复位，不影响下一个真实点击）
+                if (_measureClickGuardArmed) { _measureClickGuardArmed = false; return; }
                 // 双击的第二次点击（click.detail > 1）不重复切换 —— 浏览器必然先发
                 // 两次 click 才发 dblclick；不看 detail 会让双击 chip 连切两位。
                 if (e.detail > 1) return;
@@ -4050,6 +4053,7 @@
             // 新手势一律先收掉上一次的测量框（按下即「重新开始」）
             if (_measureRect) { _measureRect = null; render(); }
             _measurePending = null;
+            _measureClickGuardArmed = false;   // 真实点击自带 mousedown ⇒ 先解除守卫
             // Ctrl+左键 → 待定测量，本手势**不平移**（否则边拉框边滚图）。
             // 只认单窗：双窗口下 Ctrl+拖动 已被「红框求新中枢」占用
             // （_ctrlPressed → dualRedRange），同一手势不能两用。
@@ -4107,8 +4111,8 @@
             // 区间测量收尾：松手即定格（框留在图上，同天狼50）；两点几乎重合按误触丢弃
             if (_measureRect && _measureRect.dragging) {
                 _measureRect.dragging = false;
-                // 拖框尾巴上那次 click 不是「点击」⇒ 短时忽略，别去切底部 chip
-                _measureClickGuardUntil = Date.now() + 300;
+                // 拖框尾巴上那次 click 不是「点击」⇒ 武装一次性守卫吞掉它，别去切底部 chip
+                _measureClickGuardArmed = true;
                 const g = _measureGeom;
                 if (!g) {
                     _measureRect = null;

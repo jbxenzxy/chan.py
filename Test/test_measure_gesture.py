@@ -1,0 +1,416 @@
+# -*- coding: utf-8 -*-
+"""K线主图「区间测量」手势护栏（2026-11-16，复审裁决 P3-1 唯一必做项）。
+
+背景：custom-dev `6768b05`（vs tag 1116）新增 Ctrl+左键拖框测量（价差/幅度%/耗时，
+天狼50 同款）。本护栏钉住两类回归面：
+
+  ① 手势状态机（node 抽真实源码执行，桩只覆盖 DOM 壳）：
+     · Ctrl+按下待定 → 4px 升级拖框 → 跟手 → 松手定格（虚线转实线语义由
+       dragging 标志承担）；
+     · 日期锚点落定（a0/a1/t0/t1 + f0/f1 中心偏移）：实时尾部追加 + 视口右移
+       后框仍锚同一批 K 线、读数不变（价差/耗时是数据事实）；
+     · 换标的/周期/市场按 _measureDataKey 作废（判身份不判对象引用）；
+     · 误触过滤（升级阈值 4px + 松手 dx/dy 双重判定）；
+     · 手势不互抢：Ctrl+点击落回原区间选择 / 双窗 Ctrl+拖动归红框 / 出界照常平移；
+     · mouseleave 分态：拖拽中取消、落定保留。
+  ② click 守卫（P3-2 改一次性 flag 后的行为）：
+     · 拖框 mouseup 武装 `_measureClickGuardArmed` → 浏览器补发的那次 click 被
+       chip 监听器吞掉一次且**消费即复位**；
+     · 任何真实点击自带 mousedown 先解除武装 → 下一次 chip 点击正常切换；
+     · 纯函数边界：耗时格式化各档（无「0分0秒」尾零）、日期解析（垃圾输入返
+       null 不编造）、锚点查找（hint 命中/扩散/缺失 -1）。
+
+抽取手法：注释感知的花括号配平抽真实函数（含真实 priceToY/yToPrice 坐标映射），
+与 test_crosshair_readout.py 同型；零网络、零浏览器、秒级。
+跑法：python Test/test_measure_gesture.py
+"""
+import glob
+import io
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+TEST_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(TEST_DIR)
+
+APP_JS = os.path.join(REPO_ROOT, "Frontend", "app.js")
+
+_passed = 0
+_failed = []
+
+
+def rec(no, title, ok, detail=""):
+    global _passed
+    if ok:
+        _passed += 1
+        print("[PASS] %s %s" % (no, title))
+        if detail:
+            print("        " + detail)
+    else:
+        _failed.append("%s %s | %s" % (no, title, detail))
+        print("[FAIL] %s %s" % (no, title) + (" | " + detail if detail else ""))
+
+
+def read(path):
+    with io.open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def _to_matching_brace(src, b):
+    """从 '{'（下标 b）走到配对 '}' 的下标；跳过字符串/模板串/行注释/块注释。"""
+    i = b + 1
+    n = len(src)
+    depth = 1
+    while i < n:
+        c = src[i]
+        if c == '"' or c == "'" or c == "`":
+            q = c
+            i += 1
+            while i < n and src[i] != q:
+                if src[i] == "\\":
+                    i += 1
+                i += 1
+            i += 1
+            continue
+        if c == "/" and i + 1 < n and src[i + 1] == "/":
+            j = src.find("\n", i + 1)
+            i = n if j < 0 else j + 1
+            continue
+        if c == "/" and i + 1 < n and src[i + 1] == "*":
+            j = src.find("*/", i + 2)
+            i = n if j < 0 else j + 2
+            continue
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    raise AssertionError("花括号不配对")
+
+
+def fn_src(src, name):
+    m = re.search(r"^[ \t]*function\s+%s\s*\(" % re.escape(name), src, re.M)
+    if not m:
+        raise AssertionError("未找到 function %s" % name)
+    b = src.index("{", m.end())
+    return src[m.start():_to_matching_brace(src, b)]
+
+
+def click_listener_src(src):
+    """抽 `canvas.addEventListener("click", function(e) { ... })` 的匿名函数体，
+    包成可执行的 `const clickListener = function (e) { ... };`（首个命中即
+    单窗 chip 切换监听器，其内含守卫消费点）。"""
+    m = re.search(r'canvas\.addEventListener\("click",\s*function\s*\(e\)\s*\{', src)
+    if not m:
+        raise AssertionError("未找到 chip click 监听器")
+    b = m.end() - 1
+    body = src[b:_to_matching_brace(src, b)]
+    return "const clickListener = function (e) " + body + ";"
+
+
+def find_node():
+    cand = [os.environ.get("NODE_EXE"), shutil.which("node")]
+    cand += glob.glob(os.path.expanduser(
+        "~/.workbuddy/binaries/node/versions/*/node.exe"))
+    cand += [r"C:\Program Files\nodejs\node.exe"]
+    for c in cand:
+        if c and os.path.isfile(c):
+            return c
+    return None
+
+
+def run_node(src, tag):
+    node = find_node()
+    if not node:
+        rec(tag, "node 可用（离线执行真实代码段）", False, "未找到 node")
+        return None
+    tmp = tempfile.mkdtemp(prefix="measure_gesture_")
+    p = os.path.join(tmp, "drv.js")
+    with io.open(p, "w", encoding="utf-8") as f:
+        f.write(src)
+    try:
+        r = subprocess.run([node, p], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    if r.returncode != 0:
+        rec(tag, "node 执行成功", False, (r.stderr or "").strip()[:400])
+        return None
+    return json.loads(r.stdout)
+
+
+# ══════════════════════════════════════════════════════════════════
+# node 驱动：闭包状态前置声明 + 抽取的真实函数 + 场景跑批（输出 JSON）
+# ══════════════════════════════════════════════════════════════════
+DRIVER_PREAMBLE = r"""
+// ── 闭包状态前置声明（与 app.js 内同名变量同义）──
+let _mouseDownX = 0, _mouseDownY = 0;
+let _measureRect = null, _measurePending = null, _measureGeom = null;
+let _measureClickGuardArmed = false;
+const MEASURE_MIN_DRAG = 4;
+let mouseX = -1, mouseY = -1, isDragging = false, dragStartX = 0, dragStartOffset = 0;
+let viewOffset = 0, viewCount = 10;
+let isDualWindow = false, activeDualWindow = 'main', _ctrlPressed = false;
+let dualRedRange = null, dualShowNewZs = false, dualNewZsData = null, dualOffscreenState = false, dualHighlightRange = null;
+let chartData = null;
+let _rangeSelect = { mode: 'IDLE', startIdx: null, startFreq: null, startSymbol: null };
+let _currentGlobalIdx = 3, _currentClipText = null, currentFreq = '5m';
+let _logScale = false, _isMirrorMode = false;
+const COLORS = { bi: '#4fc3f7' };
+const window = globalThis; window._isRenderingBottom = false;
+const calls = [];
+function render() { calls.push('render'); }
+function renderTop() { calls.push('renderTop'); }
+function getChartArea() { return { x: 0, y: 0, w: 800, h: 400 }; }
+function updateActiveWindowClass() {}
+function updateSlider() {}
+function updateFreqButtonStates() {}
+function showToast() {}
+let chipCalls = 0;
+function cycleBottomSlot() { chipCalls++; }
+let chipHit = 0;
+function hitBottomSlotChip() { return chipHit; }
+const canvas = { style: { cursor: '' }, getBoundingClientRect() { return { left: 0, top: 0 }; } };
+const navigator = { clipboard: { writeText() {} } };
+const ctx = {
+  _rects: [], _texts: [],
+  save() {}, restore() {}, setLineDash() {},
+  strokeRect(x, y, w, h) { this._rects.push({ x, y, w, h }); },
+  fillRect(x, y, w, h) { this._rects.push({ x, y, w, h }); },
+  fillText(t) { this._texts.push({ t }); },
+  measureText(s) { return { width: String(s).length * 7 }; },
+  font: '', textAlign: '', textBaseline: '', strokeStyle: '', fillStyle: '',
+};
+const res = [];
+function check(no, actual, expected) {
+  res.push({ no: no, ok: JSON.stringify(actual) === JSON.stringify(expected),
+             got: actual, want: expected });
+}
+function mkChartData(n, symbol) {
+  const kl = [];
+  const t0 = new Date(2026, 10, 13, 9, 30).getTime();
+  for (let i = 0; i < n; i++) {
+    const d = new Date(t0 + i * 5 * 60000);
+    const p = (x) => String(x).padStart(2, "0");
+    kl.push({
+      date: d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " +
+            p(d.getHours()) + ":" + p(d.getMinutes()),
+      open: 3500, high: 3510, low: 3490, close: 3500,
+    });
+  }
+  return { meta: { symbol: symbol || "IF2606", freq: "5m", market: "futures" }, klines: kl };
+}
+function resetGesture() {
+  _measureRect = null; _measurePending = null;
+  _measureGeom = { area: AREA, priceRange: PR, barStep: 80, subPixelOffset: 0 };
+  _measureClickGuardArmed = false;
+  isDragging = false; viewOffset = 0; isDualWindow = false;
+  _currentGlobalIdx = 3;
+  _rangeSelect = { mode: 'IDLE', startIdx: null, startFreq: null, startSymbol: null };
+  chartData = mkChartData(20);
+  calls.length = 0; ctx._rects.length = 0; ctx._texts.length = 0;
+  chipCalls = 0;
+}
+const AREA = { x: 0, y: 0, w: 800, h: 400 };
+const PR = { min: 3000, max: 4000 };
+const ev = (x, y, ctrl, btn) => ({ clientX: x, clientY: y, ctrlKey: !!ctrl, button: btn || 0, preventDefault() {} });
+"""
+
+DRIVER_SCENARIOS = r"""
+// ══ A. 纯函数边界 ══
+const S = _measureSpanText;
+check("A1 span 59s", S(59000), "59秒");
+check("A2 span 60s", S(60000), "1分");
+check("A3 span 83s", S(83000), "1分23秒");
+check("A4 span 3600s", S(3600000), "1小时");
+check("A5 span 3660s", S(3660000), "1小时1分");
+check("A6 span 86400s", S(86400000), "1天");
+check("A7 span 25h", S(90000000), "1天1小时");
+check("A8 span 0", S(0), "0秒");
+const DF = _measureDateMs;
+check("A9 date with min", DF("2026-11-16 10:07"), new Date(2026, 10, 16, 10, 7).getTime());
+check("A10 date with sec", DF("2026-11-16 10:07:30"), new Date(2026, 10, 16, 10, 7, 30).getTime());
+check("A11 slash date", DF("2026/11/16"), new Date(2026, 10, 16).getTime());
+check("A12 garbage", DF("abc"), null);
+check("A13 empty", DF(null), null);
+const FND = _measureFindAbs;
+const arr5 = [0, 1, 2, 3, 4].map(i => ({ date: "d" + i }));
+check("A14 find at hint", FND(arr5, "d1", 1), 1);
+check("A15 find expand", FND(arr5, "d3", 1), 3);
+check("A16 missing", FND(arr5, "d99", 1), -1);
+check("A17 empty arr", FND([], "d1", 0), -1);
+
+// ══ B. 完整拖框手势（单窗）══
+resetGesture();
+onMouseDown(ev(100, 100, true));
+check("B1 Ctrl按下→待定不建框不平移", { pending: !!_measurePending, dragging: isDragging, cursor: canvas.style.cursor },
+    { pending: true, dragging: false, cursor: "" });
+onMouseMove(ev(160, 160, true));
+check("B2 位移过4px升级为拖框", { dragging: _measureRect && _measureRect.dragging, rendered: calls.length > 0 },
+    { dragging: true, rendered: true });
+check("B3 起点几何(p0)", [_measureRect.i0, _measureRect.p0], [0.75, 3750]);
+onMouseMove(ev(240, 200, true));
+check("B4 终点跟手(p1)", [_measureRect.i1, _measureRect.p1], [2.5, 3500]);
+onMouseUp(ev(240, 200, true));
+const m = _measureRect;
+check("B5 松手定格+守卫武装(一次性flag)", { dragging: m && m.dragging, armed: _measureClickGuardArmed === true },
+    { dragging: false, armed: true });
+check("B6 日期锚点", { a0: m.a0, t0: chartData.klines[m.a0].date, a1: m.a1, t1: chartData.klines[m.a1].date },
+    { a0: 1, t0: chartData.klines[1].date, a1: 3, t1: chartData.klines[3].date });
+check("B7 中心偏移保留", [m.f0, m.f1], [-0.25, -0.5]);
+
+// 落定后 drawMeasureRect：读数与框位（0.5 = Math.round 像素居中）
+drawMeasureRect(AREA, PR, 80, 0);
+const r0 = ctx._rects.find(r => r.w > 50);
+check("B8 框位(未动视口)", r0, { x: 100.5, y: 100.5, w: 140, h: 100 });
+check("B9 价差读数(上减下恒正)", ctx._texts[0] && ctx._texts[0].t, "250.00点");
+check("B10 幅度%基数=下方点", ctx._texts[1] && ctx._texts[1].t, (250 / 3500 * 100).toFixed(2) + "%");
+check("B11 耗时读数(3根5min=10分)", ctx._texts[2] && ctx._texts[2].t, "10分");
+
+// ══ C. 实时刷新（尾部追加 + 视图右移）后框仍锚同一批 K 线 ══
+chartData.klines.push({ date: "2026-11-13 12:05", open: 3500, high: 3510, low: 3490, close: 3500 });
+viewOffset = 1;
+ctx._rects.length = 0; ctx._texts.length = 0;
+drawMeasureRect(AREA, PR, 80, 0);
+const r1 = ctx._rects.find(r => r.w > 50);
+check("C1 框随视图右移1格", r1, { x: 20.5, y: 100.5, w: 140, h: 100 });
+check("C2 读数不变(数据事实)", ctx._texts.map(t => t.t), ["250.00点", (250 / 3500 * 100).toFixed(2) + "%", "10分"]);
+
+// ══ D. 换标的作废 ══
+chartData = mkChartData(20, "RB2606");
+ctx._rects.length = 0; ctx._texts.length = 0;
+drawMeasureRect(AREA, PR, 80, 0);
+check("D1 数据身份变了不画", ctx._rects.length, 0);
+
+// ══ E. Ctrl+点击（未过阈值）落回原区间选择 ══
+resetGesture();
+onMouseDown(ev(100, 100, true));
+onMouseMove(ev(102, 102, true));
+onMouseUp(ev(102, 102, true));
+check("E1 未升级→框不存在", _measureRect, null);
+check("E2 Ctrl+点击保留区间选择", _rangeSelect.mode, "SELECTED_A");
+check("E3 区间起点=点击处", _rangeSelect.startIdx, 3);
+
+// ══ E2. 升级但纵向位移<4px → 误触丢弃 ══
+resetGesture();
+onMouseDown(ev(100, 100, true));
+onMouseMove(ev(170, 102, true));
+check("E2a 已升级为拖框", _measureRect && _measureRect.dragging, true);
+onMouseUp(ev(170, 102, true));
+check("E2b 纵向<4px按误触丢弃", _measureRect, null);
+
+// ══ F. 普通拖拽平移不受影响 ══
+resetGesture();
+onMouseDown(ev(500, 100, false));
+check("F1 非Ctrl按下→平移模式", { dragging: isDragging, cursor: canvas.style.cursor, pending: !!_measurePending },
+    { dragging: true, cursor: "grabbing", pending: false });
+onMouseMove(ev(300, 100, false));
+check("F2 平移量正确", viewOffset, 2.5);
+onMouseUp(ev(300, 100, false));
+check("F3 松手结束平移", isDragging, false);
+
+// ══ G. mouseleave：拖拽中取消 / 落定保留 ══
+resetGesture();
+onMouseDown(ev(100, 100, true));
+onMouseMove(ev(200, 200, true));
+onMouseLeave();
+check("G1 拖拽中移出→取消", _measureRect, null);
+resetGesture();
+onMouseDown(ev(100, 100, true));
+onMouseMove(ev(200, 200, true));
+onMouseUp(ev(200, 200, true));
+onMouseLeave();
+check("G2 落定后移出→保留", _measureRect && _measureRect.dragging, false);
+check("G3 落定框仍有日期锚点", [_measureRect.t0 != null, _measureRect.t1 != null], [true, true]);
+
+// ══ I. 双窗/出界不抢手势 ══
+resetGesture();
+isDualWindow = true;
+onMouseDown(ev(100, 100, true));
+check("I1 双窗下Ctrl拖动仍归红框手势(不平移)", { pending: !!_measurePending, dragging: isDragging },
+    { pending: false, dragging: true });
+isDualWindow = false; isDragging = false;
+onMouseDown(ev(100, 450, true));
+check("I2 出界Ctrl按下→照常平移", { pending: !!_measurePending, dragging: isDragging },
+    { pending: false, dragging: true });
+
+// ══ J. click 守卫（P3-2：一次性 flag，真实执行 chip 监听器）══
+resetGesture();
+onMouseDown(ev(100, 100, true));
+onMouseMove(ev(200, 200, true));
+onMouseUp(ev(200, 200, true));            // 拖框收尾：armed=true
+chipHit = 1;
+clickListener({ detail: 1, clientX: 100, clientY: 100 });   // 拖框尾巴补发的那次 click
+check("J1 尾巴click被吞(chip不切)+消费即复位", { chip: chipCalls, armed: _measureClickGuardArmed },
+    { chip: 0, armed: false });
+clickListener({ detail: 1, clientX: 100, clientY: 100 });   // 紧随的真实点击（无新 mousedown 也放行）
+check("J2 复位后chip点击放行", chipCalls, 1);
+resetGesture();
+_measureClickGuardArmed = true;           // 模拟 armed 残留（上一手势刚拖完框）
+onMouseDown(ev(500, 100, false));         // 任何真实点击必带 mousedown ⇒ 先解除
+check("J3 真实点击的mousedown解除武装", _measureClickGuardArmed, false);
+onMouseUp(ev(500, 100, false));
+chipCalls = 0; chipHit = 1;
+clickListener({ detail: 1, clientX: 100, clientY: 100 });
+check("J4 解除后的chip点击不受影响", chipCalls, 1);
+"""
+
+DRIVER = ("const res = [];\n" if False else "") + DRIVER_PREAMBLE + "\n%s\n" + "\n" + DRIVER_SCENARIOS + "\nconsole.log(JSON.stringify(res));"
+
+
+def build_driver(js):
+    names = ["_measureDataKey", "_measureFindAbs", "_measureAnchor", "_measureDateMs",
+             "_measureSpanText", "_measurePointAt", "_armMeasure", "_startMeasure",
+             "_dragMeasure", "drawMeasureRect", "onMouseDown", "onMouseMove",
+             "onMouseUp", "onMouseLeave", "priceToY", "yToPrice"]
+    srcs = [fn_src(js, n) for n in names] + [click_listener_src(js)]
+    return DRIVER.replace("%s", "\n\n".join(srcs))
+
+
+def test_source_contracts(js):
+    """flag 判据的接线契约（行为已由 J 段真执行覆盖，这里钉防回潮）。"""
+    rec("K1", "声明：一次性 flag（非时间窗）",
+        "let _measureClickGuardArmed = false;" in js)
+    rec("K2", "旧时间窗符号零残留",
+        "_measureClickGuardUntil" not in js)
+    up = fn_src(js, "onMouseUp")
+    down = fn_src(js, "onMouseDown")
+    rec("K3", "mouseup 测量分支武装守卫",
+        "_measureClickGuardArmed = true;" in up)
+    rec("K4", "mousedown 无条件解除守卫",
+        "_measureClickGuardArmed = false;" in down)
+    rec("K5", "chip 监听器消费即复位（吞一次不影响下一个真实点击）",
+        "if (_measureClickGuardArmed) { _measureClickGuardArmed = false; return; }" in js)
+
+
+_cached = None
+
+
+def main():
+    global _cached
+    js = read(APP_JS)
+    _cached = run_node(build_driver(js), "①")
+    if _cached is not None:
+        rec("①", "node 抽真实源码执行（%d 项场景）" % len(_cached), True)
+        for r in _cached:
+            rec(r["no"], r["no"].split(" ", 1)[-1], r["ok"],
+                "got=%s want=%s" % (json.dumps(r["got"], ensure_ascii=False),
+                                    json.dumps(r["want"], ensure_ascii=False)))
+    test_source_contracts(js)
+
+    total = _passed + len(_failed)
+    print("\n%s 合计 %d 项：%d 通过 / %d 失败" %
+          ("[FAIL]" if _failed else "[PASS]", total, _passed, len(_failed)))
+    for f in _failed:
+        print("  - " + f)
+    sys.exit(1 if _failed else 0)
+
+
+if __name__ == "__main__":
+    main()

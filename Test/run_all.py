@@ -452,6 +452,14 @@ COMPONENTS = [
     #   slotAreas+slotRanges 齐备）。node 抽真实源码执行 + canvas 记账桩。
     ("crosshair_readout",
      [sys.executable, os.path.join("Test", "test_crosshair_readout.py")]),
+    # 区间测量手势护栏（2026-11-16，复审裁决 P3-1）：Ctrl+拖框的完整状态机
+    # （待定→升级→定格→日期锚点→实时右移仍锚同一批K线/读数不变）、换标的作废、
+    # 误触过滤、与既有手势不互抢（Ctrl+点击区间选择 / 双窗红框 / 平移）、
+    # click 守卫一次性 flag（拖框尾巴click吞一次即复位，真实点击必带mousedown
+    # 先解除）、耗时格式化与日期解析纯函数边界。node 抽真实源码执行
+    # （含真实 priceToY/yToPrice 映射），零网络零浏览器秒级。
+    ("measure_gesture",
+     [sys.executable, os.path.join("Test", "test_measure_gesture.py")]),
     # 期货复盘「目标早于窗口左界」四类诊断（v1.18）：合约存续期 / 天勤10000根 /
     # 选点 / 方式C。判定顺序硬约束优先；建议合约**最近交割优先**（候选生成处随附
     # 交割日，最近候选免存续期探针、只验当前周期窗口；04-22 → IF2405 而不是 IF2404），
