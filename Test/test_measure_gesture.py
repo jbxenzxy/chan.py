@@ -10,7 +10,10 @@
      · 日期锚点落定（a0/a1/t0/t1 + f0/f1 中心偏移）：实时尾部追加 + 视口右移
        后框仍锚同一批 K 线、读数不变（价差/耗时是数据事实）；
      · 换标的/周期/市场按 _measureDataKey 作废（判身份不判对象引用）；
-     · 误触过滤（升级阈值 4px + 松手 dx/dy 双重判定）；
+     · 误触过滤（升级阈值 4px + 松手**任一维** <4px 即丢弃，`||` 语义）；
+     · 阈值常量从 app.js 抽取注入驱动（B0a/B0b 对角行为对 + K7 钉值，防父本
+       阈值漂移对护栏不可见）；K6 钉 render→事件侧几何接线（防 _measureGeom
+       登记被删后功能整体静默失效）；
      · 手势不互抢：Ctrl+点击落回原区间选择 / 双窗 Ctrl+拖动归红框 / 出界照常平移；
      · mouseleave 分态：拖拽中取消、落定保留。
   ② click 守卫（P3-2 改一次性 flag 后的行为）：
@@ -153,7 +156,7 @@ DRIVER_PREAMBLE = r"""
 let _mouseDownX = 0, _mouseDownY = 0;
 let _measureRect = null, _measurePending = null, _measureGeom = null;
 let _measureClickGuardArmed = false;
-const MEASURE_MIN_DRAG = 4;
+const MEASURE_MIN_DRAG = /*MEASURE_MIN_DRAG_INJECT*/4;   // 值由 build_driver 从 app.js 抽取注入
 let mouseX = -1, mouseY = -1, isDragging = false, dragStartX = 0, dragStartOffset = 0;
 let viewOffset = 0, viewCount = 10;
 let isDualWindow = false, activeDualWindow = 'main', _ctrlPressed = false;
@@ -215,7 +218,7 @@ function resetGesture() {
   _rangeSelect = { mode: 'IDLE', startIdx: null, startFreq: null, startSymbol: null };
   chartData = mkChartData(20);
   calls.length = 0; ctx._rects.length = 0; ctx._texts.length = 0;
-  chipCalls = 0;
+  chipCalls = 0; canvas.style.cursor = '';
 }
 const AREA = { x: 0, y: 0, w: 800, h: 400 };
 const PR = { min: 3000, max: 4000 };
@@ -245,6 +248,23 @@ check("A14 find at hint", FND(arr5, "d1", 1), 1);
 check("A15 find expand", FND(arr5, "d3", 1), 3);
 check("A16 missing", FND(arr5, "d99", 1), -1);
 check("A17 empty arr", FND([], "d1", 0), -1);
+
+// ══ B0. 阈值行为对（对角位移：两维同值，绕开 || 的单维携带；值=app.js 注入）══
+function finalizeBox() {
+  resetGesture();
+  onMouseDown(ev(100, 100, true));
+  onMouseMove(ev(240, 200, true));
+  onMouseUp(ev(240, 200, true));
+  return _measureRect;
+}
+resetGesture();
+onMouseDown(ev(100, 100, true));
+onMouseMove(ev(102, 102, true));      // 两维均 2px < 4 ⇒ 不升级
+check("B0a 对角2px不升级(阈值来自app.js)", !!_measureRect, false);
+resetGesture();
+onMouseDown(ev(100, 100, true));
+onMouseMove(ev(105, 105, true));      // 两维均 5px ≥ 4 ⇒ 升级（父本阈值改大则此处红）
+check("B0b 对角5px升级(阈值来自app.js)", !!(_measureRect && _measureRect.dragging), true);
 
 // ══ B. 完整拖框手势（单窗）══
 resetGesture();
@@ -288,6 +308,17 @@ ctx._rects.length = 0; ctx._texts.length = 0;
 drawMeasureRect(AREA, PR, 80, 0);
 check("D1 数据身份变了不画", ctx._rects.length, 0);
 
+// ══ D1b/D1c. 换周期 / 换市场同样作废（数据身份三要素缺一不可）══
+finalizeBox();
+ctx._rects.length = 0; ctx._texts.length = 0;
+chartData.meta.freq = "30m";
+drawMeasureRect(AREA, PR, 80, 0);
+check("D1b 换周期不画", ctx._rects.length, 0);
+chartData.meta.freq = "5m";
+chartData.meta.market = "stock";
+drawMeasureRect(AREA, PR, 80, 0);
+check("D1c 换市场不画", ctx._rects.length, 0);
+
 // ══ E. Ctrl+点击（未过阈值）落回原区间选择 ══
 resetGesture();
 onMouseDown(ev(100, 100, true));
@@ -304,6 +335,13 @@ onMouseMove(ev(170, 102, true));
 check("E2a 已升级为拖框", _measureRect && _measureRect.dragging, true);
 onMouseUp(ev(170, 102, true));
 check("E2b 纵向<4px按误触丢弃", _measureRect, null);
+
+// ══ E2c. 横向<4px 也丢弃（误触 = 任一维 <4px 即丢，|| 语义；&& 变异在此判红）══
+resetGesture();
+onMouseDown(ev(100, 100, true));
+onMouseMove(ev(101, 200, true));      // 横向1px 升级、纵向100px
+onMouseUp(ev(101, 200, true));
+check("E2c 横向<4px按误触丢弃", _measureRect, null);
 
 // ══ F. 普通拖拽平移不受影响 ══
 resetGesture();
@@ -328,6 +366,19 @@ onMouseUp(ev(200, 200, true));
 onMouseLeave();
 check("G2 落定后移出→保留", _measureRect && _measureRect.dragging, false);
 check("G3 落定框仍有日期锚点", [_measureRect.t0 != null, _measureRect.t1 != null], [true, true]);
+
+// ══ H. 越界不漏画：整体出图裁剪 / 下窗不画 ══
+finalizeBox();
+viewOffset = 10;                       // 框整体平移出绘图区左界
+ctx._rects.length = 0; ctx._texts.length = 0;
+drawMeasureRect(AREA, PR, 80, 0);
+check("H1 框整体出界→只裁剪不漏画到轴/底带", ctx._rects.length, 0);
+finalizeBox();
+window._isRenderingBottom = true;      // 双窗副图渲染：测量框属主图，不画
+ctx._rects.length = 0; ctx._texts.length = 0;
+drawMeasureRect(AREA, PR, 80, 0);
+check("H2 下窗渲染不画测量框", ctx._rects.length, 0);
+window._isRenderingBottom = false;
 
 // ══ I. 双窗/出界不抢手势 ══
 resetGesture();
@@ -361,16 +412,22 @@ clickListener({ detail: 1, clientX: 100, clientY: 100 });
 check("J4 解除后的chip点击不受影响", chipCalls, 1);
 """
 
-DRIVER = ("const res = [];\n" if False else "") + DRIVER_PREAMBLE + "\n%s\n" + "\n" + DRIVER_SCENARIOS + "\nconsole.log(JSON.stringify(res));"
+DRIVER = DRIVER_PREAMBLE + "\n%s\n" + "\n" + DRIVER_SCENARIOS + "\nconsole.log(JSON.stringify(res));"
 
 
 def build_driver(js):
+    m = re.search(r"const\s+MEASURE_MIN_DRAG\s*=\s*(\d+)\s*;", js)
+    if not m:
+        raise AssertionError("未找到 const MEASURE_MIN_DRAG（app.js）")
     names = ["_measureDataKey", "_measureFindAbs", "_measureAnchor", "_measureDateMs",
              "_measureSpanText", "_measurePointAt", "_armMeasure", "_startMeasure",
              "_dragMeasure", "drawMeasureRect", "onMouseDown", "onMouseMove",
              "onMouseUp", "onMouseLeave", "priceToY", "yToPrice"]
     srcs = [fn_src(js, n) for n in names] + [click_listener_src(js)]
-    return DRIVER.replace("%s", "\n\n".join(srcs))
+    # 阈值注入：抽取函数引用的必须是 app.js 自己的常量（否则父本改阈值护栏不可见）
+    driver = DRIVER.replace("%s", "\n\n".join(srcs))
+    return driver.replace("/*MEASURE_MIN_DRAG_INJECT*/4",
+                          "/*MEASURE_MIN_DRAG_INJECT*/" + m.group(1))
 
 
 def test_source_contracts(js):
@@ -387,6 +444,15 @@ def test_source_contracts(js):
         "_measureClickGuardArmed = false;" in down)
     rec("K5", "chip 监听器消费即复位（吞一次不影响下一个真实点击）",
         "if (_measureClickGuardArmed) { _measureClickGuardArmed = false; return; }" in js)
+    # K6：render→事件侧的几何接线（上轮变异 no_geom_registration 的假绿缺口）。
+    #   resetGesture 在驱动里手动设 _measureGeom 会旁路真值来源，只有静态契约能钉住。
+    #   render() 是薄分发器，登记块在主图渲染真身 _renderChart 内。
+    rnd = fn_src(js, "_renderChart")
+    rec("K6", "主图 _renderChart 登记 _measureGeom（下窗不登记）",
+        "_measureGeom = {" in rnd and "if (!window._isRenderingBottom)" in rnd)
+    # K7：阈值数值钉死（配合 B0a/B0b 行为对与驱动注入——三件套才咬得住阈值漂移）
+    rec("K7", "阈值常量钉死为 4px",
+        "const MEASURE_MIN_DRAG = 4;" in js)
 
 
 _cached = None
@@ -399,7 +465,8 @@ def main():
     if _cached is not None:
         rec("①", "node 抽真实源码执行（%d 项场景）" % len(_cached), True)
         for r in _cached:
-            rec(r["no"], r["no"].split(" ", 1)[-1], r["ok"],
+            code = r["no"].split(" ", 1)[0]
+            rec(code, r["no"], r["ok"],
                 "got=%s want=%s" % (json.dumps(r["got"], ensure_ascii=False),
                                     json.dumps(r["want"], ensure_ascii=False)))
     test_source_contracts(js)
