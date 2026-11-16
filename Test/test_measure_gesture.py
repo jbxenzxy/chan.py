@@ -192,8 +192,13 @@ const ctx = {
 };
 const res = [];
 function check(no, actual, expected) {
+  // undefined 会被 JSON.stringify 丢掉键 ⇒ Python 侧 r["got"] 直接 KeyError，
+  // 红项退化成 traceback 且该条之后的所有断言静默跳过（复审5 §2.2）。
+  // 只在**上报字段**上折成 null；ok 必须照旧用原值比较，否则
+  // check(..., undefined, null) 会被判成相等（E1/E2b/E2c/G1/A12/A13 都是 null 期望）。
   res.push({ no: no, ok: JSON.stringify(actual) === JSON.stringify(expected),
-             got: actual, want: expected });
+             got: actual === undefined ? null : actual,
+             want: expected === undefined ? null : expected });
 }
 function mkChartData(n, symbol) {
   const kl = [];
@@ -422,6 +427,13 @@ ctx._rects.length = 0; ctx._texts.length = 0;
 drawMeasureRect(AREA2, { min: 3400, max: 3600 }, 80, 0);   // y0=20+(3600-3750)*2=-280 → 夹到 AREA2.y=20
 const bT2 = boxOf();
 check("H3f 上界夹到 area.y(=20)，未与 area.x 混淆", bT2 && bT2.y, 20.5);
+
+finalizeBox();                          // resetGesture 已复位 viewOffset=0
+ctx._rects.length = 0; ctx._texts.length = 0;
+drawMeasureRect(AREA2, { min: 3600, max: 3800 }, 80, 0);   // y1=20+(3800-3500)*2=620 探出下界
+const bB2 = boxOf();
+check("H3g 下界夹到 area.y+area.h(=420)，远端不与 area.x+area.h 混淆",
+      bB2 && bB2.y + bB2.h, 420.5);
 
 // ══ I. 双窗/出界不抢手势 ══
 resetGesture();
