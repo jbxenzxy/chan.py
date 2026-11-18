@@ -4967,10 +4967,10 @@
                     }
                 }
             }
-            // 绘制中的草稿线（虚线）
+            // 绘制中的草稿线（红色实线，与选中态一致）
             if (_drawDraft && _drawDraft.key === _drawCurrentKey()) {
                 const d = _drawDraft;
-                ctx.strokeStyle = '#ffd54f'; ctx.lineWidth = 1.4; ctx.setLineDash([5, 4]);
+                ctx.strokeStyle = '#ff5252'; ctx.lineWidth = 2; ctx.setLineDash([]);
                 ctx.beginPath();
                 if (d.type === 'horizontal') {
                     const y = priceToY(d.py, area, priceRange);

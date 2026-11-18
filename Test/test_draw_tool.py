@@ -2,7 +2,7 @@
 """画线工具护栏（同花顺式：线段 / 水平线，2026-11-18）。
 
 钉住两类回归面：
-  ① 结构与接线（静态）：按钮在「统计」之后、工具条 DOM/样式存在、render 流
+  ① 结构与接线（静态）：按钮在「两融余额」之前、工具条 DOM/样式存在、render 流
      调用绘制、mousedown/move/up 分流、Del 键删除、click 守卫。
   ② 算法与手势（node 抽真实源码执行，桩只覆盖 DOM/坐标壳）：
      · 坐标换算 drawGlobalIdxToX / drawXToGlobalIdx 互为逆运算；
@@ -128,9 +128,9 @@ css = read(APP_CSS)
 
 def static_checks():
     btn = 'id="btn-draw"'
-    stats = 'id="btn-stats"'
-    rec("S1", "画线按钮存在且在「统计」之后",
-        btn in html and stats in html and html.index(btn) > html.index(stats))
+    margin = 'id="btn-margin"'
+    rec("S1", "画线按钮存在且在「两融余额」之前",
+        btn in html and margin in html and html.index(btn) < html.index(margin))
     rec("S2", "工具条 DOM 含三种模式 + 删除/清空/退出",
         all(x in html for x in ("draw-toolbar", "draw-tool-select", "draw-tool-segment",
                                 "draw-tool-horizontal", "draw-tool-delete",
@@ -177,6 +177,11 @@ def static_checks():
         js.index("function _drawRestore") > js.index("function _drawSerialize"))
     # 顶栏 btn-seg 也写「线段」，故 S14 必须限定在工具条片段内检查
     _bar_html = html[html.index('id="draw-toolbar"'):html.index('id="range-slider"')]
+    rec("S15", "倾斜线草稿为红色实线（拉动中与选中态一致）",
+        "ctx.strokeStyle = '#ff5252'; ctx.lineWidth = 2; ctx.setLineDash([]);" in js and
+        "// 绘制中的草稿线（红色实线，与选中态一致）" in js and
+        "ctx.setLineDash([5, 4])" not in js)
+
     rec("S14", "工具条顺序：水平线在倾斜线左 + 倾斜线文案",
         _bar_html.index('id="draw-tool-horizontal"') < _bar_html.index('id="draw-tool-segment"') and
         '>水平线</button>' in _bar_html and '>倾斜线</button>' in _bar_html and
