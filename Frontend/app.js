@@ -253,6 +253,7 @@
         let _drawGeom = null;         // 渲染登记的换算真值（含 globalStart）
         let _drawClickGuardArmed = false;  // 吞掉画线手势尾巴那次 click（不切底部 chip）
         let _drawNextId = 1;
+        let _drawToolbarDrag = null;   // 工具条拖拽 { sx, sy, mx, my }（屏幕坐标）
         const DRAW_HIT_PX = 6;        // 命中容差（px）
         const DRAW_MIN_PX = 4;        // 线段短于此像素按误触丢弃
 
@@ -5088,6 +5089,49 @@
             render();
         }
         window.clearAllDraws = clearAllDraws;
+
+        // ── 工具条拖拽（同花顺式：按住左端「画线」标题移动整条工具条）──
+        // 纯几何：给定按下点/当前点/起始 left/top，算钳制后的新 left/top。
+        // 容器右下边界留 0 内边距，保证工具条不被拖出可视区。
+        function _drawToolbarPos(sx, sy, mx, my, cx, cy, cw, ch, bw, bh) {
+            const nx = sx + (cx - mx), ny = sy + (cy - my);
+            return {
+                x: Math.max(0, Math.min(nx, Math.max(0, cw - bw))),
+                y: Math.max(0, Math.min(ny, Math.max(0, ch - bh)))
+            };
+        }
+        // 事件绑定放在独立 IIFE：不触碰 canvas 的 onMouseDown/Move/Up/Leave，
+        // 这样 measure_gesture Tests 抽取那四个函数时无需新增符号桩。
+        (function _drawBindToolbarDrag() {
+            const bar = document.getElementById("draw-toolbar");
+            const handle = document.getElementById("draw-toolbar-handle");
+            const container = document.getElementById("chart-container");
+            if (!bar || !handle || !container) return;
+            handle.addEventListener("mousedown", function(e) {
+                e.preventDefault(); e.stopPropagation();
+                const br = bar.getBoundingClientRect();
+                const cr = container.getBoundingClientRect();
+                // 从 CSS 居中（left:50% + translateX(-50%)）切换为绝对像素定位，
+                // 首帧把视觉位置原样固化，避免拖动瞬间跳动。
+                bar.style.left = (br.left - cr.left) + "px";
+                bar.style.top = (br.top - cr.top) + "px";
+                bar.style.transform = "none";
+                _drawToolbarDrag = { sx: br.left - cr.left, sy: br.top - cr.top,
+                                     mx: e.clientX, my: e.clientY };
+            });
+            document.addEventListener("mousemove", function(e) {
+                if (!_drawToolbarDrag) return;
+                const d = _drawToolbarDrag;
+                const p = _drawToolbarPos(d.sx, d.sy, d.mx, d.my, e.clientX, e.clientY,
+                                          container.clientWidth, container.clientHeight,
+                                          bar.offsetWidth, bar.offsetHeight);
+                bar.style.left = p.x + "px";
+                bar.style.top = p.y + "px";
+            });
+            document.addEventListener("mouseup", function() {
+                _drawToolbarDrag = null;
+            });
+        })();
 
 
         // 辅助：根据chartData中的saved_selection_date恢复「取消选点」菜单项状态

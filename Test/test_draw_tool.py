@@ -158,12 +158,23 @@ def static_checks():
                               'canvas.addEventListener("mouseup", onMouseUp)',
                               'canvas.addEventListener("mouseleave", onMouseLeave)')))
 
+    rec("S10", "工具条标题兼拖拽手柄（id + move 光标 + 防选中）",
+        'id="draw-toolbar-handle"' in html and
+        '.draw-toolbar-label' in css and 'cursor: move' in css and
+        'user-select: none' in css and
+        '_drawBindToolbarDrag' in js)
+    rec("S11", "选择按钮改鼠标指针 SVG 图标（保留 id/onclick/aria-label）",
+        'id="draw-tool-select"' in html and 'draw-tool-icon' in html and
+        'draw-tool-icon svg' in css and 'aria-label="选择"' in html and
+        'setDrawMode(\'select\')' in html and
+        '<path d="M4 2.2v16.1l4.3-4.1 3 6.6 2.7-1.2-3-6.4h5.9L4 2.2z"' in html)
+
 
 # ══════════════════ node 行为断言 ══════════════════
 FNS = ["_drawCurrentKey", "_drawVisibleLines", "drawGlobalIdxToX", "drawXToGlobalIdx",
        "drawPointSegDist", "drawHitTest", "drawDrawings", "_drawMousePos",
        "_drawHandleDown", "_drawHandleMove", "_drawHandleUp", "_drawCancelGesture",
-       "deleteSelectedDraw", "clearAllDraws", "priceToY", "yToPrice"]
+       "deleteSelectedDraw", "clearAllDraws", "_drawToolbarPos", "priceToY", "yToPrice"]
 
 PREAMBLE = r"""
 let _drawLines=[], _drawMode=null, _drawSelected=null, _drawDraft=null, _drawDrag=null;
@@ -304,6 +315,18 @@ check('B11',_drawHandleDown(ev(10,380)),false);
 reset(); _drawMode='horizontal'; _drawClickGuardArmed=false;
 _drawHandleDown(ev(400,200));
 check('B12',_drawClickGuardArmed,true);
+
+// ── B13-B18 工具条拖拽纯几何（含右/下边界钳制）──
+// 容器 800x400，工具条 200x30 ⇒ 可移动范围 x∈[0,600] y∈[0,370]
+check('B13',JSON.stringify(_drawToolbarPos(100,50,110,60,210,160,800,400,200,30)),
+      JSON.stringify({x:200,y:150}));
+check('B14',JSON.stringify(_drawToolbarPos(100,50,110,60,0,0,800,400,200,30)),
+      JSON.stringify({x:0,y:0}));                // 左上越界（nx=-10,ny=-10）钳到 0
+check('B15',JSON.stringify(_drawToolbarPos(100,50,110,60,2000,2000,800,400,200,30)),
+      JSON.stringify({x:600,y:370}));             // 右下越界钳到 cw-bw / ch-bh
+check('B16',_drawToolbarPos(100,50,110,60,110,60,800,400,200,30).x,100); // 原地不动
+check('B17',_drawToolbarPos(100,50,110,60,610,360,800,400,200,30).x,600);
+check('B18',_drawToolbarPos(100,50,110,60,610,360,800,400,200,30).y,350); // y未触底不钳
 
 console.log(JSON.stringify(res));
 """

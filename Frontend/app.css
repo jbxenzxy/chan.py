@@ -120,7 +120,14 @@
         .draw-toolbar-label {
             color: #e94560; font-size: 11px; font-weight: bold;
             padding: 0 4px;
+            /* 标题区兼作拖拽手柄（同花顺式：按住标题移动整条工具条） */
+            cursor: move; user-select: none; -webkit-user-select: none;
         }
+        .draw-toolbar-label:active { cursor: grabbing; }
+        /* 图标按钮（如「选择」鼠标指针）与文字按钮同高、图标随 active 变白 */
+        .draw-tool-icon { display: inline-flex; align-items: center; justify-content: center;
+            line-height: 0; padding: 3px 7px; }
+        .draw-tool-icon svg { width: 14px; height: 14px; fill: currentColor; }
         .draw-toolbar-sep {
             width: 1px; height: 16px; background: #0f3460; margin: 0 2px;
         }
