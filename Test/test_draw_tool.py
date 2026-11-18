@@ -163,11 +163,11 @@ def static_checks():
         '.draw-toolbar-label' in css and 'cursor: move' in css and
         'user-select: none' in css and
         '_drawBindToolbarDrag' in js)
-    rec("S11", "选择按钮改鼠标指针 SVG 图标（保留 id/onclick/aria-label）",
+    rec("S11", "选择按钮为十字准星 SVG 图标（保留 id/onclick/aria-label）",
         'id="draw-tool-select"' in html and 'draw-tool-icon' in html and
         'draw-tool-icon svg' in css and 'aria-label="选择"' in html and
         'setDrawMode(\'select\')' in html and
-        '<path d="M4 2.2v16.1l4.3-4.1 3 6.6 2.7-1.2-3-6.4h5.9L4 2.2z"' in html)
+        '<path d="M11 2h2v9h9v2h-9v9h-2v-9H2v-2h9V2z"' in html)
 
     rec("S12", "画线持久化：localStorage 键 + 5 处落盘钩子 + 启动恢复",
         "const DRAW_STORAGE_KEY = 'chan_draw_lines'" in js and
