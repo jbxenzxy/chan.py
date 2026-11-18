@@ -444,6 +444,17 @@ let geoBad=0, geoCases=0;
 })));
 check('B31',[geoCases,geoBad],[300,0]);
 
+// ── B37 极性钉死：subPixelOffset 在 X 公式里是「减」──
+//    B31 验的是委托关系（恒等式），把正向 drawGlobalIdxToX 与逆向
+//    drawXToGlobalIdx 的 subPixelOffset 符号「成对对调」后，两边仍自洽：
+//    B1 互逆组绿、B31 绿、整棵树 97 项全绿 —— 全图（K 线+画线）一起平移，
+//    相对关系不变，所以画线工具本身没坏，但公式极性没人守。
+//    这里用绝对像素值把极性钉住，让这类"两侧同时翻"的自洽变异无法蒙混。
+check('B37a', near(globalIdxToX(3, 0, 100, 80, 1.5), 378.5, 1e-9), true);
+check('B37b', near(drawGlobalIdxToX(3, {area:{x:100,y:0,w:800,h:400}, priceRange:PR,
+        barStep:80, subPixelOffset:1.5, globalStart:0}), 378.5, 1e-9), true);
+check('B37c', near(globalIdxToX(103, 100, 13, 24.37, 79.9), 18.395, 1e-9), true);
+
 // ── B32 拖动中被取消（移出画布）⇒ 回滚到按下时快照且不落盘 ──
 reset();
 _drawLines.push({id:1,key:'IF2606|5m',type:'segment',gx0:2,py0:3500,gx1:6,py1:3600});
