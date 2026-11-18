@@ -6,10 +6,15 @@
      调用绘制、mousedown/move/up 分流、Del 键删除、click 守卫。
   ② 算法与手势（node 抽真实源码执行，桩只覆盖 DOM/坐标壳）：
      · 坐标换算 drawGlobalIdxToX / drawXToGlobalIdx 互为逆运算；
+     · 几何同源：drawGlobalIdxToX 与生产 globalIdxToX 逐值相等
+       （只验互逆是不够的——两份副本同时写错照样互逆）；
      · 点到线段距离、命中测试（线段/水平线/未命中/按 symbol|freq 分图隔离）；
      · 水平线单击生成、线段 Down→Move→Up 落定、短草稿丢弃；
      · 选中整体拖动（两端同增量 / 水平线改价）；删除与按图清空；
-     · 数据坐标锚定：视口 globalStart 变化后同一 gx 仍指同一批 K 线。
+     · 数据坐标锚定：视口 globalStart 变化后同一 gx 仍指同一批 K 线；
+     · 日期锚定：换数据窗口（下标整体平移）后线仍贴住同一批 K 线；
+     · 手势边界：主绘图区外不接管（不吞底部 chip）、跨图残留选中不误删、
+       拖动被取消时回滚不落盘、点空白立刻重绘。
 
 抽取手法与 test_measure_gesture.py 同型：注释感知花括号配平抽真实函数，
 零网络、零浏览器、秒级。
@@ -177,10 +182,15 @@ def static_checks():
         js.index("function _drawRestore") > js.index("function _drawSerialize"))
     # 顶栏 btn-seg 也写「线段」，故 S14 必须限定在工具条片段内检查
     _bar_html = html[html.index('id="draw-toolbar"'):html.index('id="range-slider"')]
+    # 本段片段：否定断言只对本段生效（别处用虚线不该让画线的断言变红）
+    _draw_fn = fn_src(js, "drawDrawings")
     rec("S15", "倾斜线草稿为红色实线（拉动中与选中态一致）",
         "ctx.strokeStyle = '#ff5252'; ctx.lineWidth = 2; ctx.setLineDash([]);" in js and
         "// 绘制中的草稿线（红色实线，与选中态一致）" in js and
-        "ctx.setLineDash([5, 4])" not in js)
+        "setLineDash([5, 4])" not in _draw_fn)
+    rec("S16", "草稿线只有倾斜线一种（无 horizontal 死分支）",
+        "_drawDraft && _drawDraft.key === _drawCurrentKey()" in _draw_fn and
+        "d.type === 'horizontal'" not in _draw_fn)
 
     rec("S14", "工具条顺序：水平线在倾斜线左 + 倾斜线文案",
         _bar_html.index('id="draw-tool-horizontal"') < _bar_html.index('id="draw-tool-segment"') and
@@ -194,7 +204,9 @@ def static_checks():
 
 
 # ══════════════════ node 行为断言 ══════════════════
-FNS = ["_drawCurrentKey", "_drawVisibleLines", "drawGlobalIdxToX", "drawXToGlobalIdx",
+FNS = ["_drawCurrentKey", "_drawVisibleLines", "buildGlobalDateMap", "globalIdxToX",
+       "_drawPruneSelection", "_drawDateMap", "_drawAnchorGx", "_drawMaterialize",
+       "_drawReanchor", "drawGlobalIdxToX", "drawXToGlobalIdx",
        "drawPointSegDist", "drawHitTest", "drawDrawings", "_drawMousePos",
        "_drawHandleDown", "_drawHandleMove", "_drawHandleUp", "_drawCancelGesture",
        "deleteSelectedDraw", "clearAllDraws", "_drawToolbarPos",
@@ -202,7 +214,7 @@ FNS = ["_drawCurrentKey", "_drawVisibleLines", "drawGlobalIdxToX", "drawXToGloba
 
 PREAMBLE = r"""
 let _drawLines=[], _drawMode=null, _drawSelected=null, _drawDraft=null, _drawDrag=null;
-let _drawGeom=null, _drawClickGuardArmed=false, _drawNextId=1;
+let _drawGeom=null, _drawClickGuardArmed=false, _drawNextId=1, _drawDateMapCache=null;
 const DRAW_HIT_PX=6, DRAW_MIN_PX=4;
 let chartData=null, currentFreq='5m', _logScale=false, _isMirrorMode=false;
 const renderCalls=[]; function render(){ renderCalls.push(1); }
@@ -216,9 +228,13 @@ const ctx={ save(){},restore(){},beginPath(){},rect(){},clip(){},setLineDash(){}
   stroke(){}, arc(){}, fill(){}, fillStyle:'',strokeStyle:'',lineWidth:1 };
 const AREA={x:0,y:0,w:800,h:400}, PR={min:3000,max:4000};
 function G(globalStart,subPx){ return {area:AREA,priceRange:PR,barStep:80,subPixelOffset:(subPx||0),globalStart:globalStart||0}; }
-function mkChart(sym){ return {meta:{symbol:sym||'IF2606',freq:'5m'},klines:[]}; }
+function mkChart(sym,klines){ return {meta:{symbol:sym||'IF2606',freq:'5m'},klines:klines||[]}; }
+// 造 klines：日期锚点只关心 date（下标 = 数组下标，换窗口时整体平移）
+function mkDates(from,n){ const a=[];
+  for(let i=0;i<n;i++){ a.push({date:'d'+String(from+i).padStart(3,'0')}); } return a; }
 function reset(){ _drawLines=[]; _drawMode='segment'; _drawSelected=null; _drawDraft=null;
   _drawDrag=null; _drawGeom=G(0); _drawClickGuardArmed=false; _drawNextId=1;
+  _drawDateMapCache=null; persistCalls.length=0;
   chartData=mkChart(); currentFreq='5m'; renderCalls.length=0; _stroke.length=0; }
 const ev=(x,y,btn)=>({clientX:x,clientY:y,button:btn===undefined?0:btn,preventDefault(){}});
 const res=[];
@@ -370,6 +386,111 @@ const dirty=JSON.stringify([null, 42, {key:'x'}, {key:'k',type:'horizontal',py:'
 check('B25',_drawDeserialize(dirty).length,2);                // 只留 2 条合法线
 check('B26',_drawNextIdFrom(_drawDeserialize(JSON.stringify(two))),4); // 续号 max(1,3)+1
 check('B27',_drawNextIdFrom([]),1);                           // 空则 1
+
+// ── B28 跨图残留选中不得误删（切标的/周期后 Del 只作废选中）──
+reset();
+_drawLines.push({id:1,key:'IF2606|5m',type:'horizontal',py:3500});
+_drawSelected=_drawLines[0];
+chartData=mkChart('rb'); currentFreq='d';      // 切图：选中仍指向上一张图
+deleteSelectedDraw();
+check('B28a',_drawLines.length,1);             // 看不见的线没被删
+check('B28b',_drawSelected,null);              // 选中已作废
+chartData=mkChart('IF2606'); currentFreq='5m'; _drawMode='select';
+check('B28c',_drawHandleDown(ev(400,200)),true);  // 回原图仍点得中（线还在原位）
+check('B28d',_drawLines.length,1);
+
+// ── B29 日期锚点：换数据窗口（下标整体平移）后线跟着 K 线走 ──
+reset();
+chartData=mkChart('IF2606',mkDates(0,200));    // d000..d199
+_drawGeom=G(100);                              // 视口从 d100 起 ⇒ 屏内可见 d100..
+_drawMode='segment';
+_drawHandleDown(ev(200,200));                  // gx=102
+_drawHandleMove(ev(520,160));                  // gx=106
+_drawHandleUp(ev(520,160));
+let segD=_drawLines[0];
+check('B29a',segD.gx0,102);
+check('B29b',segD.t0,'d102');
+check('B29c',segD.t1,'d106');
+// 重取数：只剩最后 100 根（d100..d199），d102 的下标由 102 变成 2
+chartData=mkChart('IF2606',mkDates(100,100));
+check('B29d',_drawAnchorGx(segD,0),2);
+check('B29e',_drawAnchorGx(segD,1),6);
+check('B29f',drawGlobalIdxToX(_drawAnchorGx(segD,0),G(0)),200);  // 画在 2 号 K 线上
+// 该日期已不在窗口内 ⇒ 退回落线时的下标（不丢线、不崩）
+chartData=mkChart('IF2606',mkDates(0,100));
+check('B29g',_drawAnchorGx(segD,0),102);
+// 空 klines（早期/加载中）⇒ 同样退回下标
+chartData=mkChart('IF2606');
+check('B29h',_drawAnchorGx(segD,1),106);
+
+// ── B30 手势只在主绘图区内接管（底部 chip / 右轴不被吞）──
+reset(); _drawMode='horizontal';
+check('B30a',_drawHandleDown(ev(400,420)),false);   // 主图下沿之外（底部指标带）
+check('B30b',_drawLines.length,0);                  // 不再生成看不见的线
+check('B30c',_drawClickGuardArmed,false);           // 没武装守卫 ⇒ chip 的 click 不被吞
+_drawMode='segment';
+check('B30d',_drawHandleDown(ev(850,200)),false);   // 右轴之外
+check('B30e',_drawDraft,null);
+
+// ── B31 几何同源：drawGlobalIdxToX 与生产 globalIdxToX 逐值相等 ──
+let geoBad=0, geoCases=0;
+[0,1,5,37,500].forEach(gs=>[0,0.5,17.5,79.9].forEach(sp=>[8,24.37,80].forEach(bs=>{
+  const gg={area:{x:13,y:0,w:800,h:400},priceRange:PR,barStep:bs,
+            subPixelOffset:sp,globalStart:gs};
+  [0,2.5,7,19.75,gs+3].forEach(gx=>{
+    geoCases++;
+    if(!near(drawGlobalIdxToX(gx,gg), globalIdxToX(gx,gs,13,bs,sp), 1e-12)) geoBad++;
+  });
+})));
+check('B31',[geoCases,geoBad],[300,0]);
+
+// ── B32 拖动中被取消（移出画布）⇒ 回滚到按下时快照且不落盘 ──
+reset();
+_drawLines.push({id:1,key:'IF2606|5m',type:'segment',gx0:2,py0:3500,gx1:6,py1:3600});
+_drawMode='select';
+_drawHandleDown(ev(360,180));
+_drawHandleMove(ev(440,180));       // 就地改成 gx 3..7
+_drawCancelGesture();
+let back=_drawLines[0];
+check('B32a',near(back.gx0,2,1e-6)&&near(back.gx1,6,1e-6),true);
+check('B32b',near(back.py0,3500,1e-4)&&near(back.py1,3600,1e-4),true);
+check('B32c',persistCalls.length,0);   // 取消 = 本次拖动作废，不落盘
+check('B32d',_drawDrag,null);
+
+// ── B33 select 点空白：清选中并立刻重绘（不留残影）──
+reset();
+_drawLines.push({id:1,key:'IF2606|5m',type:'segment',gx0:2,py0:3500,gx1:6,py1:3600});
+_drawMode='select'; _drawSelected=_drawLines[0]; renderCalls.length=0;
+check('B33a',_drawHandleDown(ev(10,380)),false);
+check('B33b',_drawSelected,null);
+check('B33c',renderCalls.length,1);
+
+// ── B34 水平线只锚价格（与窗口无关，不挂日期）──
+reset(); chartData=mkChart('IF2606',mkDates(0,50));
+_drawMode='horizontal'; _drawHandleDown(ev(400,200));
+check('B34a',_drawLines[0].t0===undefined,true);
+check('B34b',near(_drawLines[0].py,3500,1e-6),true);
+
+// ── B35 拖动定稿后重写日期锚点（否则换窗口会跳回原位）──
+reset(); chartData=mkChart('IF2606',mkDates(0,50));
+_drawLines.push({id:1,key:'IF2606|5m',type:'segment',gx0:2,py0:3500,gx1:6,py1:3600,
+                 t0:'d002',t1:'d006'});
+_drawMode='select';
+_drawHandleDown(ev(360,180));
+_drawHandleMove(ev(440,180));       // +1 根
+_drawHandleUp(ev(440,180));
+check('B35a',_drawLines[0].t0,'d003');
+check('B35b',_drawLines[0].t1,'d007');
+
+// ── B36 拖动起点用「解析后的下标」：存着旧 gx、日期有效时也不许跳 ──
+reset(); chartData=mkChart('IF2606',mkDates(100,100));   // d100..d199
+_drawLines.push({id:1,key:'IF2606|5m',type:'segment',gx0:102,py0:3500,gx1:106,py1:3600,
+                 t0:'d102',t1:'d106'});
+_drawMode='select';
+check('B36a',_drawHandleDown(ev(360,180)),true);   // 按解析后的位置(2..6)命中的
+check('B36b',_drawDrag&&_drawDrag.ln.gx0,2);        // 按下即兑现成当前下标
+_drawHandleUp(ev(360,180));
+check('B36c',_drawLines[0].t0,'d102');              // 原位不动 ⇒ 锚点不变
 
 console.log(JSON.stringify(res));
 """

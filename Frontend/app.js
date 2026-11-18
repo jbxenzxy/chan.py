@@ -241,20 +241,22 @@
         const MEASURE_MIN_DRAG = 4;   // 升级为拖框的最小位移（px），与点击阈同量级
 
         // ══ 画线工具（同花顺式：线段 / 水平线）═════════════════════
-        //   每条线锚定到「数据坐标」：线段存两个 (全局K线索引, 价格) 端点，
-        //   水平线只存价格（横向贯穿绘图区）。渲染时用与 K 线同一套几何
-        //   （globalIdxToX / priceToY）转屏幕坐标 ⇒ 平移 / 缩放后仍贴住同一批
+        //   每条线锚定到「数据坐标」：线段存两个 (全局K线索引, 价格) 端点 + 两个
+        //   日期锚点 t0/t1（选点/复盘会整批重取数、下标平移，只有日期不变），
+        //   水平线只存价格（横向贯穿绘图区，与窗口无关）。渲染时用与 K 线同一套
+        //   几何（globalIdxToX / priceToY）转屏幕坐标 ⇒ 平移 / 缩放后仍贴住同一批
         //   K 线与价位。按 symbol|freq 分图存放，切标的 / 周期互不串线。
-        let _drawLines = [];          // [{id, key, type, gx0,py0,gx1,py1} | {id,key,type,py}]
+        let _drawLines = [];          // [{id,key,type,gx0,py0,gx1,py1,t0,t1} | {id,key,type,py}]
         let _drawMode = null;         // null=工具条关闭 | select | segment | horizontal
-        let _drawSelected = null;     // 选中的线对象（引用）
-        let _drawDraft = null;        // 绘制中的草稿线
+        let _drawSelected = null;     // 选中的线对象（引用，只在当前图有效）
+        let _drawDraft = null;        // 绘制中的草稿线（只有倾斜线会建草稿）
         let _drawDrag = null;         // 拖动中的 {ln, g, startGx, startPy, orig}
         let _drawGeom = null;         // 渲染登记的换算真值（含 globalStart）
         let _drawClickGuardArmed = false;  // 吞掉画线手势尾巴那次 click（不切底部 chip）
         let _drawNextId = 1;
         const DRAW_STORAGE_KEY = 'chan_draw_lines';  // 画线持久化（localStorage，跨重启）
         let _drawToolbarDrag = null;   // 工具条拖拽 { sx, sy, mx, my }（屏幕坐标）
+        let _drawDateMapCache = null;  // 日期→下标映射缓存 { arr, len, tail, map }
         const DRAW_HIT_PX = 6;        // 命中容差（px）
         const DRAW_MIN_PX = 4;        // 线段短于此像素按误触丢弃
 
@@ -4859,6 +4861,10 @@
                     item.gx1 = num(l.gx1); item.py1 = num(l.py1);
                     if (item.gx0 === null || item.py0 === null ||
                         item.gx1 === null || item.py1 === null) continue;
+                    // 日期锚点（可选）：早期记录没有 t0/t1 ⇒ 只按 gx 走，
+                    // 不清已有 localStorage（旧数据照常可用，只是不抗换窗口）。
+                    if (typeof l.t0 === 'string' && l.t0) item.t0 = l.t0;
+                    if (typeof l.t1 === 'string' && l.t1) item.t1 = l.t1;
                 }
                 out.push(item);
             }
@@ -4870,6 +4876,8 @@
             for (const l of lines) { if (l.id > m) m = l.id; }
             return m + 1;
         }
+        // 整数组全量覆盖写：同一 origin 双开两个标签页时「最后写赢」
+        // （不做合并/版本号，画线是单人口径的低频数据，冲突代价可接受）。
         function _drawPersist() {
             try { localStorage.setItem(DRAW_STORAGE_KEY, _drawSerialize(_drawLines)); }
             catch(e) {}
@@ -4891,9 +4899,72 @@
             return _drawLines.filter(function(l) { return l.key === key; });
         }
 
-        // 全局索引 → 屏幕 X（与 globalIdxToX 同一公式，读渲染登记真值）
+        // 选中态只在「当前图」有意义：切标的/换周期后残留的旧引用必须作废，
+        // 否则 Del / 删除按钮会删掉画面上根本看不见的另一张图的线（无任何反馈）。
+        function _drawPruneSelection() {
+            if (!_drawSelected) return null;
+            if (_drawSelected.key !== _drawCurrentKey() ||
+                _drawLines.indexOf(_drawSelected) < 0) _drawSelected = null;
+            return _drawSelected;
+        }
+
+        // ── 日期锚点（换数据窗口的下标平移）──
+        // 线的数据坐标是 klines 的**数组下标**，但「双击 K 线选点 / 复盘」会带
+        // end_date+start_time 整批重取数 ⇒ 同一个下标指向另一根 K 线，已画的线会
+        // 整批平移。日期才是跨窗口稳定的锚（与 _measureAnchor 的 t0/t1 同口径）。
+        // 映射按「数组引用 + 长度 + 末根日期」缓存：换窗口这三项至少变一个。
+        function _drawDateMap() {
+            const arr = chartData && chartData.klines;
+            if (!arr || !arr.length) return null;
+            const tail = arr[arr.length - 1].date;
+            const c = _drawDateMapCache;
+            if (c && c.arr === arr && c.len === arr.length && c.tail === tail) return c.map;
+            const map = buildGlobalDateMap();
+            _drawDateMapCache = { arr: arr, len: arr.length, tail: tail, map: map };
+            return map;
+        }
+
+        // 线的端点在「当前窗口」的下标：有日期锚点且能在当前 klines 里找到就用它，
+        // 否则退回落线时记下的 gx（旧记录没锚点 / 该 K 线已不在窗口内）。
+        function _drawAnchorGx(ln, which) {
+            const gx = (which === 1) ? ln.gx1 : ln.gx0;
+            const dt = (which === 1) ? ln.t1 : ln.t0;
+            if (dt) {
+                const map = _drawDateMap();
+                const idx = map ? map.dateToGlobalIdx[dt] : undefined;
+                if (typeof idx === 'number' && isFinite(idx)) return idx;
+            }
+            return gx;
+        }
+
+        // 把日期锚点兑现成当前窗口下标：拖动必须基于「看得见的位置」，
+        // 否则拖的是旧下标、画的是新位置，一动就跳。
+        function _drawMaterialize(ln) {
+            if (ln && ln.type === 'segment') {
+                ln.gx0 = _drawAnchorGx(ln, 0);
+                ln.gx1 = _drawAnchorGx(ln, 1);
+            }
+            return ln;
+        }
+
+        // 位置定稿后按新下标重写日期锚点（拖动/新建都会改 gx，锚点必须跟着走）
+        function _drawReanchor(ln) {
+            const arr = chartData && chartData.klines;
+            if (!ln || ln.type !== 'segment' || !arr || !arr.length) return ln;
+            const pick = function(gx) {
+                const i = Math.max(0, Math.min(arr.length - 1, Math.round(gx)));
+                return (arr[i] && typeof arr[i].date === 'string' && arr[i].date) ? arr[i].date : null;
+            };
+            const t0 = pick(ln.gx0), t1 = pick(ln.gx1);
+            if (t0) ln.t0 = t0; else delete ln.t0;
+            if (t1) ln.t1 = t1; else delete ln.t1;
+            return ln;
+        }
+
+        // 全局索引 → 屏幕 X：**单一事实源**是 globalIdxToX（K 线 / 十字光标 / 红框
+        // 都走它）。此处只做委托 —— 公式不再有第二份副本，结构上不可能再漂。
         function drawGlobalIdxToX(gIdx, g) {
-            return g.area.x + g.barStep * (gIdx - g.globalStart) + g.barStep / 2 - g.subPixelOffset;
+            return globalIdxToX(gIdx, g.globalStart, g.area.x, g.barStep, g.subPixelOffset);
         }
 
         // 屏幕 X → 全局索引（drawGlobalIdxToX 的逆运算）
@@ -4920,8 +4991,9 @@
                     if (Math.abs(py - y) <= DRAW_HIT_PX &&
                         px >= g.area.x && px <= g.area.x + g.area.w) return ln;
                 } else {
-                    const x0 = drawGlobalIdxToX(ln.gx0, g), y0 = priceToY(ln.py0, g.area, g.priceRange);
-                    const x1 = drawGlobalIdxToX(ln.gx1, g), y1 = priceToY(ln.py1, g.area, g.priceRange);
+                    // 命中按「当前窗口解析出的下标」算，与绘制同源（换窗口后仍能点中）
+                    const x0 = drawGlobalIdxToX(_drawAnchorGx(ln, 0), g), y0 = priceToY(ln.py0, g.area, g.priceRange);
+                    const x1 = drawGlobalIdxToX(_drawAnchorGx(ln, 1), g), y1 = priceToY(ln.py1, g.area, g.priceRange);
                     if (drawPointSegDist(px, py, x0, y0, x1, y1) <= DRAW_HIT_PX) return ln;
                 }
             }
@@ -4936,6 +5008,7 @@
             ctx.beginPath();
             ctx.rect(area.x, area.y, area.w, area.h);
             ctx.clip();
+            _drawPruneSelection();   // 换图后残留的旧选中先作废，别把红框留给看不见的线
             const lines = _drawVisibleLines();
             for (let i = 0; i < lines.length; i++) {
                 const ln = lines[i];
@@ -4954,8 +5027,8 @@
                         ctx.fillStyle = '#ff5252'; ctx.fill();
                     }
                 } else {
-                    const x0 = drawGlobalIdxToX(ln.gx0, g), y0 = priceToY(ln.py0, area, priceRange);
-                    const x1 = drawGlobalIdxToX(ln.gx1, g), y1 = priceToY(ln.py1, area, priceRange);
+                    const x0 = drawGlobalIdxToX(_drawAnchorGx(ln, 0), g), y0 = priceToY(ln.py0, area, priceRange);
+                    const x1 = drawGlobalIdxToX(_drawAnchorGx(ln, 1), g), y1 = priceToY(ln.py1, area, priceRange);
                     ctx.beginPath();
                     ctx.moveTo(x0, y0);
                     ctx.lineTo(x1, y1);
@@ -4967,18 +5040,14 @@
                     }
                 }
             }
-            // 绘制中的草稿线（红色实线，与选中态一致）
+            // 绘制中的草稿线（红色实线，与选中态一致）。
+            // 草稿只有倾斜线一种（_drawDraft 仅在 segment 分支创建），水平线是单击即落定。
             if (_drawDraft && _drawDraft.key === _drawCurrentKey()) {
                 const d = _drawDraft;
                 ctx.strokeStyle = '#ff5252'; ctx.lineWidth = 2; ctx.setLineDash([]);
                 ctx.beginPath();
-                if (d.type === 'horizontal') {
-                    const y = priceToY(d.py, area, priceRange);
-                    ctx.moveTo(area.x, y); ctx.lineTo(area.x + area.w, y);
-                } else {
-                    ctx.moveTo(drawGlobalIdxToX(d.gx0, g), priceToY(d.py0, area, priceRange));
-                    ctx.lineTo(drawGlobalIdxToX(d.gx1, g), priceToY(d.py1, area, priceRange));
-                }
+                ctx.moveTo(drawGlobalIdxToX(d.gx0, g), priceToY(d.py0, area, priceRange));
+                ctx.lineTo(drawGlobalIdxToX(d.gx1, g), priceToY(d.py1, area, priceRange));
                 ctx.stroke(); ctx.setLineDash([]);
             }
             ctx.restore();
@@ -4993,18 +5062,26 @@
             if (e.button !== 0 || !_drawGeom || !chartData) return false;
             const pos = _drawMousePos(e);
             const g = _drawGeom;
+            // 只在主绘图区内接管手势：底部指标 chip / 右轴 / 画布外一律交回默认行为
+            // （否则水平线会在区外生成一条看不见的线并落盘，还把尾巴 click 吞掉）
+            if (pos.x < g.area.x || pos.x > g.area.x + g.area.w ||
+                pos.y < g.area.y || pos.y > g.area.y + g.area.h) return false;
             const hit = drawHitTest(pos.x, pos.y, g);
             if (hit) {
-                // 选中并准备整体移动：记录按下时的数据坐标与原线快照
+                // 选中并准备整体移动：记录按下时的数据坐标与原线快照。
+                // 先把日期锚点兑现成当前下标 ⇒ 拖动基准 = 看得见的位置。
                 _drawSelected = hit;
+                _drawMaterialize(hit);
                 _drawDrag = {
                     ln: hit,
                     g: { area: g.area, priceRange: g.priceRange, barStep: g.barStep,
                          subPixelOffset: g.subPixelOffset, globalStart: g.globalStart },
                     startGx: drawXToGlobalIdx(pos.x, g),
                     startPy: yToPrice(pos.y, g.area, g.priceRange),
-                    orig: (hit.type === 'horizontal') ? { py: hit.py }
-                                                      : { gx0: hit.gx0, py0: hit.py0, gx1: hit.gx1, py1: hit.py1 }
+                    orig: (hit.type === 'horizontal')
+                        ? { py: hit.py }
+                        : { gx0: hit.gx0, py0: hit.py0, gx1: hit.gx1, py1: hit.py1,
+                            t0: hit.t0, t1: hit.t1 }
                 };
                 _drawClickGuardArmed = true;
                 render();
@@ -5031,8 +5108,9 @@
                 render();
                 return true;
             }
-            // select 模式点空白：取消选中，交回默认手势（平移/复制 K 线）
-            _drawSelected = null;
+            // select 模式点空白：取消选中并立刻重绘（否则红框会留在画布上直到
+            // 下一次渲染），然后交回默认手势（平移/复制 K 线）
+            if (_drawSelected) { _drawSelected = null; render(); }
             return false;
         }
 
@@ -5062,8 +5140,12 @@
             if (!_drawDrag && !_drawDraft) return false;
             _drawClickGuardArmed = true;
             if (_drawDrag) {
+                // 拖动就地改了 gx ⇒ 按落定位置重写日期锚点，再落盘（否则下次换窗口
+                // 会按旧日期跳回按下前的位置）。持久化与锚点一起更新，不留半截状态。
+                const ln = _drawDrag.ln;
                 _drawDrag = null;
-                _drawPersist();   // 拖动直接改线对象属性 ⇒ 松手即落盘
+                _drawReanchor(ln);
+                _drawPersist();
                 render();
                 return true;
             }
@@ -5076,6 +5158,7 @@
                 if (Math.sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0)) >= DRAW_MIN_PX) {
                     const ln = { id: _drawNextId++, key: d.key, type: 'segment',
                                  gx0: d.gx0, py0: d.py0, gx1: d.gx1, py1: d.py1 };
+                    _drawReanchor(ln);   // 新线同时挂日期锚点，抗选点/复盘换窗口
                     _drawLines.push(ln);
                     _drawPersist();
                     _drawSelected = ln;
@@ -5085,7 +5168,21 @@
             return true;
         }
 
+        // 取消手势（移出画布 / 切模式 / 退出工具条）：拖动中的线整体回滚到按下时
+        // 的快照 —— _drawHandleMove 是**就地**改写线对象，不回滚就会出现「会话内
+        // 看着移了、重启回到原位」这种半截状态；回滚即本次拖动作废，故不落盘。
         function _drawCancelGesture() {
+            const d = _drawDrag;
+            if (d && d.ln && d.orig) {
+                const ln = d.ln, o = d.orig;
+                if (ln.type === 'horizontal') {
+                    ln.py = o.py;
+                } else {
+                    ln.gx0 = o.gx0; ln.py0 = o.py0; ln.gx1 = o.gx1; ln.py1 = o.py1;
+                    if (o.t0) ln.t0 = o.t0; else delete ln.t0;
+                    if (o.t1) ln.t1 = o.t1; else delete ln.t1;
+                }
+            }
             _drawDraft = null;
             _drawDrag = null;
         }
@@ -5116,8 +5213,9 @@
             render();
         };
 
+        // 工具条只在 _drawMode 非空时可见 ⇒ 进来时必然是画线态，
+        // 无需再「顺手置 select」（那一句会被下一行立刻覆盖，是死代码）。
         window.setDrawMode = function(mode) {
-            if (!_drawMode) _drawMode = 'select';   // 点工具条线型即视为进入画线模式
             _drawMode = mode;
             _drawCancelGesture();
             _drawSyncToolbar();
@@ -5125,7 +5223,9 @@
         };
 
         function deleteSelectedDraw() {
-            if (!_drawSelected) return;
+            // 跨图残留选中：切标的/换周期后 _drawSelected 可能仍指向别的图
+            // ⇒ 先作废，绝不删画面外那条看不见的线（删了也没有任何反馈）
+            if (!_drawPruneSelection()) return;
             const idx = _drawLines.indexOf(_drawSelected);
             if (idx >= 0) { _drawLines.splice(idx, 1); _drawPersist(); }
             _drawSelected = null;
@@ -5181,9 +5281,12 @@
                 bar.style.left = p.x + "px";
                 bar.style.top = p.y + "px";
             });
-            document.addEventListener("mouseup", function() {
-                _drawToolbarDrag = null;
-            });
+            // 松手必须复位：只监听 document.mouseup 时，在窗口外松手 / 切走标签页
+            // 就再也收不到 ⇒ _drawToolbarDrag 一直挂着，之后不按键移动鼠标也在拖。
+            const endDrag = function() { _drawToolbarDrag = null; };
+            document.addEventListener("mouseup", endDrag);
+            window.addEventListener("blur", endDrag);
+            document.addEventListener("mouseleave", endDrag);
         })();
 
 
