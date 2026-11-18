@@ -253,6 +253,7 @@
         let _drawGeom = null;         // 渲染登记的换算真值（含 globalStart）
         let _drawClickGuardArmed = false;  // 吞掉画线手势尾巴那次 click（不切底部 chip）
         let _drawNextId = 1;
+        const DRAW_STORAGE_KEY = 'chan_draw_lines';  // 画线持久化（localStorage，跨重启）
         let _drawToolbarDrag = null;   // 工具条拖拽 { sx, sy, mx, my }（屏幕坐标）
         const DRAW_HIT_PX = 6;        // 命中容差（px）
         const DRAW_MIN_PX = 4;        // 线段短于此像素按误触丢弃
@@ -4832,6 +4833,54 @@
         // ════════════════════════════════════════════════════════════
         // 画线工具（同花顺式）核心 —— 坐标换算 / 绘制 / 命中 / 手势
         // ════════════════════════════════════════════════════════════
+        // ── 持久化（localStorage，同 chan_overlay_settings 范式）──
+        // 存全量画线（每条自带 key=symbol|freq，按图隔离在读取端生效）。
+        // 序列化/反序列化拆成纯函数，node 单测可直接喂脏数据验健壮性。
+        function _drawSerialize(lines) {
+            return JSON.stringify(lines || []);
+        }
+        function _drawDeserialize(raw) {
+            if (!raw) return [];
+            let arr;
+            try { arr = JSON.parse(raw); } catch(e) { return []; }
+            if (!Array.isArray(arr)) return [];
+            const out = [];
+            for (const l of arr) {
+                if (!l || typeof l !== 'object') continue;
+                if (typeof l.key !== 'string' || (l.type !== 'horizontal' && l.type !== 'segment')) continue;
+                const id = Number(l.id);
+                const item = { id: isFinite(id) ? id : 0, key: l.key, type: l.type };
+                const num = function(v) { const n = Number(v); return isFinite(n) ? n : null; };
+                if (l.type === 'horizontal') {
+                    item.py = num(l.py);
+                    if (item.py === null) continue;
+                } else {
+                    item.gx0 = num(l.gx0); item.py0 = num(l.py0);
+                    item.gx1 = num(l.gx1); item.py1 = num(l.py1);
+                    if (item.gx0 === null || item.py0 === null ||
+                        item.gx1 === null || item.py1 === null) continue;
+                }
+                out.push(item);
+            }
+            return out;
+        }
+        // 下次 id 从现存最大 id+1 起，避免恢复后新线与旧线 id 撞车
+        function _drawNextIdFrom(lines) {
+            let m = 0;
+            for (const l of lines) { if (l.id > m) m = l.id; }
+            return m + 1;
+        }
+        function _drawPersist() {
+            try { localStorage.setItem(DRAW_STORAGE_KEY, _drawSerialize(_drawLines)); }
+            catch(e) {}
+        }
+        function _drawRestore() {
+            try {
+                const lines = _drawDeserialize(localStorage.getItem(DRAW_STORAGE_KEY));
+                _drawLines = lines;
+                _drawNextId = _drawNextIdFrom(lines);
+            } catch(e) { _drawLines = []; }
+        }
         function _drawCurrentKey() {
             if (!chartData || !chartData.meta) return '';
             return String(chartData.meta.symbol) + '|' + String(currentFreq);
@@ -4966,6 +5015,7 @@
                 const py = yToPrice(pos.y, g.area, g.priceRange);
                 const ln = { id: _drawNextId++, key: _drawCurrentKey(), type: 'horizontal', py: py };
                 _drawLines.push(ln);
+                _drawPersist();
                 _drawSelected = ln;
                 _drawClickGuardArmed = true;
                 render();
@@ -5013,6 +5063,7 @@
             _drawClickGuardArmed = true;
             if (_drawDrag) {
                 _drawDrag = null;
+                _drawPersist();   // 拖动直接改线对象属性 ⇒ 松手即落盘
                 render();
                 return true;
             }
@@ -5026,6 +5077,7 @@
                     const ln = { id: _drawNextId++, key: d.key, type: 'segment',
                                  gx0: d.gx0, py0: d.py0, gx1: d.gx1, py1: d.py1 };
                     _drawLines.push(ln);
+                    _drawPersist();
                     _drawSelected = ln;
                 }
             }
@@ -5075,7 +5127,7 @@
         function deleteSelectedDraw() {
             if (!_drawSelected) return;
             const idx = _drawLines.indexOf(_drawSelected);
-            if (idx >= 0) _drawLines.splice(idx, 1);
+            if (idx >= 0) { _drawLines.splice(idx, 1); _drawPersist(); }
             _drawSelected = null;
             render();
         }
@@ -5084,6 +5136,7 @@
         function clearAllDraws() {
             const key = _drawCurrentKey();
             _drawLines = _drawLines.filter(function(l) { return l.key !== key; });
+            _drawPersist();
             _drawSelected = null;
             _drawCancelGesture();
             render();
@@ -11253,6 +11306,7 @@
 
         // 启动时加载保存的设置
         loadOverlaySettings();
+        _drawRestore();   // 恢复上次重启前的画线（按 symbol|freq 分图）
         // 首屏即与自动下单侧的生效值对齐：GET 只读回填，**不推送**（打开页面不该
         // 改动引擎策略）。缺失后端/接口不可达时保留本地显示，不阻断看图。
         syncBspFilterFromTrader();

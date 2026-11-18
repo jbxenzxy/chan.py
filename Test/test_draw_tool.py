@@ -169,12 +169,24 @@ def static_checks():
         'setDrawMode(\'select\')' in html and
         '<path d="M4 2.2v16.1l4.3-4.1 3 6.6 2.7-1.2-3-6.4h5.9L4 2.2z"' in html)
 
+    rec("S12", "画线持久化：localStorage 键 + 5 处落盘钩子 + 启动恢复",
+        "const DRAW_STORAGE_KEY = 'chan_draw_lines'" in js and
+        "localStorage.setItem(DRAW_STORAGE_KEY" in js and
+        js.count("_drawPersist();") >= 5 and
+        "_drawRestore();   // 恢复上次重启前的画线" in js and
+        js.index("function _drawRestore") > js.index("function _drawSerialize"))
+    rec("S13", "持久化健壮性：反序列化脏数据校验 + id 续号",
+        all(x in js for x in ("function _drawDeserialize", "catch(e) { return []; }",
+                              "if (!Array.isArray(arr)) return [];",
+                              "function _drawNextIdFrom", "return m + 1;")))
+
 
 # ══════════════════ node 行为断言 ══════════════════
 FNS = ["_drawCurrentKey", "_drawVisibleLines", "drawGlobalIdxToX", "drawXToGlobalIdx",
        "drawPointSegDist", "drawHitTest", "drawDrawings", "_drawMousePos",
        "_drawHandleDown", "_drawHandleMove", "_drawHandleUp", "_drawCancelGesture",
-       "deleteSelectedDraw", "clearAllDraws", "_drawToolbarPos", "priceToY", "yToPrice"]
+       "deleteSelectedDraw", "clearAllDraws", "_drawToolbarPos",
+       "_drawSerialize", "_drawDeserialize", "_drawNextIdFrom", "priceToY", "yToPrice"]
 
 PREAMBLE = r"""
 let _drawLines=[], _drawMode=null, _drawSelected=null, _drawDraft=null, _drawDrag=null;
@@ -182,6 +194,9 @@ let _drawGeom=null, _drawClickGuardArmed=false, _drawNextId=1;
 const DRAW_HIT_PX=6, DRAW_MIN_PX=4;
 let chartData=null, currentFreq='5m', _logScale=false, _isMirrorMode=false;
 const renderCalls=[]; function render(){ renderCalls.push(1); }
+// 持久化写入桩：抽取的真实函数（_drawHandleDown/Up、deleteSelectedDraw、
+// clearAllDraws）会调 _drawPersist；落盘行为由静态 S12 钩子断言覆盖，这里只吞调用。
+const persistCalls=[]; function _drawPersist(){ persistCalls.push(1); }
 const canvas={ getBoundingClientRect(){ return {left:0,top:0}; } };
 const _stroke=[];
 const ctx={ save(){},restore(){},beginPath(){},rect(){},clip(){},setLineDash(){},
@@ -327,6 +342,22 @@ check('B15',JSON.stringify(_drawToolbarPos(100,50,110,60,2000,2000,800,400,200,3
 check('B16',_drawToolbarPos(100,50,110,60,110,60,800,400,200,30).x,100); // 原地不动
 check('B17',_drawToolbarPos(100,50,110,60,610,360,800,400,200,30).x,600);
 check('B18',_drawToolbarPos(100,50,110,60,610,360,800,400,200,30).y,350); // y未触底不钳
+
+// ── B19-B27 画线持久化：序列化 / 脏数据 / id 续号 ──
+const two=[{id:1,key:'IF2606|5m',type:'horizontal',py:3500},
+           {id:3,key:'IF2606|5m',type:'segment',gx0:2,py0:3,gx1:6,py1:9}];
+check('B19',_drawSerialize(two),JSON.stringify(two));          // 往返稳定
+check('B20',JSON.stringify(_drawDeserialize(JSON.stringify(two))),JSON.stringify(two));
+check('B21',_drawDeserialize('not-json').length,0);            // 坏 JSON 不崩
+check('B22',_drawDeserialize('{}').length,0);                  // 非数组不崩
+check('B23',_drawDeserialize('null').length,0);                // null 不崩
+check('B24',_drawDeserialize('').length,0);                    // 空串
+const dirty=JSON.stringify([null, 42, {key:'x'}, {key:'k',type:'horizontal',py:'abc'},
+  {key:'k',type:'horizontal',py:1}, {key:'k',type:'segment',gx0:1,py0:2,gx1:3,py1:4},
+  {key:'k',type:'bogus',py:5}]);
+check('B25',_drawDeserialize(dirty).length,2);                // 只留 2 条合法线
+check('B26',_drawNextIdFrom(_drawDeserialize(JSON.stringify(two))),4); // 续号 max(1,3)+1
+check('B27',_drawNextIdFrom([]),1);                           // 空则 1
 
 console.log(JSON.stringify(res));
 """
