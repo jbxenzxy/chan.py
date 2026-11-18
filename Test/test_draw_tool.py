@@ -386,7 +386,9 @@ const dirty=JSON.stringify([null, 42, {key:'x'}, {key:'k',type:'horizontal',py:'
   // 未知 type + 完整数值：数值校验兜不住它，type 白名单是唯一防线（去掉必红）
   {key:'k',type:'bogus',gx0:1,py0:2,gx1:3,py1:4},
   // null 会被 Number() 转成 0，num() 的 null 拦截是唯一防线（去掉必红）
-  {key:'k',type:'horizontal',py:null}]);
+  {key:'k',type:'horizontal',py:null},
+  // 非 number（false/''/[]）同理：类型守卫是唯一防线（去掉必红）
+  {key:'k',type:'horizontal',py:false}]);
 check('B25',_drawDeserialize(dirty).length,2);                // 只留 2 条合法线
 check('B26',_drawNextIdFrom(_drawDeserialize(JSON.stringify(two))),4); // 续号 max(1,3)+1
 check('B27',_drawNextIdFrom([]),1);                           // 空则 1

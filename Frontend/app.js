@@ -4852,9 +4852,8 @@
                 if (typeof l.key !== 'string' || (l.type !== 'horizontal' && l.type !== 'segment')) continue;
                 const id = Number(l.id);
                 const item = { id: isFinite(id) ? id : 0, key: l.key, type: l.type };
-                // null/false/''/[] 会被 Number() 静默转成 0 ⇒ 落在 0 价的假线，且与真 0 价无法区分；
-                // 必须先拦 null（undefined 走 NaN 已被 isFinite 拦下）
-                const num = function(v) { if (v == null) return null; const n = Number(v); return isFinite(n) ? n : null; };
+                // 非 number 一律拒：false / '' / [] / '0x10' 都会被 Number() 悄悄转成数字 ⇒ 落成 0 价假线
+                const num = function(v) { if (typeof v !== 'number' || !isFinite(v)) return null; return v; };
                 if (l.type === 'horizontal') {
                     item.py = num(l.py);
                     if (item.py === null) continue;
