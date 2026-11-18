@@ -460,6 +460,11 @@ COMPONENTS = [
     # （含真实 priceToY/yToPrice 映射），零网络零浏览器秒级。
     ("measure_gesture",
      [sys.executable, os.path.join("Test", "test_measure_gesture.py")]),
+    # 画线工具（同花顺式：线段/水平线，2026-11-18）：按钮位置、工具条 DOM/样式、
+    # render 调用与三处手势分流、Del 删除、click 守卫等结构断言；node 抽真实
+    # 源码执行坐标往返/命中/增删移/按图隔离/视口锚定，零网络零浏览器秒级。
+    ("draw_tool",
+     [sys.executable, os.path.join("Test", "test_draw_tool.py")]),
     # 期货复盘「目标早于窗口左界」四类诊断（v1.18）：合约存续期 / 天勤10000根 /
     # 选点 / 方式C。判定顺序硬约束优先；建议合约**最近交割优先**（候选生成处随附
     # 交割日，最近候选免存续期探针、只验当前周期窗口；04-22 → IF2405 而不是 IF2404），

@@ -240,6 +240,22 @@
         let _measureClickGuardArmed = false;
         const MEASURE_MIN_DRAG = 4;   // 升级为拖框的最小位移（px），与点击阈同量级
 
+        // ══ 画线工具（同花顺式：线段 / 水平线）═════════════════════
+        //   每条线锚定到「数据坐标」：线段存两个 (全局K线索引, 价格) 端点，
+        //   水平线只存价格（横向贯穿绘图区）。渲染时用与 K 线同一套几何
+        //   （globalIdxToX / priceToY）转屏幕坐标 ⇒ 平移 / 缩放后仍贴住同一批
+        //   K 线与价位。按 symbol|freq 分图存放，切标的 / 周期互不串线。
+        let _drawLines = [];          // [{id, key, type, gx0,py0,gx1,py1} | {id,key,type,py}]
+        let _drawMode = null;         // null=工具条关闭 | select | segment | horizontal
+        let _drawSelected = null;     // 选中的线对象（引用）
+        let _drawDraft = null;        // 绘制中的草稿线
+        let _drawDrag = null;         // 拖动中的 {ln, g, startGx, startPy, orig}
+        let _drawGeom = null;         // 渲染登记的换算真值（含 globalStart）
+        let _drawClickGuardArmed = false;  // 吞掉画线手势尾巴那次 click（不切底部 chip）
+        let _drawNextId = 1;
+        const DRAW_HIT_PX = 6;        // 命中容差（px）
+        const DRAW_MIN_PX = 4;        // 线段短于此像素按误触丢弃
+
         // 区间选择状态机: IDLE(空闲) | SELECTED_A(已选起点)
         let _rangeSelect = { mode: 'IDLE', startIdx: null, startFreq: null, startSymbol: null };
 
@@ -876,6 +892,7 @@
                 // 拖框松手后浏览器会补发一次 click（落点可能压在 chip 上）⇒ 吞一次
                 // （一次性 flag：消费即复位，不影响下一个真实点击）
                 if (_measureClickGuardArmed) { _measureClickGuardArmed = false; return; }
+                if (_drawClickGuardArmed) { _drawClickGuardArmed = false; return; }
                 // 双击的第二次点击（click.detail > 1）不重复切换 —— 浏览器必然先发
                 // 两次 click 才发 dblclick；不看 detail 会让双击 chip 连切两位。
                 if (e.detail > 1) return;
@@ -1850,6 +1867,13 @@
                 _measureGeom = { area: area, priceRange: priceRange,
                                  barStep: barStep, subPixelOffset: subPixelOffset };
             }
+            // 画线换算基准：与测量同源、额外带全局视口起点（索引锚定需要）。
+            // 下窗（双窗副图）不登记：画线只属于主图手势。
+            if (!window._isRenderingBottom) {
+                _drawGeom = { area: area, priceRange: priceRange,
+                              barStep: barStep, subPixelOffset: subPixelOffset,
+                              globalStart: Math.max(0, Math.floor(vOffset)) };
+            }
             // 双窗口红框：笔外沿区间（分型左肩→右肩，跳过中间灰框部分）
             // 调试：记录到全局状态供侧边调试面板读取（保留 calcRedRange 之前设置的原因）
             var _prevReason = window._lastRedFrameStatus ? window._lastRedFrameStatus.reason : undefined;
@@ -1998,6 +2022,8 @@
             drawAnnotations(klinesToDraw, area, priceRange, barStep, subPixelOffset);
             drawViewportHighLow(klinesToDraw, area, priceRange, barStep, subPixelOffset);
             _overlayData = null;
+            // 画线（同花顺式）：只画主图，位于 K 线/标注之上、十字光标之下。
+            if (data !== dualSubData) drawDrawings(area, priceRange, barStep, subPixelOffset);
             drawCrosshair(klinesToDraw, area, priceRange, bottomBottomY, barStep, subPixelOffset,
                 slotAreas, slotRanges);
             drawMeasureRect(area, priceRange, barStep, subPixelOffset);
@@ -4054,6 +4080,9 @@
             if (_measureRect) { _measureRect = null; render(); }
             _measurePending = null;
             _measureClickGuardArmed = false;   // 真实点击自带 mousedown ⇒ 先解除守卫
+            _drawClickGuardArmed = false;      // 同理：真实点击先解除画线守卫
+            // 画线模式：优先接管手势（选中拖动 / 画新线），本手势不平移。
+            if (_drawMode && _drawHandleDown(e)) { e.preventDefault(); return; }
             // Ctrl+左键 → 待定测量，本手势**不平移**（否则边拉框边滚图）。
             // 只认单窗：双窗口下 Ctrl+拖动 已被「红框求新中枢」占用
             // （_ctrlPressed → dualRedRange），同一手势不能两用。
@@ -4071,6 +4100,8 @@
         function onMouseMove(e) {
             const rect = canvas.getBoundingClientRect();
             mouseX = e.clientX - rect.left; mouseY = e.clientY - rect.top;
+            // 画线模式：拖动已画线 / 拉草稿线，全程不平移、不升级测量框。
+            if (_drawMode && _drawHandleMove(e)) { render(); return; }
             // 待定测量：位移过阈值才升级成拖框（不到阈值时照常走下面的十字渲染，
             // 且因 mousedown 没置 isDragging，图不会平移 ⇒ 「Ctrl+点击」原样落回区间选择）
             if (_measurePending) {
@@ -4108,6 +4139,8 @@
         }
 
         function onMouseUp(e) {
+            // 画线模式：落定草稿 / 结束拖动；吞掉尾巴 click，不复制 K 线。
+            if (_drawMode && _drawHandleUp(e)) { e.preventDefault(); return; }
             // 区间测量收尾：松手即定格（框留在图上，同天狼50）；两点几乎重合按误触丢弃
             if (_measureRect && _measureRect.dragging) {
                 _measureRect.dragging = false;
@@ -4196,6 +4229,8 @@
         }
 
         function onMouseLeave() {
+            // 画线模式：移出画布取消未完成的草稿/拖动（已落定的线保留）。
+            _drawCancelGesture();
             isDragging = false;
             // 移出画布：只取消「还在拖」的框（松手可能落在画布外，留着会一直挂着
             // dragging 态）；已落定的框保留 —— 用户常常是拖完把鼠标挪开去看别处。
@@ -4792,6 +4827,268 @@
             saveOverlaySettings();
             render();
         };
+
+        // ════════════════════════════════════════════════════════════
+        // 画线工具（同花顺式）核心 —— 坐标换算 / 绘制 / 命中 / 手势
+        // ════════════════════════════════════════════════════════════
+        function _drawCurrentKey() {
+            if (!chartData || !chartData.meta) return '';
+            return String(chartData.meta.symbol) + '|' + String(currentFreq);
+        }
+
+        function _drawVisibleLines() {
+            const key = _drawCurrentKey();
+            return _drawLines.filter(function(l) { return l.key === key; });
+        }
+
+        // 全局索引 → 屏幕 X（与 globalIdxToX 同一公式，读渲染登记真值）
+        function drawGlobalIdxToX(gIdx, g) {
+            return g.area.x + g.barStep * (gIdx - g.globalStart) + g.barStep / 2 - g.subPixelOffset;
+        }
+
+        // 屏幕 X → 全局索引（drawGlobalIdxToX 的逆运算）
+        function drawXToGlobalIdx(px, g) {
+            return (px - g.area.x - g.barStep / 2 + g.subPixelOffset) / g.barStep + g.globalStart;
+        }
+
+        // 点到线段距离（命中测试用）
+        function drawPointSegDist(px, py, x0, y0, x1, y1) {
+            const dx = x1 - x0, dy = y1 - y0;
+            if (dx === 0 && dy === 0) return Math.sqrt((px - x0) * (px - x0) + (py - y0) * (py - y0));
+            const t = Math.max(0, Math.min(1, ((px - x0) * dx + (py - y0) * dy) / (dx * dx + dy * dy)));
+            return Math.sqrt((px - (x0 + t * dx)) * (px - (x0 + t * dx)) +
+                             (py - (y0 + t * dy)) * (py - (y0 + t * dy)));
+        }
+
+        // 命中测试：倒序遍历（后画的在上），只认当前图；返回线对象或 null。
+        function drawHitTest(px, py, g) {
+            const lines = _drawVisibleLines();
+            for (let i = lines.length - 1; i >= 0; i--) {
+                const ln = lines[i];
+                if (ln.type === 'horizontal') {
+                    const y = priceToY(ln.py, g.area, g.priceRange);
+                    if (Math.abs(py - y) <= DRAW_HIT_PX &&
+                        px >= g.area.x && px <= g.area.x + g.area.w) return ln;
+                } else {
+                    const x0 = drawGlobalIdxToX(ln.gx0, g), y0 = priceToY(ln.py0, g.area, g.priceRange);
+                    const x1 = drawGlobalIdxToX(ln.gx1, g), y1 = priceToY(ln.py1, g.area, g.priceRange);
+                    if (drawPointSegDist(px, py, x0, y0, x1, y1) <= DRAW_HIT_PX) return ln;
+                }
+            }
+            return null;
+        }
+
+        // 绘制全部画线（在 _renderChart 内调用，裁剪到主绘图区）
+        function drawDrawings(area, priceRange, barStep, subPixelOffset) {
+            if (!_drawGeom) return;
+            const g = _drawGeom;
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(area.x, area.y, area.w, area.h);
+            ctx.clip();
+            const lines = _drawVisibleLines();
+            for (let i = 0; i < lines.length; i++) {
+                const ln = lines[i];
+                const sel = (_drawSelected === ln);
+                ctx.strokeStyle = sel ? '#ff5252' : '#ffd54f';
+                ctx.lineWidth = sel ? 2 : 1.4;
+                ctx.setLineDash([]);
+                if (ln.type === 'horizontal') {
+                    const y = priceToY(ln.py, area, priceRange);
+                    ctx.beginPath();
+                    ctx.moveTo(area.x, y);
+                    ctx.lineTo(area.x + area.w, y);
+                    ctx.stroke();
+                    if (sel) {
+                        ctx.beginPath(); ctx.arc(area.x + area.w / 2, y, 3, 0, Math.PI * 2);
+                        ctx.fillStyle = '#ff5252'; ctx.fill();
+                    }
+                } else {
+                    const x0 = drawGlobalIdxToX(ln.gx0, g), y0 = priceToY(ln.py0, area, priceRange);
+                    const x1 = drawGlobalIdxToX(ln.gx1, g), y1 = priceToY(ln.py1, area, priceRange);
+                    ctx.beginPath();
+                    ctx.moveTo(x0, y0);
+                    ctx.lineTo(x1, y1);
+                    ctx.stroke();
+                    if (sel) {
+                        ctx.fillStyle = '#ff5252';
+                        ctx.beginPath(); ctx.arc(x0, y0, 3, 0, Math.PI * 2); ctx.fill();
+                        ctx.beginPath(); ctx.arc(x1, y1, 3, 0, Math.PI * 2); ctx.fill();
+                    }
+                }
+            }
+            // 绘制中的草稿线（虚线）
+            if (_drawDraft && _drawDraft.key === _drawCurrentKey()) {
+                const d = _drawDraft;
+                ctx.strokeStyle = '#ffd54f'; ctx.lineWidth = 1.4; ctx.setLineDash([5, 4]);
+                ctx.beginPath();
+                if (d.type === 'horizontal') {
+                    const y = priceToY(d.py, area, priceRange);
+                    ctx.moveTo(area.x, y); ctx.lineTo(area.x + area.w, y);
+                } else {
+                    ctx.moveTo(drawGlobalIdxToX(d.gx0, g), priceToY(d.py0, area, priceRange));
+                    ctx.lineTo(drawGlobalIdxToX(d.gx1, g), priceToY(d.py1, area, priceRange));
+                }
+                ctx.stroke(); ctx.setLineDash([]);
+            }
+            ctx.restore();
+        }
+
+        function _drawMousePos(e) {
+            const rect = canvas.getBoundingClientRect();
+            return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        }
+
+        function _drawHandleDown(e) {
+            if (e.button !== 0 || !_drawGeom || !chartData) return false;
+            const pos = _drawMousePos(e);
+            const g = _drawGeom;
+            const hit = drawHitTest(pos.x, pos.y, g);
+            if (hit) {
+                // 选中并准备整体移动：记录按下时的数据坐标与原线快照
+                _drawSelected = hit;
+                _drawDrag = {
+                    ln: hit,
+                    g: { area: g.area, priceRange: g.priceRange, barStep: g.barStep,
+                         subPixelOffset: g.subPixelOffset, globalStart: g.globalStart },
+                    startGx: drawXToGlobalIdx(pos.x, g),
+                    startPy: yToPrice(pos.y, g.area, g.priceRange),
+                    orig: (hit.type === 'horizontal') ? { py: hit.py }
+                                                      : { gx0: hit.gx0, py0: hit.py0, gx1: hit.gx1, py1: hit.py1 }
+                };
+                _drawClickGuardArmed = true;
+                render();
+                return true;
+            }
+            if (_drawMode === 'horizontal') {
+                // 水平线：单击生成（同花顺范式）
+                const py = yToPrice(pos.y, g.area, g.priceRange);
+                const ln = { id: _drawNextId++, key: _drawCurrentKey(), type: 'horizontal', py: py };
+                _drawLines.push(ln);
+                _drawSelected = ln;
+                _drawClickGuardArmed = true;
+                render();
+                return true;
+            }
+            if (_drawMode === 'segment') {
+                // 线段：按住定起点，拖动定终点
+                const gx = drawXToGlobalIdx(pos.x, g);
+                const py = yToPrice(pos.y, g.area, g.priceRange);
+                _drawDraft = { key: _drawCurrentKey(), type: 'segment',
+                               gx0: gx, py0: py, gx1: gx, py1: py };
+                _drawClickGuardArmed = true;
+                render();
+                return true;
+            }
+            // select 模式点空白：取消选中，交回默认手势（平移/复制 K 线）
+            _drawSelected = null;
+            return false;
+        }
+
+        function _drawHandleMove(e) {
+            if (!_drawDrag && !_drawDraft) return false;
+            const pos = _drawMousePos(e);
+            if (_drawDrag) {
+                const d = _drawDrag, g = d.g;
+                const dGx = drawXToGlobalIdx(pos.x, g) - d.startGx;
+                const dPy = yToPrice(pos.y, g.area, g.priceRange) - d.startPy;
+                if (d.ln.type === 'horizontal') {
+                    d.ln.py = d.orig.py + dPy;
+                } else {
+                    d.ln.gx0 = d.orig.gx0 + dGx; d.ln.gx1 = d.orig.gx1 + dGx;
+                    d.ln.py0 = d.orig.py0 + dPy; d.ln.py1 = d.orig.py1 + dPy;
+                }
+                return true;
+            }
+            // 草稿线：更新终点
+            const g = _drawGeom;
+            _drawDraft.gx1 = drawXToGlobalIdx(pos.x, g);
+            _drawDraft.py1 = yToPrice(pos.y, g.area, g.priceRange);
+            return true;
+        }
+
+        function _drawHandleUp(e) {
+            if (!_drawDrag && !_drawDraft) return false;
+            _drawClickGuardArmed = true;
+            if (_drawDrag) {
+                _drawDrag = null;
+                render();
+                return true;
+            }
+            const d = _drawDraft;
+            _drawDraft = null;
+            const g = _drawGeom;
+            if (d && g) {
+                const x0 = drawGlobalIdxToX(d.gx0, g), y0 = priceToY(d.py0, g.area, g.priceRange);
+                const x1 = drawGlobalIdxToX(d.gx1, g), y1 = priceToY(d.py1, g.area, g.priceRange);
+                if (Math.sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0)) >= DRAW_MIN_PX) {
+                    const ln = { id: _drawNextId++, key: d.key, type: 'segment',
+                                 gx0: d.gx0, py0: d.py0, gx1: d.gx1, py1: d.py1 };
+                    _drawLines.push(ln);
+                    _drawSelected = ln;
+                }
+            }
+            render();
+            return true;
+        }
+
+        function _drawCancelGesture() {
+            _drawDraft = null;
+            _drawDrag = null;
+        }
+
+        function _drawSyncToolbar() {
+            const open = !!_drawMode;
+            const bar = document.getElementById("draw-toolbar");
+            if (bar) bar.style.display = open ? "flex" : "none";
+            const btn = document.getElementById("btn-draw");
+            if (btn) btn.classList.toggle("active", open);
+            const ids = { select: "draw-tool-select", segment: "draw-tool-segment",
+                          horizontal: "draw-tool-horizontal" };
+            for (const m in ids) {
+                const el = document.getElementById(ids[m]);
+                if (el) el.classList.toggle("active", _drawMode === m);
+            }
+        }
+
+        window.toggleDrawToolbar = function() {
+            if (_drawMode) {
+                _drawMode = null;
+                _drawSelected = null;
+                _drawCancelGesture();
+            } else {
+                _drawMode = 'select';
+            }
+            _drawSyncToolbar();
+            render();
+        };
+
+        window.setDrawMode = function(mode) {
+            if (!_drawMode) _drawMode = 'select';   // 点工具条线型即视为进入画线模式
+            _drawMode = mode;
+            _drawCancelGesture();
+            _drawSyncToolbar();
+            render();
+        };
+
+        function deleteSelectedDraw() {
+            if (!_drawSelected) return;
+            const idx = _drawLines.indexOf(_drawSelected);
+            if (idx >= 0) _drawLines.splice(idx, 1);
+            _drawSelected = null;
+            render();
+        }
+        window.deleteSelectedDraw = deleteSelectedDraw;
+
+        function clearAllDraws() {
+            const key = _drawCurrentKey();
+            _drawLines = _drawLines.filter(function(l) { return l.key !== key; });
+            _drawSelected = null;
+            _drawCancelGesture();
+            render();
+        }
+        window.clearAllDraws = clearAllDraws;
+
 
         // 辅助：根据chartData中的saved_selection_date恢复「取消选点」菜单项状态
         // （复盘态已放开：meta 恒回显 CSV 真值，复盘态选点后菜单点亮；
@@ -11039,6 +11336,14 @@
                     _applyScanMinimized(true);
                 }
             }
+        });
+
+        // Del 键删除选中的画线（输入框聚焦时不拦截，避免干扰日期/代码输入）
+        document.addEventListener('keydown', function(e) {
+            if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+            const t = e.target;
+            if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+            if (_drawMode && _drawSelected) { deleteSelectedDraw(); e.preventDefault(); }
         });
 
         document.addEventListener('keyup', function(e) {

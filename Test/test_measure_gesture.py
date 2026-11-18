@@ -164,6 +164,10 @@ let dualRedRange = null, dualShowNewZs = false, dualNewZsData = null, dualOffscr
 let chartData = null;
 let _rangeSelect = { mode: 'IDLE', startIdx: null, startFreq: null, startSymbol: null };
 let _currentGlobalIdx = 3, _currentClipText = null, currentFreq = '5m';
+// 画线工具状态桩（app.js IIFE 内同名符号；抽取的真实事件函数会读它们）。
+// _drawMode 恒 null ⇒ 三处事件分流短路，画线 handler 不参与任何测量手势场景。
+let _drawMode = null, _drawSelected = null, _drawClickGuardArmed = false;
+let _drawLines = [];
 let _logScale = false, _isMirrorMode = false;
 const COLORS = { bi: '#4fc3f7' };
 const window = globalThis; window._isRenderingBottom = false;
@@ -179,6 +183,10 @@ let chipCalls = 0;
 function cycleBottomSlot() { chipCalls++; }
 let chipHit = 0;
 function hitBottomSlotChip() { return chipHit; }
+function _drawHandleDown() { return false; }
+function _drawHandleMove() { return false; }
+function _drawHandleUp() { return false; }
+function _drawCancelGesture() {}
 const canvas = { style: { cursor: '' }, getBoundingClientRect() { return { left: 0, top: 0 }; } };
 const navigator = { clipboard: { writeText() {} } };
 const ctx = {

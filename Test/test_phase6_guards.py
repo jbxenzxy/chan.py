@@ -119,6 +119,9 @@ WINDOW_INLINE_BRIDGES = {
     #     toggleInputClear / showHistory 都在 IIFE 闭包内，故必须挂 window 才能
     #     被 HTML 内联事件调到；app.js 的 onCodeInputFocus 亦有同源注释。
     "onCodeInputFocus",
+    # 画线工具（同花顺式线段/水平线，2026-11-18）：app.html 工具条/按钮的
+    # onclick 内联桥，四个均在 app.html 有引用、app.js 有 window 绑定。
+    "toggleDrawToolbar", "setDrawMode", "deleteSelectedDraw", "clearAllDraws",
 }
 # 允许的区块外顶层辅助函数（既有基线即存在的必要工具，非业务组件）
 ALLOWED_STRAY = {"getLayoutParams",

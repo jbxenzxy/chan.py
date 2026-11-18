@@ -109,6 +109,30 @@
         .btn.active { background: #e94560; border-color: #e94560; color: #fff; }
         .btn:disabled { opacity: 0.35; cursor: not-allowed; }
         .btn:disabled:hover { background: #1a1a2e; color: #a8b2d1; }
+        /* 画线工具条（同花顺式）：浮在主图顶部，线型区 + 辅助区 */
+        .draw-toolbar {
+            position: absolute; top: 6px; left: 50%; transform: translateX(-50%);
+            display: flex; align-items: center; gap: 4px; z-index: 30;
+            padding: 4px 6px; background: rgba(22, 33, 62, 0.96);
+            border: 1px solid #0f3460; border-radius: 5px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45); white-space: nowrap;
+        }
+        .draw-toolbar-label {
+            color: #e94560; font-size: 11px; font-weight: bold;
+            padding: 0 4px;
+        }
+        .draw-toolbar-sep {
+            width: 1px; height: 16px; background: #0f3460; margin: 0 2px;
+        }
+        .draw-tool {
+            padding: 3px 9px; border-radius: 3px; border: 1px solid #0f3460;
+            background: #1a1a2e; color: #a8b2d1; font-size: 11px;
+            cursor: pointer; transition: all 0.15s;
+        }
+        .draw-tool:hover { background: #0f3460; color: #e0e0e0; }
+        .draw-tool.active { background: #e94560; border-color: #e94560; color: #fff; }
+        .draw-tool-danger:hover { background: #b71c3a; border-color: #e94560; color: #fff; }
+        #btn-draw.active { background: #e94560; border-color: #e94560; color: #fff; }
         .freq-btn {
             padding: 2px 8px; border-radius: 3px; border: 1px solid #0f3460;
             background: #1a1a2e; color: #a8b2d1; font-size: 11px;
