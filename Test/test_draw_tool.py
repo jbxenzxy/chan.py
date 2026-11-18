@@ -175,6 +175,13 @@ def static_checks():
         js.count("_drawPersist();") >= 5 and
         "_drawRestore();   // 恢复上次重启前的画线" in js and
         js.index("function _drawRestore") > js.index("function _drawSerialize"))
+    # 顶栏 btn-seg 也写「线段」，故 S14 必须限定在工具条片段内检查
+    _bar_html = html[html.index('id="draw-toolbar"'):html.index('id="range-slider"')]
+    rec("S14", "工具条顺序：水平线在倾斜线左 + 倾斜线文案",
+        _bar_html.index('id="draw-tool-horizontal"') < _bar_html.index('id="draw-tool-segment"') and
+        '>水平线</button>' in _bar_html and '>倾斜线</button>' in _bar_html and
+        'title="倾斜线：按住鼠标拖动画斜线"' in _bar_html and
+        '>线段</button>' not in _bar_html)
     rec("S13", "持久化健壮性：反序列化脏数据校验 + id 续号",
         all(x in js for x in ("function _drawDeserialize", "catch(e) { return []; }",
                               "if (!Array.isArray(arr)) return [];",
