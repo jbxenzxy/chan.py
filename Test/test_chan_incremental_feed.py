@@ -10,7 +10,7 @@
 改法：新K线改走 `CChan.trigger_load({kl_type: [klu]})` 增量喂入，
 同窗口实测 0.3ms/根。本用例锁定四件事：
 
-  ① 等价性：逐根增量 ≡ 全量重建（合并K线/笔/线段/中枢/末笔端点 全维度）
+  ① 等价性：逐根增量 ≡ 全量重建（合并K线/笔/线段/中枢/末笔端点/买卖点）
   ② 未重建：增量调用不替换 `chan.kl_datas[kl_type]` 对象
      （全量 `step_load` 会 `do_init()` 重建，对象身份必变——这是
       「是否悄悄退回全量」最直接的判据，不依赖耗时、不受机器影响）
@@ -88,8 +88,19 @@ def _sig(chan, kl_type):
     last_bi_end = ""
     if len(bi) > 0 and bi[-1].get_end_klu() is not None:
         last_bi_end = bi[-1].get_end_klu().time.toFmtStr("%Y/%m/%d %H:%M")
+    # bsp 是逐笔累积量（报告 §12.3 的教训：只比结构数量抓不到「累积状态丢失」），
+    # 必须一并纳入签名。真实 15s fixture 与合成序列均已验证逐点一致。
+    bsp_sig = [(b.bi.idx, b.is_buy, tuple(sorted(t.name for t in b.type)),
+                b.klu.time.toFmtStr("%Y/%m/%d %H:%M"))
+               for b in reversed(chan.get_latest_bsp(idx=0, number=0))]
+    # 全部笔端点：只比数量 + 末笔端点抓不到「中间某笔端点漂移」，
+    # 而 begin/end_fx_idx 正是由笔端点与 lst 同一性推出来的（评审 §4.2）。
+    bi_ends = [(b.get_begin_klu().time.toFmtStr("%Y/%m/%d %H:%M:%S"),
+                b.get_end_klu().time.toFmtStr("%Y/%m/%d %H:%M:%S"))
+               for b in bi]
     return {"klc": len(klc.lst), "bi": len(bi), "seg": len(seg),
-            "zs": len(zs), "last_bi_end": last_bi_end}
+            "zs": len(zs), "last_bi_end": last_bi_end, "bsp": bsp_sig,
+            "bi_ends": bi_ends}
 
 
 class _StubChan:
@@ -149,7 +160,9 @@ def case_equivalence(n=1200, m=60):
 
     src = FakeSrc()
     chan, kl_type = _build_futures_chan(base, symbol, freq_sec, src=src)
-    klc_id_before = id(chan.kl_datas[kl_type])
+    # 持强引用再比身份：只存 id 时旧对象会被 do_init 释放，地址可能被新建
+    # 的 CKLine_List 复用（CPython 同尺寸块回收），回退全量也可能「id 不变」。
+    klc_before = chan.kl_datas[kl_type]
     sig_before = _sig(chan, kl_type)
 
     for bar in news:
@@ -158,7 +171,7 @@ def case_equivalence(n=1200, m=60):
             _drain_chan(chan, kl_type, bar)
 
     # ② 增量不应触发 do_init 重建
-    assert id(chan.kl_datas[kl_type]) == klc_id_before, \
+    assert chan.kl_datas[kl_type] is klc_before, \
         "kl_datas[kl_type] 对象被替换 ⇒ 实际走了 do_init 全量重建，增量路径失效"
 
     sig_inc = _sig(chan, kl_type)
