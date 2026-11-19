@@ -1742,9 +1742,12 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
             而 `_drain_chan` 会就地推进该级别结构（增量 trigger_load；
             回退时 step_load → do_init 整体清空重建 kl_datas）。缓存 dict 的
             锁（_futures_cache_lock）只护住「取指针」这一瞬间，护不住读取方
-            拿到指针之后的遍历——回退时正好撞在 do_init 之后、回填之前读到
-            空 bi_list，增量时也会撞上末笔/末段就地更新。故推进必须与读取方
-            互斥。上窗 CChan 不进共享缓存（连接私有），传 None 即可。
+            拿到指针之后的遍历——回退路径 do_init 会先整体替换 kl_datas，
+            读取方正好撞在替换之后、回填之前就会读到空 bi_list，故推进必须
+            与读取方互斥。增量路径的就地推进本身不产生不一致（CBi 派生量统一
+            走 _memoize_cache，update_new_end 改完 __end_klc 立即 clean_cache，
+            读者只会看到整体旧值或整体新值），纳入同一把锁是为语义统一。
+            上窗 CChan 不进共享缓存（连接私有），传 None 即可。
             """
             nonlocal last_debug_print, last_perf_print, loop_count, tick_count, step_count
             nonlocal t_wait_total, t_tick_total, t_step_total, t_snapshot_total, t_push_total
@@ -2024,6 +2027,21 @@ def _build_futures_chan(records, symbol, freq_sec, config=None, code=None, src=N
     src.set_data(records, symbol=chan_code)
     kl_type = _get_kl_type_by_sec(freq_sec)
     config = config or _make_chan_config()
+    # ── 为什么必须保留 trigger_step=True（勿再尝试「一次性算完」提速）──
+    # 建链期关掉 trigger_step 可让 10000 根从 8.52s 降到 0.25s（`load()` 末尾
+    # 本来就会整体再算一次，逐笔的 cal_seg_and_zs 看似被覆盖），但**会丢掉全部
+    # 历史买卖点**（实测 15s 用例：bsp 10 → 0，klc/bi/seg/zs 数量却完全一致，
+    # 极易漏检）。原因是两条语义都不允许「事后一次性补算」：
+    #   ① `cal_seg_and_zs` 在 step_calculation=False 时会先
+    #      `bi_list.try_add_virtual_bi()` 把末笔变虚；而 `CMyBSPointList.cal`
+    #      的前置检查 `_is_virtual_bi` 一旦命中就整段 return —— 一次都不算。
+    #   ② 即便先 `delete_virtual_bi()` 恢复实笔再补算，仍然只能得到 0 个：
+    #      `cal` 只处理 `stroke_n = bi_list[-1]` 与最后一个中枢的组合
+    #      （`cal_bs0point` 按 stroke_n.idx 分流），且 ② 的
+    #      `check_nesting_divergence` 要拿「当时」的末笔端点去和子级别做区间套。
+    #      bsp 是**逐笔累积**结果，历史笔的端点随后续数据演进已变，无法复现。
+    # 结论：逐笔 cal_seg_and_zs 无法省略。要提速只能改 core 的增量线段算法
+    # （cal_seg 占建链耗时约 55%），或改协议做渐进渲染。详见报告 §12.3。
     # 修复：CChan 内部自行实例化 CTqSdkAPI（data_src="custom:..."），
     # 经线程局部绑定本会话缓存，使 set_data 写入与 get_kl_data 读取同源。
     with session_context(src):
@@ -2052,24 +2070,24 @@ def _extract_chan_structure(kl_list, chan, date_fmt):
 
     返回 (bis, fxs, segs, zs_list, zs_stars, bsps)。
     """
+    # begin/end_fx_idx：一次性 id→下标映射。
+    # 原实现为每根笔各扫两遍全量 `lst`（O(bi×klc)）：10000 根实测 764 笔 ×
+    # 7183 个合并K线 ≈ 550 万次 `is` 比较，占单帧快照耗时的 84%（684/816 ms）。
+    # 用 `id()` 而非 `klc.idx` 作键：与原「`is` 同一性判定」语义逐字等价，
+    # 不引入「idx == lst 下标」这一隐含假设。映射只在本函数内建、本函数内用，
+    # `kl_list.lst` 全程持引用，故 id 不会被回收复用。
+    _klc_pos = {id(klc): i for i, klc in enumerate(kl_list.lst)}
+
     bis = []
     for bi in kl_list.bi_list:
         try:
             direction = "up" if bi.is_up() else "down"
             begin_klu = bi.get_begin_klu()
             end_klu = bi.get_end_klu()
-            begin_fx_idx = None
-            if hasattr(bi, 'begin_klc') and bi.begin_klc:
-                for idx, klc in enumerate(kl_list.lst):
-                    if klc is bi.begin_klc:
-                        begin_fx_idx = idx
-                        break
-            end_fx_idx = None
-            if hasattr(bi, 'end_klc') and bi.end_klc:
-                for idx, klc in enumerate(kl_list.lst):
-                    if klc is bi.end_klc:
-                        end_fx_idx = idx
-                        break
+            _begin_klc = getattr(bi, 'begin_klc', None)
+            _end_klc = getattr(bi, 'end_klc', None)
+            begin_fx_idx = _klc_pos.get(id(_begin_klc)) if _begin_klc else None
+            end_fx_idx = _klc_pos.get(id(_end_klc)) if _end_klc else None
             # 左/右边界原始K线时间（双窗口红框定位）
             # 归一化：与股票/区间套统一走 _main_bi_range（取分型自身
             # 极值（峰/谷）原始K线，allow_partial=True 保留单侧结果——期货分析

@@ -794,11 +794,14 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             # 期货区间套 100% 静默失效。
             cache_key = make_futures_sub_key_from_code(parent.code, sub_freq)
             # 审计 P0-2：缓存里存的是**活着的 CChan**，SSE 每根K线
-            # _drain_chan 会就地推进结构（增量 trigger_load；回退时
-            # step_load → do_init 把 self.kl_datas 整个换成新的空 CKLine_List）。
-            # 原先 `futures_cache_get` 只在**取指针**这一瞬间持容器锁，随后
-            # `sub_kl_list.bi_list` 的遍历完全在锁外——正好撞在 do_init 之后、
-            # 回填之前就会读到空列表。故取对象与遍历须在同一把对象图锁内。
+            # _drain_chan 会推进结构：回退路径 step_load → do_init 把
+            # self.kl_datas 整个换成新的空 CKLine_List；增量路径 trigger_load
+            # 就地推进末笔。原先 `futures_cache_get` 只在**取指针**这一瞬间持
+            # 容器锁，随后 `sub_kl_list.bi_list` 的遍历完全在锁外——回退时正好
+            # 撞在 do_init 之后、回填之前就会读到空列表。故取对象与遍历须在
+            # 同一把对象图锁内。（增量路径的就地推进不产生不一致：CBi 派生量
+            # 统一走 _memoize_cache，update_new_end 改完 __end_klc 立即
+            # clean_cache，读者只会看到整体旧值或整体新值。）
             with app_data.futures_sub_chan_guarded_by_key(cache_key) as sub_chan:
                 if sub_chan is None:
                     self._dbg_bs('check_nesting_divergence', '期货下窗暂无缓存 → 按子级别背驰处理',

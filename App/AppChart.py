@@ -427,9 +427,13 @@ def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_da
     # ——写侧（SSE 线程）每根K线 _drain_chan 会就地推进结构：增量路径
     # trigger_load 追加/更新末笔末段，回退路径 step_load → do_init 把
     # chan.kl_datas 整条替换成新的空 CKLine_List 再回填，读者可能正落在该空窗。
-    # 改为：持对象图锁 → 锁内 list(bi_list) 浅拷贝成快照 → 出锁遍历
-    # （列表结构在拷贝后不再变；回退时旧 CBi 不再被改写，增量时仅末笔可能
-    #  在锁外被继续更新，属可接受的瞬时不一致，下一帧自愈）。
+    # 改为：持对象图锁 → 锁内 list(bi_list) 浅拷贝成快照 → 出锁遍历。
+    # 快照语义边界（勿误读为「不一致」）：回退路径 do_init 整体替换 kl_datas，
+    # 旧 CBi 不再被改写；增量路径末笔会被就地推进（CBi.update_new_end 改
+    # __end_klc），但该笔所有派生量（_high/_low/amp/get_begin_klu/get_end_klu）
+    # 统一走 CBi._memoize_cache，而 update_new_end 在改完 __end_klc 后立刻
+    # clean_cache()，故读者只会看到「整体旧值」或「整体新值」，不会出现
+    # 端点与价格不匹配的中间态。代价仅是可能读到推进前的端点（几何自洽）。
     if normalized_code.startswith("KQ."):
         cache_key = make_futures_sub_key(normalized_code, sub_freq)
         with app_data.futures_sub_chan_guarded_by_key(cache_key) as sub_chan:

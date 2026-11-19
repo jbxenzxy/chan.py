@@ -32,6 +32,9 @@ CI / 迁移每阶段的验收门禁）。
      增量喂入        test_chan_incremental_feed.py：trigger_load 增量 ≡ 全量重建 /
                                                      未触发 do_init 重建 / 回退全量 /
                                                      K线构造单一事实源
+     建链买卖点守护  test_chan_build_bsp_guard.py：建链后买卖点不得丢失（15s 基线 10 个）/
+                                                     cal_seg_and_zs 必须逐笔调用 /
+                                                     快照 bsps 与 chan 一致
  15. SSE 灰度比对      test_sse_gray.py              3b-1：native vs 冻结基线
                                                      （①类型序列 ②剥离时间戳结构 ③总数）
  16. 阶段 5 成果防护   test_phase5_guards.py         获取侧抽象完善：tdxhy 迁 App/统一加载/
@@ -266,6 +269,8 @@ COMPONENTS = [
      [sys.executable, os.path.join("Test", "test_sse_incremental.py")]),
     ("chan_incremental_feed",
      [sys.executable, os.path.join("Test", "test_chan_incremental_feed.py")]),
+    ("chan_build_bsp_guard",
+     [sys.executable, os.path.join("Test", "test_chan_build_bsp_guard.py")]),
     ("phase5_guards",
      [sys.executable, os.path.join("Test", "test_phase5_guards.py")]),
     ("phase6_guards",
