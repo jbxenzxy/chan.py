@@ -964,9 +964,10 @@ class AppData:
 
     # ── 期货下窗 CChan 的「对象图锁」────────────────
     #   v5 的三问在**容器**这一层是完备的，但缓存里存的不是容器，是**一张
-    #   活着的对象图**：SSE 线程每根K线 _drain_chan → step_load → do_init
-    #   会把 chan.kl_datas 整个替换成新的空 CKLine_List（Chan.py:90），
-    #   再逐根回填。_futures_cache_lock 只护住了「取指针」这一瞬间，护不住
+    #   活着的对象图**：SSE 线程每根K线 _drain_chan 会就地推进结构
+    #   （增量 trigger_load 追加/更新末笔末段；回退时 step_load → do_init
+    #   把 chan.kl_datas 整个替换成新的空 CKLine_List（Chan.py:90），
+    #   再逐根回填）。_futures_cache_lock 只护住了「取指针」这一瞬间，护不住
     #   读取方拿到指针后在锁外的遍历——正好撞在 do_init 之后、回填之前就
     #   读到空 bi_list，表现为「红框内无完整笔」「下窗缓存已过期」。
     #

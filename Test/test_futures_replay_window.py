@@ -201,7 +201,7 @@ def _run_gen(start_time, end_time, csv_point, captured):
         def stub_white(kl_list, freq, date_fmt):
             return None
 
-        def stub_drain(chan):
+        def stub_drain(chan, *args, **kwargs):
             pass
 
         originals = {}
@@ -342,7 +342,7 @@ def test_dual_gen_independent_starts():
             def stub_white(kl_list, freq, date_fmt):
                 return None
 
-            def stub_drain(chan):
+            def stub_drain(chan, *args, **kwargs):
                 pass
 
             originals = {}
@@ -472,7 +472,7 @@ def test_dual_gen_inverted_start_errors():
             def stub_white(kl_list, freq, date_fmt):
                 return None
 
-            def stub_drain(chan):
+            def stub_drain(chan, *args, **kwargs):
                 pass
 
             originals = {}

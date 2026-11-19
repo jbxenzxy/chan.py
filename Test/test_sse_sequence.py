@@ -194,7 +194,7 @@ def _patch_business(src, fail_init=False):
         _sse_mod.white_calls += 1
         return {"high": 110.0, "low": 90.0, "freq": freq}
 
-    def stub_drain(chan):
+    def stub_drain(chan, *args, **kwargs):
         _sse_mod.drain_calls += 1
 
     originals = {}

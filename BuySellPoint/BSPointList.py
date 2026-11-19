@@ -794,8 +794,8 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             # 期货区间套 100% 静默失效。
             cache_key = make_futures_sub_key_from_code(parent.code, sub_freq)
             # 审计 P0-2：缓存里存的是**活着的 CChan**，SSE 每根K线
-            # _drain_chan → step_load → do_init 会**就地清空重建** kl_datas
-            # （Chan.py do_init 把 self.kl_datas 整个换成新的空 CKLine_List）。
+            # _drain_chan 会就地推进结构（增量 trigger_load；回退时
+            # step_load → do_init 把 self.kl_datas 整个换成新的空 CKLine_List）。
             # 原先 `futures_cache_get` 只在**取指针**这一瞬间持容器锁，随后
             # `sub_kl_list.bi_list` 的遍历完全在锁外——正好撞在 do_init 之后、
             # 回填之前就会读到空列表。故取对象与遍历须在同一把对象图锁内。

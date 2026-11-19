@@ -29,6 +29,9 @@ CI / 迁移每阶段的验收门禁）。
                                                      成分股/板块指数2·3/多来源合并
  14. SSE 增量快照 test_sse_incremental.py：增量 klines/MACD ≡ 全量 /
                                                      快照同构/状态缺失回退
+     增量喂入        test_chan_incremental_feed.py：trigger_load 增量 ≡ 全量重建 /
+                                                     未触发 do_init 重建 / 回退全量 /
+                                                     K线构造单一事实源
  15. SSE 灰度比对      test_sse_gray.py              3b-1：native vs 冻结基线
                                                      （①类型序列 ②剥离时间戳结构 ③总数）
  16. 阶段 5 成果防护   test_phase5_guards.py         获取侧抽象完善：tdxhy 迁 App/统一加载/
@@ -261,6 +264,8 @@ COMPONENTS = [
      [sys.executable, os.path.join("Test", "test_blk_parsing.py")]),
     ("sse_incremental",
      [sys.executable, os.path.join("Test", "test_sse_incremental.py")]),
+    ("chan_incremental_feed",
+     [sys.executable, os.path.join("Test", "test_chan_incremental_feed.py")]),
     ("phase5_guards",
      [sys.executable, os.path.join("Test", "test_phase5_guards.py")]),
     ("phase6_guards",

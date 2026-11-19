@@ -424,10 +424,12 @@ def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_da
     # ── 期货双窗口 ──
     # （残留漏点）：缓存里存的是**活着的 CChan**。futures_cache_get
     # 只在「取指针」这一瞬间持容器锁，随后 `kl_list.bi_list` 的遍历完全在锁外
-    # ——写侧（SSE 线程）每根K线 _drain_chan → step_load → do_init 把
+    # ——写侧（SSE 线程）每根K线 _drain_chan 会就地推进结构：增量路径
+    # trigger_load 追加/更新末笔末段，回退路径 step_load → do_init 把
     # chan.kl_datas 整条替换成新的空 CKLine_List 再回填，读者可能正落在该空窗。
     # 改为：持对象图锁 → 锁内 list(bi_list) 浅拷贝成快照 → 出锁遍历
-    # （do_init 整体替换，旧 CBi 不再被就地改写，浅拷贝即等价于不可变快照）。
+    # （列表结构在拷贝后不再变；回退时旧 CBi 不再被改写，增量时仅末笔可能
+    #  在锁外被继续更新，属可接受的瞬时不一致，下一帧自愈）。
     if normalized_code.startswith("KQ."):
         cache_key = make_futures_sub_key(normalized_code, sub_freq)
         with app_data.futures_sub_chan_guarded_by_key(cache_key) as sub_chan:

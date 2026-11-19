@@ -55,6 +55,45 @@ def _futures_dt_to_epoch_sec(dt):
     return cn.timestamp()
 
 
+def build_kline_unit(r):
+    """由一条 records 记录构造 CKLine_Unit。
+
+    单一事实源：get_kl_data（全量建链）与 AppSSE 的增量喂入
+    （CChan.trigger_load）共用本函数，避免两处字段口径漂移。
+    返回 None 表示该记录不可用（缺 dt / 时间非法 / 构造校验失败）。
+    """
+    from KLine.KLine_Unit import CKLine_Unit
+    from Common.CEnum import DATA_FIELD
+    from Common.CTime import CTime
+
+    dt = r.get("dt")
+    if dt is None:
+        return None
+    try:
+        # auto=False: 不自动将 00:00 调整为 23:59
+        # SGX A50 等外盘品种有凌晨 00:00 的分钟K线，auto=True 会导致
+        # 00:00 的 ts 被改为 23:59，使后续 00:05 的 K线时间非单调递增
+        ct = CTime(dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second, auto=False)
+        # 显式按中国时区(UTC+8)解释期货时间，覆盖 CTime.set_timestamp
+        # 的机器本地时区解释，使 .ts 可跨机器复现（见 _CN_TZ 注释）。
+        ct.ts = _futures_dt_to_epoch_sec(dt)
+    except OSError:
+        return None
+
+    kl_dict = {
+        DATA_FIELD.FIELD_TIME: ct,
+        DATA_FIELD.FIELD_OPEN: r.get("open", 0),
+        DATA_FIELD.FIELD_HIGH: r.get("high", 0),
+        DATA_FIELD.FIELD_LOW: r.get("low", 0),
+        DATA_FIELD.FIELD_CLOSE: r.get("close", 0),
+        DATA_FIELD.FIELD_VOLUME: r.get("vol", 0),
+        DATA_FIELD.FIELD_TURNOVER: r.get("amount", 0),
+    }
+    try:
+        return CKLine_Unit(kl_dict, autofix=True)
+    except Exception:
+        return None
+
 
 @contextmanager
 def session_context(session):
@@ -318,43 +357,15 @@ class CTqSdkAPI(CCommonStockApi):
         self.is_stock = False
 
     def get_kl_data(self):
-        from KLine.KLine_Unit import CKLine_Unit
-        from Common.CEnum import DATA_FIELD
-        from Common.CTime import CTime
-
         with self._lock:
             records = list(self._records_by_symbol.get(self.code, []))
             if not records:
                 records = list(self._records_by_symbol.get("__default__", []))
 
         for r in records:
-            dt = r.get("dt")
-            if dt is None:
-                continue
-            try:
-                # auto=False: 不自动将 00:00 调整为 23:59
-                # SGX A50 等外盘品种有凌晨 00:00 的分钟K线，auto=True 会导致
-                # 00:00 的 ts 被改为 23:59，使后续 00:05 的 K线时间非单调递增
-                ct = CTime(dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second, auto=False)
-                # 显式按中国时区(UTC+8)解释期货时间，覆盖 CTime.set_timestamp
-                # 的机器本地时区解释，使 .ts 可跨机器复现（见 _CN_TZ 注释）。
-                ct.ts = _futures_dt_to_epoch_sec(dt)
-            except OSError:
-                continue
-
-            kl_dict = {
-                DATA_FIELD.FIELD_TIME: ct,
-                DATA_FIELD.FIELD_OPEN: r.get("open", 0),
-                DATA_FIELD.FIELD_HIGH: r.get("high", 0),
-                DATA_FIELD.FIELD_LOW: r.get("low", 0),
-                DATA_FIELD.FIELD_CLOSE: r.get("close", 0),
-                DATA_FIELD.FIELD_VOLUME: r.get("vol", 0),
-                DATA_FIELD.FIELD_TURNOVER: r.get("amount", 0),
-            }
-            try:
-                yield CKLine_Unit(kl_dict, autofix=True)
-            except Exception:
-                continue
+            klu = build_kline_unit(r)
+            if klu is not None:
+                yield klu
 
 
 # ============================================================

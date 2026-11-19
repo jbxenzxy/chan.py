@@ -28,7 +28,7 @@ from App.AppEngine import (
     TQ_AVAILABLE, CTqSdkAPI, _get_futures_name, resolve_lookback_bars,
 )
 # 会话上下文：缓存实例化到连接会话，绑定 CChan 内部 CTqSdkAPI 实例
-from DataAPI.TqSdkAPI import session_context, session_set, session_clear
+from DataAPI.TqSdkAPI import session_context, session_set, session_clear, build_kline_unit
 # 领域异常（期货路径使用领域异常，定义于 App/AppErrors.py）
 from App.AppErrors import AppError, DataFetchError, AnalysisError
 # 引擎纯函数/常量公共工具（与 AppEngine 统一从 App/AppUtils 导入）
@@ -813,12 +813,25 @@ def init_chan_symbol(src, symbol, _name, freq_sec, freq_label, start_time=None, 
         return None
 
 
-def _drain_chan(chan):
-    """驱动 chan 增量计算（耗尽 step_load 生成器）。
+def _drain_chan(chan, kl_type=None, new_bar=None):
+    """驱动 chan 计算：有新K线走增量喂入，否则回退全量重算。
 
-    服务层纯业务函数：生成器经本函数消耗引擎，
-    数据源不关心缠论计算。
+    增量路径：CChan.trigger_load 只把这一根交给 CKLine_List.add_single_klu，
+    笔/线段按 trigger_step 语义就地推进 —— 10000 根窗口下实测 0.5ms/根
+    （全量 step_load 同窗口 3.8s/根，且会 do_init 清空重建）。
+
+    回退条件：未给 new_bar / kl_type，或增量抛异常（如市场切换导致时间非单调）。
+    step_load 会重置 klu_cache / klu_last_t 并重建 kl_datas，之后仍可继续增量；
+    快照侧每次都重新取 `chan[kl_type]`，不持有旧结构引用。
     """
+    if kl_type is not None and new_bar is not None:
+        klu = build_kline_unit(new_bar)
+        if klu is not None:
+            try:
+                chan.trigger_load({kl_type: [klu]})
+                return
+            except Exception as _e:
+                log.warning(f"[增量喂入] 回退全量: {type(_e).__name__}: {_e}")
     for _snapshot in chan.step_load():
         pass
 
@@ -893,8 +906,9 @@ def _per_frame_session(gen, src):
     28 帧读到**别的连接**的线程局部会话。后果分两种：
       · 落在没绑定过的线程 → CTqSdkAPI 回退到自己的空缓存 → 建链无数据；
       · 落在别的连接刚跑过的线程 → 读到别人的记录缓存 → **串品种**。
-    实时循环每根K线的 `_drain_chan → step_load` 每次都会新建 CTqSdkAPI
-    并读线程局部，且它位于 heartbeat 帧 `yield` 之后，是命中率最高的位置。
+    实时循环每根K线的 `_drain_chan` 在回退全量时会新建 CTqSdkAPI 并读线程
+    局部（增量喂入不建；首帧建链、回退、tick 路径仍会），且它位于 heartbeat
+    帧 `yield` 之后，是命中率最高的位置。
 
     本包装在**每一次 next() 派发**上重新绑定本连接会话，并用
     `session_context` 在帧体结束后还原该线程的旧值——既不丢绑定，也不把
@@ -1321,7 +1335,7 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
                 src.append_bar(new_bar, code_key)
                 t_step_start = time.time()
                 try:
-                    _drain_chan(chan)
+                    _drain_chan(chan, kl_type, new_bar)
                 except Exception as _e:
                     log.info(f"[{display_key}] step_load 异常: {_e}")
                 t_step = time.time() - t_step_start
@@ -1572,10 +1586,11 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
         # 缓存下窗 CChan 供 /api/dual_zs 访问（语义化漏斗：key 规则内聚数据层）
         app_data.set_futures_sub_chan(symbol, sub_freq, sub_chan)
         # 下窗「对象图锁」：缓存里存的是**活着的 CChan**，实时
-        # 循环每根K线 _drain_chan → step_load → do_init 会就地清空重建
-        # kl_datas，而 REST 侧读取方拿到指针后在锁外遍历 bi_list。容器锁只
-        # 护「取指针」护不住对象图，故取一把按 key 稳定的锁，让重建与遍历
-        # 互斥（读取方见 BSPointList.check_nesting_divergence）。
+        # 循环每根K线 _drain_chan 会就地推进该级别结构（增量 trigger_load；
+        # 回退时 step_load → do_init 整体重建 kl_datas），而 REST 侧读取方
+        # 拿到指针后在锁外遍历 bi_list。容器锁只护「取指针」护不住对象图，
+        # 故取一把按 key 稳定的锁，让推进与遍历互斥
+        # （读取方见 BSPointList.check_nesting_divergence）。
         _sub_chan_lock = app_data.futures_sub_chan_lock(symbol, sub_freq)
         if _SSE_DEBUG:
             log.info(f"[{display_key}] 下窗({sub_freq}) chan.py: 合并K线={len(sub_chan[sub_kl_type].lst)}, "
@@ -1724,11 +1739,12 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
 
             chan_lock：该窗口 CChan **对象图**的锁。
             下窗 CChan 经 set_futures_sub_chan 发布进共享缓存供 REST 读取，
-            而 `_drain_chan → step_load → do_init` 会**就地清空重建**
-            kl_datas；缓存 dict 的锁（_futures_cache_lock）只护住「取指针」
-            这一瞬间，护不住读取方拿到指针之后的遍历——正好撞在 do_init
-            之后、回填之前就读到空 bi_list。故重建必须与读取方互斥。
-            上窗 CChan 不进共享缓存（连接私有），传 None 即可。
+            而 `_drain_chan` 会就地推进该级别结构（增量 trigger_load；
+            回退时 step_load → do_init 整体清空重建 kl_datas）。缓存 dict 的
+            锁（_futures_cache_lock）只护住「取指针」这一瞬间，护不住读取方
+            拿到指针之后的遍历——回退时正好撞在 do_init 之后、回填之前读到
+            空 bi_list，增量时也会撞上末笔/末段就地更新。故推进必须与读取方
+            互斥。上窗 CChan 不进共享缓存（连接私有），传 None 即可。
             """
             nonlocal last_debug_print, last_perf_print, loop_count, tick_count, step_count
             nonlocal t_wait_total, t_tick_total, t_step_total, t_snapshot_total, t_push_total
@@ -1861,9 +1877,9 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
                     if chan_lock is not None:
                         # 与 REST 侧读取方的遍历互斥
                         with chan_lock:
-                            _drain_chan(chan)
+                            _drain_chan(chan, kl_type, new_bar)
                     else:
-                        _drain_chan(chan)
+                        _drain_chan(chan, kl_type, new_bar)
                 except Exception as e:
                     log.info(f"[{display_key}] {window_label} step_load 异常: {e}")
                 t_step = time.time() - t_step_start
