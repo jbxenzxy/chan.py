@@ -35,6 +35,9 @@ CI / 迁移每阶段的验收门禁）。
      建链买卖点守护  test_chan_build_bsp_guard.py：建链后买卖点不得丢失（15s 基线 10 个）/
                                                      cal_seg_and_zs 必须逐笔调用 /
                                                      快照 bsps 与 chan 一致
+      红框/区间套锁域  test_futures_red_range_lock_scope.py：期货读侧计算必须在
+                                                      对象图锁内（活 CBi 跨代读取）
+                                                      静态 AST + 锁外读即抛错的行为反证
  15. SSE 灰度比对      test_sse_gray.py              3b-1：native vs 冻结基线
                                                      （①类型序列 ②剥离时间戳结构 ③总数）
  16. 阶段 5 成果防护   test_phase5_guards.py         获取侧抽象完善：tdxhy 迁 App/统一加载/
@@ -358,6 +361,13 @@ COMPONENTS = [
      [sys.executable, os.path.join("Test", "test_dual_cache_concurrency.py")]),
     ("futures_subchan_concurrency",
      [sys.executable, os.path.join("Test", "test_futures_subchan_concurrency.py")]),
+    # P3-2（2026-11-19）：期货红框/区间套读侧的**临界区范围**。缓存里是活 CChan，
+    # 锁只护「取指针 + 浅拷贝」不够：快照装的是活 CBi，出锁后写侧仍会就地推进
+    # 末笔并 clean_cache()，一次请求里判据与构造可能取自不同代（前端还按
+    # requestKey 去重、同框不重算 ⇒ 错值静默停留）。静态钉「计算必须在锁内」，
+    # 行为层用「锁外读就抛错」的假 CBi 反证。
+    ("futures_red_range_lock_scope",
+     [sys.executable, os.path.join("Test", "test_futures_red_range_lock_scope.py")]),
     ("search_refresh_interleave",
      [sys.executable, os.path.join("Test", "test_search_refresh_interleave.py")]),
     ("legacy_scan_session",

@@ -422,31 +422,35 @@ def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_da
     normalized_code = code.strip().upper()
 
     # ── 期货双窗口 ──
-    # （残留漏点）：缓存里存的是**活着的 CChan**。futures_cache_get
-    # 只在「取指针」这一瞬间持容器锁，随后 `kl_list.bi_list` 的遍历完全在锁外
-    # ——写侧（SSE 线程）每根K线 _drain_chan 会就地推进结构：增量路径
-    # trigger_load 追加/更新末笔末段，回退路径 step_load → do_init 把
-    # chan.kl_datas 整条替换成新的空 CKLine_List 再回填，读者可能正落在该空窗。
-    # 改为：持对象图锁 → 锁内 list(bi_list) 浅拷贝成快照 → 出锁遍历。
-    # 快照语义边界（勿误读为「不一致」）：回退路径 do_init 整体替换 kl_datas，
-    # 旧 CBi 不再被改写；增量路径末笔会被就地推进（CBi.update_new_end 改
-    # __end_klc），但该笔所有派生量（_high/_low/amp/get_begin_klu/get_end_klu）
-    # 统一走 CBi._memoize_cache，而 update_new_end 在改完 __end_klc 后立刻
-    # clean_cache()，故读者只会看到「整体旧值」或「整体新值」，不会出现
-    # 端点与价格不匹配的中间态。代价仅是可能读到推进前的端点（几何自洽）。
+    # 缓存里存的是**活着的 CChan**。写侧（SSE 线程）每根K线 _drain_chan 会就地
+    # 推进结构：增量路径 trigger_load → 末笔 CBi.update_new_end 改 __end_klc，
+    # 回退路径 step_load → do_init 把 chan.kl_datas 整条替换成新的空
+    # CKLine_List 再回填，读者可能正落在该空窗。
+    #
+    # 2026-11-19（P3-2）修：临界区 = 取对象 + 浅拷贝 + **全部结构计算**。
+    # 原先「锁内只浅拷贝、出锁再算」不够 —— 快照装的是**活 CBi**，锁只保证
+    # 列表长度固定，不保证出锁后这些对象不被就地改写；而
+    # _high/_low/amp/get_begin_klu/get_end_klu 统一走 CBi._memoize_cache，
+    # update_new_end 改完 __end_klc 立刻 clean_cache() ⇒ 跨两次取值就能读到
+    # **不同代**的派生量（入口 pk.amp() 用旧值、_red_range_try_construct_zs
+    # 用新端点），出现 begin_val + amp != end_val 的口径撕裂，构造出实际不成立
+    # 的中枢。而且前端 updateDualNewZs 按 (subFreq,leftDate,rightDate) 去重、
+    # 同框不重算 ⇒ 错值会一直显示到用户重画红框（不是「下一帧自愈」）。
+    # 持锁期间只做纯计算（_red_range_* 体内无加锁、无 IO）⇒ 不会自锁，
+    # 也不会与写侧成环；锁按 symbol:sub_freq 分片，不阻塞其他窗口/连接。
     if normalized_code.startswith("KQ."):
         cache_key = make_futures_sub_key(normalized_code, sub_freq)
+        date_fmt = _m._get_date_fmt(sub_freq)
         with app_data.futures_sub_chan_guarded_by_key(cache_key) as sub_chan:
             if sub_chan is None:
                 raise DataFetchError("双窗口下窗缓存已过期，请重新打开双窗口")
             kl_list = sub_chan[_m._get_kl_type(sub_freq)]
             bi_list = list(kl_list.bi_list)
-        date_fmt = _m._get_date_fmt(sub_freq)
-        start_bi, end_bi = _red_range_bi_sequence(left_date, right_date, bi_list, sub_freq)
-        if start_bi is None:
-            raise AnalysisError(f"红框内无完整笔: [{left_date}, {right_date}]")
-        sliced_bis = bi_list[start_bi:end_bi + 1]
-        zs_data = _red_range_amp(sliced_bis, bi_list, date_fmt)
+            start_bi, end_bi = _red_range_bi_sequence(left_date, right_date, bi_list, sub_freq)
+            if start_bi is None:
+                raise AnalysisError(f"红框内无完整笔: [{left_date}, {right_date}]")
+            sliced_bis = bi_list[start_bi:end_bi + 1]
+            zs_data = _red_range_amp(sliced_bis, bi_list, date_fmt)
         return {"zs": zs_data, "start_bi": start_bi, "end_bi": end_bi}
 
     # ── 股票双窗口 ──
@@ -469,6 +473,8 @@ def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_da
     # 锁外——写侧（分析线程）整条替换缓存条目时，读者可能正遍历到一半。
     # 改为锁内取对象 + 锁内浅拷贝成快照，出锁后再遍历（do_init/整条替换
     # 都不会就地改写旧的 CBi，故浅拷贝即等价于不可变快照）。
+    # ⚠ 股票成立、期货不成立：股票下窗建链一次后不再推进，期货下窗每根K线
+    # 都被 _drain_chan 推进末笔 ⇒ 期货侧计算必须留在锁内（见上方 KQ. 分支）。
     with app_data.stocks_sub_chan_guarded(chan_code, sub_freq) as chan_obj:
         if chan_obj is None:
             dual_sub_cached = app_data.cache_get(

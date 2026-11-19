@@ -795,27 +795,49 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             cache_key = make_futures_sub_key_from_code(parent.code, sub_freq)
             # 审计 P0-2：缓存里存的是**活着的 CChan**，SSE 每根K线
             # _drain_chan 会推进结构：回退路径 step_load → do_init 把
-            # self.kl_datas 整个换成新的空 CKLine_List；增量路径 trigger_load
-            # 就地推进末笔。原先 `futures_cache_get` 只在**取指针**这一瞬间持
-            # 容器锁，随后 `sub_kl_list.bi_list` 的遍历完全在锁外——回退时正好
-            # 撞在 do_init 之后、回填之前就会读到空列表。故取对象与遍历须在
-            # 同一把对象图锁内。（增量路径的就地推进不产生不一致：CBi 派生量
-            # 统一走 _memoize_cache，update_new_end 改完 __end_klc 立即
-            # clean_cache，读者只会看到整体旧值或整体新值。）
+            # self.kl_datas 整个换成新的空 CKLine_List（读者可能正落在该空窗），
+            # 增量路径 trigger_load → 末笔 CBi.update_new_end 就地改 __end_klc。
+            # 原先 `futures_cache_get` 只在**取指针**那一瞬间持容器锁，随后
+            # `sub_kl_list.bi_list` 的遍历完全在锁外——回退时撞在 do_init 之后、
+            # 回填之前就会读到空列表。
+            #
+            # 2026-11-19（P3-2）修：临界区从「取对象 + 浅拷贝」扩到「取对象 +
+            # 浅拷贝 + **区间套判定全过程**」。只把浅拷贝放进锁里不够——快照装的是
+            # **活 CBi**，出锁后写侧仍可就地推进末笔并 clean_cache()，而
+            # _high/_low/amp/cal_macd_metric 统一走 _memoize_cache ⇒ 同一次请求里
+            # 「入口判据」与「中枢构造/背驰比较」可能取自不同代，结果不可复现
+            # 且同输入不同输出。判定路径直通 bsp，比红框显示更要紧。
+            # 持锁期间只做纯计算（_red_range_* / _main_bi_range / _futures_red_range
+            # 体内无加锁、无 IO）⇒ 不会自锁，也不会与写侧成环；锁按
+            # symbol:sub_freq 分片，不阻塞其他窗口/连接。
             with app_data.futures_sub_chan_guarded_by_key(cache_key) as sub_chan:
                 if sub_chan is None:
                     self._dbg_bs('check_nesting_divergence', '期货下窗暂无缓存 → 按子级别背驰处理',
                                  cache_key=cache_key, sub_freq=sub_freq) # 上/下窗分开加载，必然有前有后，所以存在“上窗有，下窗无”的情况
                     return True # 按子级别背驰处理
                 sub_kl_list = sub_chan[sub_kl_type]
-                # 临界区压到最小：锁内只做浅拷贝，随即出锁。
-                # do_init 是**整体替换** kl_datas，旧的 CBi 对象不再被引擎
-                # 引用、不会被就地改写，故 list(...) 即等价于不可变快照。
                 sub_bi_list = list(sub_kl_list.bi_list)
-            # 以下对 sub_bi_list 的使用均在锁外（快照已与引擎内部状态解耦）
-        # 注：股票、期货两条路径均已在其**各自的临界区内**完成 sub_bi_list
-        # 快照（股票 :730-736 / :738-744，期货 :771），此处不再存在
-        # 「锁外取指针后遍历」的窗口（审计 U2 / P0-2 双侧闭合）。
+                return self._evaluate_nesting(sub_bi_list, bi_list, main_freq,
+                                              sub_freq, False)
+        # ── 股票：下窗 CChan 由 AppEngine 整建一次、之后不逐根推进
+        # （见 AppEngine._analyze_stock_internal 写 stocks_sub_cache），
+        # 快照即定值 ⇒ 锁外评估与锁内等价，不改其临界区。
+        # 期货路径已在上面 with 块内 return，能走到这里的只可能是股票。
+        return self._evaluate_nesting(sub_bi_list, bi_list, main_freq, sub_freq,
+                                      True, _explicit_sub_freq)
+
+    def _evaluate_nesting(self, sub_bi_list, bi_list, main_freq, sub_freq,
+                          is_stocks, explicit_sub_freq=None):
+        """区间套背驰判定主体：从子级别笔列表算出「是否背驰」。
+
+        并发契约（2026-11-19 补齐，评审 P3-2）：`sub_bi_list` 的元素是**活 CBi**，
+        本方法反复读其派生量（_high/_low/amp/klc_lst/macd）。写侧 `_drain_chan`
+        每根K线就地推进末笔（CBi.update_new_end → clean_cache），故
+        **取快照与调用本方法必须在同一把对象图锁内**：
+          · 期货下窗被 SSE 逐根推进 → 调用点在 futures_sub_chan_guarded_by_key 内；
+          · 股票下窗建链一次、不逐根推进 → 调用点在锁外（快照即定值）。
+        本方法自身不取任何锁，也不做 IO。
+        """
         if len(sub_bi_list) == 0:
             # 上/下窗，历史K线不对齐(如：日K加载多于30分)
             self._dbg_bs('check_nesting_divergence', '双窗口-无子级别 → 按子级别背驰处理')
@@ -832,11 +854,11 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         # 2. 确定子级别红框边界 [C,D]
         fx_a_sub_dt, fx_b_sub_dt = None, None
         if is_stocks:
-            if _explicit_sub_freq:
+            if explicit_sub_freq:
                 # P3：独立双窗——上窗 KLU 无联立 sub_kl_list，改数学换算
                 # （结束时间语义，与期货公式镜像对称）
                 fx_a_sub_dt, fx_b_sub_dt = _stocks_red_range_algo(
-                    fx_a_raw_dt, fx_b_raw_dt, main_freq, _explicit_sub_freq)
+                    fx_a_raw_dt, fx_b_raw_dt, main_freq, explicit_sub_freq)
             else:
                 # legacy 联立：从边界 KLU（峰/谷）的 sub_kl_list 取真实子级别边界
                 fx_a_sub_dt, fx_b_sub_dt = _stocks_red_range(a_klu, b_klu, sub_freq, main_bi)

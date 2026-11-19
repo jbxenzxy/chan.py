@@ -19,6 +19,18 @@
      完整形式，于是 `Docs/数据源.md` 附 A 的 11 处完全不计入，该文档基线写着 0
      还列在 ZERO_FILES 里却照旧漂 —— 与 2026-10-10「只认 .py ⇒ 51 处 app.js
      行号不计入」同类，是「口径漏一整类写法」的第二次出现。
+  ⑤ `@ L1064-1069` 这种「at L 行号」写法定要计入（2026-11-19）：
+     `Docs/互斥锁设计指导书_v1.3.md` 的 86 处引用**全部**是这个写法，三个正则
+     一个都认不出；该文档又摆在 ZERO_FILES「不许回潮」里、基线写 0 ——
+     于是护栏对「它有 86 处行号引用」这件事完全无感（实测 10 处抽查全漂，
+     其中 2 处指向已删除符号）。与 ④ 同源，是「口径漏一整类写法」的第三次出现。
+     结论：**新写法必须先并入 count 口径**，否则「基线 0 + ZERO_FILES」锁住的
+     只是一个空集合。
+  ⑥ `文件.py :: 符号` 这种**带空格**的锚点同样计入（2026-11-19）：PAT_ANCHOR 原来
+     要求 `::` 紧贴扩展名，于是 `Docs/互斥锁设计指导书_v1.3.md` 里 35 处带空格的
+     锚点**一处也没被校验**（`::` 后接空格即失配）——[6] 报「112 个锚点全部存在」，
+     实际该文档只被看见 2 个。是同一个病（**写法比正则宽**）的第四次出现，
+     故把分隔符放宽成 `\s*::\s*`，并顺手修掉因此暴露的 3 处失效锚点。
 
 不纳入：`Docs/WorkBuddy/` —— 那是 ~/.workbuddy 记忆文件在仓库里的一份副本，属个人
   记忆资产而非项目交付文档，不受铁律 17（约束"交付/长期文档"）管辖。
@@ -57,6 +69,15 @@ PAT_BARE_MODULE = re.compile(r"`([A-Za-z_][\w/]*):(\d+)(?:-\d+)?`")
 _SRC_EXT = (".py", ".js", ".html", ".css")
 _src_stems = None
 
+# 「at L」行号（2026-11-19 补）：`AppSSE.py @ L1064-1069` / `` `_drain_chan @ L816` ``
+#
+# 上面三个正则都要求「文件名 + 冒号」或「反引号内 名字:数字」，于是这类写法
+# **一处也认不出**：`Docs/互斥锁设计指导书_v1.3.md` 全篇 86 处用它，而该文档
+# 同时躺在 BASELINE（写 0）与 ZERO_FILES 里 ⇒ 护栏判定「零引用、干净」，
+# 实际 10 处抽查全部漂移（最多偏 +974 行，2 处指向已删除的符号）。
+# 与「只认 .py」「只认带扩展名」同源：**口径漏掉一整类写法 = 护栏对它不存在**。
+PAT_AT_L = re.compile(r"@\s*L(\d+)(?:-(\d+))?")
+
 
 def _src_stem_index():
     """源文件 basename（去扩展名）集合，供无扩展名引用解析。只建一次。"""
@@ -89,8 +110,9 @@ def _resolves_to_src(name):
     return base in _src_stem_index()
 
 
-# 稳定锚点：`app.js::isFuturesMode` / `app.html::annotation-menu-mirror`
-PAT_ANCHOR = re.compile(r"([A-Za-z_][\w/]*\.(?:py|js|html|css))::([A-Za-z_][\w-]*)")
+# 稳定锚点：`app.js::isFuturesMode` / `app.html::annotation-menu-id`
+# 2026-11-19：分隔符放宽为 `\s*::\s*` —— 原来要求 `::` 紧贴扩展名，于是带空格的写法（`AppData.py :: save_to_zxg_blk`）整类漏校验。
+PAT_ANCHOR = re.compile(r"([A-Za-z_][\w/]*\.(?:py|js|html|css))\s*::\s*([A-Za-z_][\w-]*)")
 
 # 基线（2026-09-29 实测）。改造某文档后把对应值调低；调到 0 即永久锁死。
 # 2026-09-29 第二轮：5 份 Docs 存量 317 处行号引用已按 README 那套锚点化完毕，
@@ -117,7 +139,12 @@ PAT_ANCHOR = re.compile(r"([A-Za-z_][\w/]*\.(?:py|js|html|css))::([A-Za-z_][\w-]
 BASELINE = {
     "Docs/数据源.md": 0,
     "Docs/多实例自动下单_设计兼交接文档_20260929.md": 55,
-    "Docs/互斥锁设计指导书_v1.3.md": 0,
+    # 2026-11-19 校正 0 → 86：这个键此前写 0 是**错的**，它从来不是「零引用文件」——
+    # 全篇 86 处 `@ L` 行号引用一直存在，只是 count 认不出那种写法（见文件头 ⑤）。
+    # 登记的是**存量实数**（棘轮只减不增）：新增任何一处 `@ L` / `文件:行号` 即红。
+    # 处置方向是铁律 17 的锚点化（`文件::符号`，由 [6] 逐条校验存在性），
+    # 每锚点化一批就把这里的数字下调，调到 0 后移进 ZERO_FILES 永久锁死。（86 → 85：修失效锚点时把 `load_pe_ttm_cache` 那处的 `@ L1904-1937` 一并去掉）
+    "Docs/互斥锁设计指导书_v1.3.md": 85,
     "Docs/登录链路选择_交付说明_20260928.md": 0,
     "Docs/自动下单功能审核报告_2026-09-17.md": 0,
     "Docs/设计文档_run级配对会计_20260921.md": 0,
@@ -153,7 +180,9 @@ BASELINE = {
 ZERO_FILES = [
     "Trading/README.md",
     "Docs/数据源.md",
-    "Docs/互斥锁设计指导书_v1.3.md",
+    # 「Docs/互斥锁设计指导书_v1.3.md」2026-11-19 移出：它在 ZERO_FILES 里待了
+    # 很久，但 count 认不出 `@ L` 写法 ⇒ 「= 0」这条检查恒真，锁了个空集合。
+    # 现在按存量实数 86 挂在 BASELINE 棘轮上；锚点化到 0 后再移回这里。
     "Docs/登录链路选择_交付说明_20260928.md",
     "Docs/自动下单功能审核报告_2026-09-17.md",
     "Docs/设计文档_run级配对会计_20260921.md",
@@ -190,9 +219,20 @@ def _n_bare_module(t):
     return sum(1 for m in PAT_BARE_MODULE.finditer(t) if _resolves_to_src(m.group(1)))
 
 
+def _n_at_l(t):
+    """文本里 `@ L数字`（可带 `-数字` 范围后缀）的处数。"""
+    return len(PAT_AT_L.findall(t))
+
+
+def _count_text(t):
+    """一段文本的行号引用处数（四个口径相加）。纯文本入口，供 [9] 自检直接调用。"""
+    return (len(PAT_FULL.findall(t)) + len(PAT_BARE.findall(t))
+            + _n_bare_module(t) + _n_at_l(t))
+
+
 def count(rel):
     t = io.open(os.path.join(ROOT, rel), encoding="utf-8", errors="ignore").read()
-    return len(PAT_FULL.findall(t)) + len(PAT_BARE.findall(t)) + _n_bare_module(t)
+    return _count_text(t)
 
 
 def resolve_src(fname):
@@ -288,6 +328,25 @@ for rel in ("Docs/数据源.md",):
     if os.path.isfile(p):
         check("%s 无扩展名行号引用 = 0" % rel,
               _n_bare_module(io.open(p, encoding="utf-8", errors="ignore").read()), 0)
+
+print("\n[9] `@ L` 形态的护栏自检（2026-11-19 补口径，防再被优化掉）")
+# 这一节守的是「口径」本身，而不是某个文档：一旦有人把 _n_at_l 从 count 里摘掉、
+# 或把 PAT_AT_L 写窄（例如只认带反引号的形态），下面第一条立即红。
+# 用合成样本文本断言，不依赖仓库里当前是否还有这种写法。
+_at_l_samples = [
+    ("`AppSSE.py @ L1064-1069`", 1),
+    ("`_drain_chan @ L816`", 1),
+    ("A @ L12，B @ L34-56", 2),
+    ("old@L7 无空格也要认", 1),
+    ("没有行号引用的普通文本", 0),
+]
+check("PAT_AT_L 识别各种 `@ L` 形态", [_n_at_l(t) for t, _ in _at_l_samples],
+      [n for _, n in _at_l_samples])
+# 断言的是**聚合口径**（_count_text），不是 _n_at_l 自己：把 _n_at_l 从聚合里摘掉，
+# 这一条立刻红 —— 只测 _n_at_l("x") 是测不到「有没有人被摘掉」的。
+check("聚合口径 _count_text 已并入 @L",
+      [_count_text(t) for t, _ in _at_l_samples],
+      [n for _, n in _at_l_samples])
 
 print("\n[5] 临时豁免不许长期化（评审 P3-7）")
 # 多实例文档那 55 处行号是**临时豁免**：§8.4 自陈「实施前坐标快照……实施后一并
