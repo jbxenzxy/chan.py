@@ -744,10 +744,11 @@ def part4():
           "（用户须知道这一对值同时管显示与扫描）",
           "RSI 阈值（超买 / 超卖，K线图与股票扫描共用）" in html
           and "<span>留空 = 默认</span>" in html)
-    check("④ app.html：两个输入框落在**设置抽屉**内（在流通市值过滤之后、抽屉分隔线之前）",
+    check("④ app.html：两个输入框落在**设置抽屉**内（在流通市值过滤之后、抽屉收尾 "
+          "</aside> 之前）",
           html.index('id="scan-min-float-mc"') < html.index('id="rsi-threshold-over"')
           < html.index('id="rsi-threshold-under"')
-          < html.index('<div style="border-top:1px solid #2a2a3e;margin:16px 0 12px;"></div>'))
+          < html.index('</aside>'))
 
     node = shutil.which("node")
     if not node:

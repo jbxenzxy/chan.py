@@ -67,6 +67,9 @@ KLINE_PIPELINE = [
 # ③ window API 冻结基线：集合字面量即 SSOT，项数不在此写死（③ 处运行时打印实测数；旧数字留档于设计文档 v2.0「修订说明（v1.18 → v1.19）」§五）。
 #    「盘后下载」功能下线时曾从中移除 4 个 window 函数
 #    （toggleDownloadPanel / closeDownloadPanel / startDownload / stopDownload）。
+#    2026-11-20「其他 → 显示笔索引编号」并入「图层显示」为「笔编号」（value=biidx）后，
+#    onShowBiIdxChange 失去唯一调用方（那条抽屉复选框改走 onOverlayChange），随控件一并
+#    移除；状态变量 showBiIdx 与持久化键名均未动，故用户已有设置不受影响。
 #    **总数不在这里手算**：③ 的期望集 = WINDOW_BASELINE | WINDOW_ALLOWED_NEW
 #    | WINDOW_INLINE_BRIDGES（三份字面量的并集），③ 处直接打印实测个数。
 #    （旧注释曾把一份手算合计写死在此 —— 此后 ALLOWED_NEW 与 BRIDGES 各自
@@ -82,7 +85,7 @@ WINDOW_BASELINE = {
     'handleDateBlur', 'handleDateChange', 'handleDateInput', 'handleDateKeydown',
     'initCoordSystemRadio', 'loadScanResult', 'loadStock', 'maPeriodsSelectAll',
     'maPeriodsSelectNone', 'onBspFilterChange', 'onCoordSystemChange', 'onInputChange',
-    'onInputKeydown', 'onMaPeriodChange', 'onShowBiIdxChange', 'openBspSettings',
+    'onInputKeydown', 'onMaPeriodChange', 'openBspSettings',
     'refreshStockNames', 'removeHistory', 'saveScanToZxg', 'scanModeDialogCancel',
     'scanModeDialogConfirm', 'scanSourceSelectAll', 'scanSourceSelectNone', 'selectHistory',
     'showHistory', 'startScanZxg',

@@ -593,12 +593,17 @@
 
         function getShowMa() { return Object.keys(maPeriods).some(function(p){ return maPeriods[p]; }); }
 
-        // 图层键 → 状态变量（唯一映射：抽屉复选框的 value、toggleOverlay(type)、
-        // saveOverlaySettings 的键名三处共用同一组 fx / bi / seg / zs / bsp）。
-        // 未知 type 返回 null / false，调用方据此判"这条入口不存在"，不静默改状态。
+        // 图层键 → 状态变量（唯一映射表：抽屉复选框的 value 与 toggleOverlay(type)
+        // 共用同一组键；未知 type 返回 null / false，调用方据此判"这条入口不存在"，
+        // 不静默改状态）。
+        //   fx → showFx   bi → showBi   seg → showSeg   zs → showZs   bsp → showBsp
+        //   biidx → showBiIdx —— 笔编号不是独立图层，而是「笔」的子开关（只画笔的序号）。
+        //   2026-11-20 从「其他 → 显示笔索引编号」并入「图层显示」，为的是共用同一个
+        //   回填点与同一个写入点；它的 value 与持久化键名因此不同名，映射只此一处。
         function _overlayGet(type) {
             if (type === "fx") return showFx;
             if (type === "bi") return showBi;
+            if (type === "biidx") return showBiIdx;
             if (type === "seg") return showSeg;
             if (type === "zs") return showZs;
             if (type === "bsp") return showBsp;
@@ -607,6 +612,7 @@
         function _overlaySet(type, on) {
             if (type === "fx") showFx = !!on;
             else if (type === "bi") showBi = !!on;
+            else if (type === "biidx") showBiIdx = !!on;
             else if (type === "seg") showSeg = !!on;
             else if (type === "zs") showZs = !!on;
             else if (type === "bsp") showBsp = !!on;
@@ -618,6 +624,8 @@
         // 2026-11-20：这 5 个开关原先是顶栏常驻按钮（≈260–310px，窄屏把「设置/刷新」
         // 挤出横向视野），搬进抽屉后同步目标从 .active 变成 checkbox，函数随之改名
         // （旧名 applyOverlayButtonStates，已无按钮可同步，留旧名会误导后来者）。
+        // 同日「其他 → 显示笔索引编号」也搬进这一格（笔编号 / biidx），因此它是抽屉里
+        // 6 个复选框的唯一回填点 —— 别在 openBspSettings 里再给某一个开特判。
         function syncOverlayControls() {
             var cbs = document.querySelectorAll('#bsp-filter-dialog input[name="overlay-layer"]');
             for (var i = 0; i < cbs.length; i++) {
@@ -4856,7 +4864,7 @@
             render();
         };
 
-        // 即时生效：抽屉里的图层复选框变化（范式同 onShowBiIdxChange）
+        // 即时生效：抽屉里的图层复选框变化（6 个复选框共用，含笔编号）
         window.onOverlayChange = function(cb) {
             _overlaySet(cb.value, cb.checked);
             saveOverlaySettings();
@@ -7737,10 +7745,9 @@
             for (var i = 0; i < macbs.length; i++) {
                 macbs[i].checked = !!maPeriods[macbs[i].value];
             }
-            // 同步笔索引复选框
-            var biIdxCb = document.querySelector('#bsp-filter-dialog input[name="show-bi-idx"]');
-            if (biIdxCb) biIdxCb.checked = showBiIdx;
-            // 同步图层复选框（分型 / 笔 / 线段 / 中枢 / 买卖点，2026-11-20 从顶栏搬来）
+            // 同步图层复选框（分型 / 笔 / 笔编号 / 线段 / 中枢 / 买卖点，2026-11-20 从
+            // 顶栏与「其他」节搬来）：6 个全在 syncOverlayControls 一处回填，
+            // 不为其中某一个单开特判。
             syncOverlayControls();
             initCoordSystemRadio();
             document.getElementById("bsp-filter-dialog").classList.add("show");
@@ -7768,11 +7775,10 @@
             render();
         };
 
-        window.onShowBiIdxChange = function(cb) {
-            showBiIdx = cb.checked;
-            saveOverlaySettings();
-            render();
-        };
+        // 笔编号（showBiIdx）原先由 window.onShowBiIdxChange 单独写，抽屉里也单开一条
+        // show-bi-idx 复选框；2026-11-20 并入「图层显示」后 value=biidx 走同一套
+        // onOverlayChange → _overlaySet，那个只服务于已删控件的 window 入口随之删除，
+        // 免得留下第二个写入口（控制台入口是 toggleOverlay("biidx")）。
 
         // 成交额/量显示模式的入口已收敛到 vol 槽绘图窗双击（setVolDisplayMode /
         // handleBottomAreaDblClick）：抽屉里不再放任何该模式的条目，免得同一状态

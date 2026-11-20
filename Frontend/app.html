@@ -336,18 +336,24 @@
         </div>
         <div class="settings-drawer-body">
             <!-- 图层显示（2026-11-20 从顶栏搬来）：value 必须是 toggleOverlay(type) 认识的
-                 fx / bi / seg / zs / bsp —— 同一套键，不另立第二套映射。 -->
+                 fx / bi / seg / zs / bsp / biidx —— 同一套键，不另立第二套映射。
+                 biidx（笔编号）是「笔」的子开关，不是独立图层：它复用同一套 value /
+                 onchange / 回填机制，只为少一条「第二写入点」；持久化键仍是 showBiIdx，
+                 原「其他 → 显示笔索引编号」已并入此处（2026-11-20）。
+                 fx 那颗画的是分型序号（drawFxMarkers 用 ctx.fillText(String(fxNum))），
+                 故文案写「分型编号」——叫「分型」会让人以为画的是分型符号。 -->
             <div style="margin-bottom:8px;font-size:12px;color:#8892b0;">图层显示（K 线叠加）</div>
             <div class="bsp-filter-grid">
-                <label class="bsp-filter-label"><input type="checkbox" name="overlay-layer" value="fx" onchange="onOverlayChange(this)">分型</label>
+                <label class="bsp-filter-label"><input type="checkbox" name="overlay-layer" value="fx" onchange="onOverlayChange(this)">分型编号</label>
                 <label class="bsp-filter-label"><input type="checkbox" name="overlay-layer" value="bi" onchange="onOverlayChange(this)">笔</label>
+                <label class="bsp-filter-label"><input type="checkbox" name="overlay-layer" value="biidx" onchange="onOverlayChange(this)">笔编号</label>
                 <label class="bsp-filter-label"><input type="checkbox" name="overlay-layer" value="seg" onchange="onOverlayChange(this)">线段</label>
                 <label class="bsp-filter-label"><input type="checkbox" name="overlay-layer" value="zs" onchange="onOverlayChange(this)">中枢</label>
                 <label class="bsp-filter-label"><input type="checkbox" name="overlay-layer" value="bsp" onchange="onOverlayChange(this)">买卖点</label>
             </div>
             <div style="border-top:1px solid #2a2a3e;margin:0 0 14px;"></div>
 
-            <div style="margin-bottom:8px;font-size:12px;color:#8892b0;">买卖点类型（可多选）</div>
+            <div style="margin-bottom:8px;font-size:12px;color:#8892b0;">买卖点类型</div>
             <div class="bsp-filter-grid">
                 <label class="bsp-filter-label">
                     <input type="checkbox" name="bsp-filter" value="0" checked="" onchange="onBspFilterChange(this)">
@@ -371,7 +377,7 @@
                 <button onclick="bspFilterSelectNone()" style="font-size:11px;padding:2px 8px;background:#1a1a2e;border:1px solid #2a2a3e;color:#8892b0;border-radius:3px;cursor:pointer;">取消</button>
             </div>
 
-            <div style="margin-bottom:8px;font-size:12px;color:#8892b0;">均线周期（可多选，斐波那契数列）</div>
+            <div style="margin-bottom:8px;font-size:12px;color:#8892b0;">均线周期（斐波那契数列）</div>
             <div class="bsp-filter-grid" id="ma-periods-grid">
                 <label class="bsp-filter-label"><input type="checkbox" name="ma-period" value="5" onchange="onMaPeriodChange(this)"><span style="color:#FFFFFF">●</span> MA5</label>
                 <label class="bsp-filter-label"><input type="checkbox" name="ma-period" value="13" onchange="onMaPeriodChange(this)"><span style="color:#FCBF49">●</span> MA13</label>
@@ -409,15 +415,6 @@
                 <span>/</span>
                 <input type="number" id="rsi-threshold-under" min="1" max="99" step="1" style="width:70px;height:24px;background:#1a1a2e;border:1px solid #2a2a3e;color:#e0e0e0;border-radius:4px;text-align:center;font-size:13px;padding:0 4px;">
                 <span>留空 = 默认</span>
-            </div>
-            <div style="border-top:1px solid #2a2a3e;margin:16px 0 12px;"></div>
-
-            <div style="margin-bottom:8px;font-size:12px;color:#8892b0;">其他</div>
-            <div class="bsp-filter-grid">
-                <label class="bsp-filter-label">
-                    <input type="checkbox" name="show-bi-idx" onchange="onShowBiIdxChange(this)">
-                    显示笔索引编号
-                </label>
             </div>
         </div>
     </aside>
