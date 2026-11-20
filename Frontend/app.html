@@ -96,11 +96,12 @@
                 </span>
                 <span class="date-arrow" id="date-arrow-right" title="步进已停用">▶</span>
             </div>
-            <button class="btn" id="btn-fx" onclick="toggleOverlay('fx')">分型</button>
-                <button class="btn active" id="btn-bi" onclick="toggleOverlay('bi')">笔</button>
-                <button class="btn" id="btn-seg" onclick="toggleOverlay('seg')">线段</button>
-                <button class="btn active" id="btn-zs" onclick="toggleOverlay('zs')">中枢</button>
-                <button class="btn active" id="btn-bsp" onclick="toggleOverlay('bsp')">买卖点</button>
+            <!-- 图层开关（分型 / 笔 / 线段 / 中枢 / 买卖点）2026-11-20 收进「显示设置」抽屉的
+                 「图层显示」节：这 5 颗常驻按钮合计 ≈260–310px（.btn 为 padding 4px 12px、
+                 11px 字号，外加 header-right 的 gap），窄屏会把右侧「设置 / 刷新」挤出横向视野。
+                 顶栏是 overflow-x:auto 横向滚动兜底，不是空间无限。
+                 window.toggleOverlay 仍保留（控制台入口 / 快捷键挂点），状态变量与
+                 localStorage 键 chan_overlay_settings 一律未变 —— 只有入口位置变了。 -->
             <button class="btn" id="btn-draw" onclick="toggleDrawToolbar()" title="画线工具（同花顺式：倾斜线 / 水平线）">画线</button>
             <button class="btn" id="btn-margin" onclick="toggleMarginPanel()" title="两融余额（仅上证指数日K可用）">两融余额</button>
             <button class="btn" id="btn-amo" onclick="toggleAmoPanel()" title="市场量能（仅上证指数日K可用）">市场量能</button>
@@ -334,6 +335,18 @@
             <span class="settings-drawer-close" onclick="closeBspSettings()">×</span>
         </div>
         <div class="settings-drawer-body">
+            <!-- 图层显示（2026-11-20 从顶栏搬来）：value 必须是 toggleOverlay(type) 认识的
+                 fx / bi / seg / zs / bsp —— 同一套键，不另立第二套映射。 -->
+            <div style="margin-bottom:8px;font-size:12px;color:#8892b0;">图层显示（K 线叠加）</div>
+            <div class="bsp-filter-grid">
+                <label class="bsp-filter-label"><input type="checkbox" name="overlay-layer" value="fx" onchange="onOverlayChange(this)">分型</label>
+                <label class="bsp-filter-label"><input type="checkbox" name="overlay-layer" value="bi" onchange="onOverlayChange(this)">笔</label>
+                <label class="bsp-filter-label"><input type="checkbox" name="overlay-layer" value="seg" onchange="onOverlayChange(this)">线段</label>
+                <label class="bsp-filter-label"><input type="checkbox" name="overlay-layer" value="zs" onchange="onOverlayChange(this)">中枢</label>
+                <label class="bsp-filter-label"><input type="checkbox" name="overlay-layer" value="bsp" onchange="onOverlayChange(this)">买卖点</label>
+            </div>
+            <div style="border-top:1px solid #2a2a3e;margin:0 0 14px;"></div>
+
             <div style="margin-bottom:8px;font-size:12px;color:#8892b0;">买卖点类型（可多选）</div>
             <div class="bsp-filter-grid">
                 <label class="bsp-filter-label">

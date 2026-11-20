@@ -180,7 +180,7 @@ def static_checks():
         js.count("_drawPersist();") >= 5 and
         "_drawRestore();   // 恢复上次重启前的画线" in js and
         js.index("function _drawRestore") > js.index("function _drawSerialize"))
-    # 顶栏 btn-seg 也写「线段」，故 S14 必须限定在工具条片段内检查
+    # 「显示设置」抽屉的图层复选框也写「线段」（2026-11-20 从顶栏 btn-seg 搬来），故 S14 必须限定在工具条片段内检查
     _bar_html = html[html.index('id="draw-toolbar"'):html.index('id="range-slider"')]
     # 本段片段：否定断言只对本段生效（别处用虚线不该让画线的断言变红）
     _draw_fn = fn_src(js, "drawDrawings")

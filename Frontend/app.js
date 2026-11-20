@@ -593,13 +593,36 @@
 
         function getShowMa() { return Object.keys(maPeriods).some(function(p){ return maPeriods[p]; }); }
 
-        // 根据保存的设置更新按钮 UI 状态
-        function applyOverlayButtonStates() {
-            document.getElementById("btn-bi").classList.toggle("active", showBi);
-            document.getElementById("btn-fx").classList.toggle("active", showFx);
-            document.getElementById("btn-zs").classList.toggle("active", showZs);
-            document.getElementById("btn-seg").classList.toggle("active", showSeg);
-            document.getElementById("btn-bsp").classList.toggle("active", showBsp);
+        // 图层键 → 状态变量（唯一映射：抽屉复选框的 value、toggleOverlay(type)、
+        // saveOverlaySettings 的键名三处共用同一组 fx / bi / seg / zs / bsp）。
+        // 未知 type 返回 null / false，调用方据此判"这条入口不存在"，不静默改状态。
+        function _overlayGet(type) {
+            if (type === "fx") return showFx;
+            if (type === "bi") return showBi;
+            if (type === "seg") return showSeg;
+            if (type === "zs") return showZs;
+            if (type === "bsp") return showBsp;
+            return null;
+        }
+        function _overlaySet(type, on) {
+            if (type === "fx") showFx = !!on;
+            else if (type === "bi") showBi = !!on;
+            else if (type === "seg") showSeg = !!on;
+            else if (type === "zs") showZs = !!on;
+            else if (type === "bsp") showBsp = !!on;
+            else return false;
+            return true;
+        }
+
+        // 按当前状态回填「显示设置」抽屉里的图层复选框。
+        // 2026-11-20：这 5 个开关原先是顶栏常驻按钮（≈260–310px，窄屏把「设置/刷新」
+        // 挤出横向视野），搬进抽屉后同步目标从 .active 变成 checkbox，函数随之改名
+        // （旧名 applyOverlayButtonStates，已无按钮可同步，留旧名会误导后来者）。
+        function syncOverlayControls() {
+            var cbs = document.querySelectorAll('#bsp-filter-dialog input[name="overlay-layer"]');
+            for (var i = 0; i < cbs.length; i++) {
+                cbs[i].checked = !!_overlayGet(cbs[i].value);
+            }
         }
 
         // 辅助函数：30分钟K线显示时间
@@ -4822,13 +4845,22 @@
             renderBottom();
         }
 
+        // 图层开关的 window 入口（控制台调试 / 往后加 Alt+数字 快捷键的挂点）。
+        // 2026-11-20 起顶栏不再有这 5 颗按钮，UI 侧入口是「显示设置」抽屉的
+        // onOverlayChange；两条入口都只走 _overlaySet + saveOverlaySettings +
+        // syncOverlayControls 这三步，状态仍是单源，不存在第二个写入口。
         window.toggleOverlay = function(type) {
-            if (type === "bi") { showBi = !showBi; document.getElementById("btn-bi").classList.toggle("active", showBi); }
-            else if (type === "fx") { showFx = !showFx; document.getElementById("btn-fx").classList.toggle("active", showFx); }
-            else if (type === "zs") { showZs = !showZs; document.getElementById("btn-zs").classList.toggle("active", showZs); }
-            else if (type === "seg") { showSeg = !showSeg; document.getElementById("btn-seg").classList.toggle("active", showSeg); }
-            else if (type === "bsp") { showBsp = !showBsp; document.getElementById("btn-bsp").classList.toggle("active", showBsp); }
+            if (!_overlaySet(type, !_overlayGet(type))) return;
             saveOverlaySettings();
+            syncOverlayControls();
+            render();
+        };
+
+        // 即时生效：抽屉里的图层复选框变化（范式同 onShowBiIdxChange）
+        window.onOverlayChange = function(cb) {
+            _overlaySet(cb.value, cb.checked);
+            saveOverlaySettings();
+            syncOverlayControls();
             render();
         };
 
@@ -6639,11 +6671,7 @@
                         viewOffset = 0;
                     }
                     // 保持当前开关状态，不重置（切换个股时继承）
-                    document.getElementById("btn-fx").classList.toggle("active", showFx);
-                    document.getElementById("btn-bi").classList.toggle("active", showBi);
-                    document.getElementById("btn-zs").classList.toggle("active", showZs);
-                    document.getElementById("btn-seg").classList.toggle("active", showSeg);
-                    document.getElementById("btn-bsp").classList.toggle("active", showBsp);
+                    syncOverlayControls();
                     document.getElementById("stock-name").textContent = chartData.meta.name;
                     document.getElementById("stock-code").textContent = chartData.meta.symbol;
                     document.title = "缠论分析 - " + chartData.meta.name;
@@ -7712,6 +7740,8 @@
             // 同步笔索引复选框
             var biIdxCb = document.querySelector('#bsp-filter-dialog input[name="show-bi-idx"]');
             if (biIdxCb) biIdxCb.checked = showBiIdx;
+            // 同步图层复选框（分型 / 笔 / 线段 / 中枢 / 买卖点，2026-11-20 从顶栏搬来）
+            syncOverlayControls();
             initCoordSystemRadio();
             document.getElementById("bsp-filter-dialog").classList.add("show");
             document.getElementById("bsp-filter-overlay").classList.add("show");
@@ -11149,7 +11179,7 @@
                     const lastDate = klineDateToInput(chartData.klines[chartData.klines.length - 1].date, currentFreq);
                     document.getElementById("goto-date-input").value = lastDate;
                     updateWeekday(); initialized = true;
-                    applyOverlayButtonStates(); updateRestartBtn(); updateDualBtn();
+                    syncOverlayControls(); updateRestartBtn(); updateDualBtn();
                     render();
                     document.getElementById("loading").classList.add("hidden");
                     document.getElementById("error").classList.add("hidden");
@@ -11246,7 +11276,7 @@
                             adjustViewForSavedPoint();
                             viewOffset = Math.max(0, chartData.klines.length - viewCount);
                             if (chartData.klines.length < viewCount) viewOffset = 0;
-                            applyOverlayButtonStates();
+                            syncOverlayControls();
                             initialized = true;
                             updateRestartBtn();
                             updateDualBtn();
@@ -11315,7 +11345,7 @@
                 updateFreqButtonStates(false);
                 viewCount = VIEW_COUNT;
                 adjustViewForSavedPoint();
-                applyOverlayButtonStates();
+                syncOverlayControls();
                 viewOffset = Math.max(0, chartData.klines.length - viewCount);
                 if (chartData.klines.length < viewCount) viewOffset = 0;
                 initialized = true;
@@ -11393,7 +11423,7 @@
             });
             s.loadOverlaySettings = loadOverlaySettings;
             s.saveOverlaySettings = saveOverlaySettings;
-            s.applyOverlayButtonStates = applyOverlayButtonStates;
+            s.syncOverlayControls = syncOverlayControls;
             s.getShowMa = getShowMa;
             s.saveLastState = saveLastState;
             s.loadLastCodeFreq = loadLastCodeFreq;

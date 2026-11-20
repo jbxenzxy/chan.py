@@ -1189,6 +1189,8 @@ COMPONENTS = [
     #   M-C 合法引用不误报。
     ("comment_ref_guard",
      [sys.executable, os.path.join("Test", "test_comment_ref_guard.py")]),
+    ("overlay_settings_move",
+     [sys.executable, os.path.join("Test", "test_overlay_settings_move.py")]),
     # ── 暂不注册（注册即恒红 / 无拦截力，注册了门禁形同虚设）──────────
     #   Test/repro_n4_cleanup_race.py          N4 未修，且脚本只有 return 0
     #                                          （恒通过、无拦截力，须先改成

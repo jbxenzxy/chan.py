@@ -122,6 +122,12 @@ WINDOW_INLINE_BRIDGES = {
     # 画线工具（同花顺式线段/水平线，2026-11-18）：app.html 工具条/按钮的
     # onclick 内联桥，四个均在 app.html 有引用、app.js 有 window 绑定。
     "toggleDrawToolbar", "setDrawMode", "deleteSelectedDraw", "clearAllDraws",
+    # 图层开关（2026-11-20）：原顶栏「分型 / 笔 / 线段 / 中枢 / 买卖点」5 颗常驻按钮
+    # （≈260–310px，窄屏把「设置 / 刷新」挤出横向视野）收进「显示设置」抽屉，抽屉里的
+    # checkbox 用内联 onchange="onOverlayChange(this)" 引用它 ⇒ 必须挂 window 才调得到。
+    # window.toggleOverlay 保留（在 WINDOW_BASELINE 内，是控制台 / 快捷键挂点），
+    # 两条入口都只走 _overlaySet + saveOverlaySettings + syncOverlayControls。
+    "onOverlayChange",
 }
 # 允许的区块外顶层辅助函数（既有基线即存在的必要工具，非业务组件）
 ALLOWED_STRAY = {"getLayoutParams",
@@ -345,7 +351,7 @@ STATE_LAYER_VARS = [
     "_ctrlPressed",
 ]
 STATE_LAYER_METHODS = [
-    "loadOverlaySettings", "saveOverlaySettings", "applyOverlayButtonStates",
+    "loadOverlaySettings", "saveOverlaySettings", "syncOverlayControls",
     "getShowMa", "saveLastState", "loadLastCodeFreq", "init", "initDefault",
 ]
 
