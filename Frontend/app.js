@@ -8886,59 +8886,56 @@
         // ============================================================
         // 股票名称刷新（原 GBBQ 刷新，现在仅刷新股票名称缓存）
         // ============================================================
+        // ── 刷新股票名称 / 板块文件 / 指数归属 ────────────────────────────
+        //   2026-11-20：页内文字进度（#refresh-status）已删。删因是它**不是**中性
+        //   展示：那段 step 文案是 .header-right 里的 flex 项，实测（无头 Chrome 157，
+        //   1920/1600/1440/1366/1280 五档，喂后端真实文案）——短文案「刷新股票名...」
+        //   一出现，右半段控件整体左移 72–78px；真实长文案
+        //   「下载成分股 3/9: infoharbor_block.dat（自定义板块）」（TdxAPI.refresh_block_files
+        //   的 progress_callback 原文）左移最多 272.6px，并在 ≤1440px 视口把顶栏撑出
+        //   横向滚动条（1440 溢出 89px / 1366 溢出 53px / 1280 溢出 139px）。
+        //   后端 log 已逐步打印（[股名刷新] 步骤N/5 …、[板块刷新] …），页面上不重复。
+        //   页内只剩三个不占布局的信号：图标转圈（进行中）、按钮置灰（防重入）、
+        //   失败走 showAlert（原有）。
+        function _resetRefreshBtn(btn) {
+            btn.disabled = false;
+            btn.classList.remove("active");
+            btn.querySelector("svg").style.animation = "";
+        }
+
         window.refreshStockNames = function() {
             var btn = document.getElementById("btn-refresh");
-            var status = document.getElementById("refresh-status");
             if (btn.disabled) return;
             btn.disabled = true;
             btn.classList.add("active");
             btn.querySelector("svg").style.animation = "spin 1s linear infinite";
-            status.style.display = "inline";
-            status.textContent = "正在刷新股票名称...";
 
             fetch("/api/stocks/refresh", { method: "POST" })
                 .then(function(resp) { return resp.json(); })
                 .then(function(data) {
-                    if (data.status === "already_running") {
-                        pollRefreshStatus(btn, status);
-                    } else {
-                        pollRefreshStatus(btn, status);
-                    }
+                    // started / already_running 一样进轮询：后端守卫保证只有一条真线程，
+                    // 前端只盯 running 旗（原先是两个内容完全相同的分支）。
+                    pollRefreshStatus(btn);
                 })
                 .catch(function(err) {
-                    btn.disabled = false;
-                    btn.classList.remove("active");
-                    btn.querySelector("svg").style.animation = "";
-                    status.style.display = "none";
+                    _resetRefreshBtn(btn);
                     showAlert("启动刷新失败: " + err.message);
                 });
         };
 
-        function pollRefreshStatus(btn, status) {
+        function pollRefreshStatus(btn) {
             fetch("/api/stocks/refresh/read/status")
                 .then(function(resp) { return resp.json(); })
                 .then(function(data) {
                     if (data.running) {
-                        status.textContent = data.step || "刷新中...";
-                        setTimeout(function() { pollRefreshStatus(btn, status); }, 500);
+                        setTimeout(function() { pollRefreshStatus(btn); }, 500);
                     } else {
-                        btn.disabled = false;
-                        btn.classList.remove("active");
-                        btn.querySelector("svg").style.animation = "";
-                        if (data.error) {
-                            status.textContent = "刷新失败";
-                            showAlert("刷新失败: " + data.error);
-                        } else {
-                            status.textContent = "刷新完成";
-                            setTimeout(function() { status.style.display = "none"; }, 2000);
-                        }
+                        _resetRefreshBtn(btn);
+                        if (data.error) showAlert("刷新失败: " + data.error);
                     }
                 })
                 .catch(function() {
-                    btn.disabled = false;
-                    btn.classList.remove("active");
-                    btn.querySelector("svg").style.animation = "";
-                    status.style.display = "none";
+                    _resetRefreshBtn(btn);
                 });
         }
 

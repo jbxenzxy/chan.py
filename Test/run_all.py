@@ -1191,6 +1191,11 @@ COMPONENTS = [
      [sys.executable, os.path.join("Test", "test_comment_ref_guard.py")]),
     ("overlay_settings_move",
      [sys.executable, os.path.join("Test", "test_overlay_settings_move.py")]),
+    # 顶栏左端改造（2026-11-20 第三批）：删「查询」键（回车即查）、刷新键搬到最左端、
+    #   「代码:」去冒号、删刷新过程的页内文字进度。四条互相耦合 —— 尤其「删查询键」
+    #   以「回车路径在」为前提，拆开测就会漏掉"按钮没了、入口也没了"这种组合失效。
+    ("header_topbar_layout",
+     [sys.executable, os.path.join("Test", "test_header_topbar_layout.py")]),
     # ── 暂不注册（注册即恒红 / 无拦截力，注册了门禁形同虚设）──────────
     #   Test/repro_n4_cleanup_race.py          N4 未修，且脚本只有 return 0
     #                                          （恒通过、无拦截力，须先改成

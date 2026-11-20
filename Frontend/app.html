@@ -21,7 +21,16 @@
     <div class="header">
         <div class="header-left">
             <div class="stock-input">
-                <label>代码:</label>
+                <!-- 刷新（2026-11-20 从顶栏右端搬到最左端）：刷的是股票名称 / 板块文件 /
+                     指数归属三份**数据缓存**，不是「重新加载当前K线」——title 写全，
+                     免得这个位置被读成「刷新本图」。进行中只有图标转圈：原先那段
+                     文字进度每 500ms 随 step 变长变短，会把 .header-right 整体横移
+                     72–78px，长文案还会在 ≤1440px 视口撑出横向滚动条。 -->
+                <button class="btn-icon" id="btn-refresh" title="刷新股票名称、板块文件、指数归属" onclick="refreshStockNames()">
+                    <svg viewBox="0 0 24 24"><path d="M17.65 6.35A7.96 7.96 0 0012 4C7.58 4 4.01 7.58 4.01 12S7.58 20 12 20c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"></path></svg>
+                </button>
+                <!-- 标签不带冒号（2026-11-20 用户要求）：中文界面里冒号是多余标点。 -->
+                <label>代码</label>
                 <div class="stock-input-wrap">
                     <!-- 聚焦保留已有代码（2026-10-20 用户反馈）：原先是「聚焦即先 clearInput()
                          再展开历史」，从图表点回输入框时代码被抹掉，
@@ -30,7 +39,9 @@
                     <input type="text" id="stock-code-input" placeholder="如 600519、SZZS、CFFEX.IF2409" onkeydown="onInputKeydown(event)" onfocus="onCodeInputFocus()" oninput="onInputChange()">
                     <span class="stock-input-clear" id="input-clear" onclick="clearInput();document.getElementById('stock-code-input').focus()" style="display:none">×</span>
                 </div>
-                <button onclick="loadStock()">查询</button>
+                <!-- 「查询」按钮已删（2026-11-20）：输入框里回车即 loadStock
+                     （onInputKeydown 的 Enter 分支），按钮是重复入口却占 ≈51px。
+                     删它的**前提**是回车路径在——test_header_topbar_layout ⑦ 钉着。 -->
                 <div class="stock-history" id="stock-history"></div>
             </div>
             <span class="stock-name" id="stock-name">--</span>
@@ -110,10 +121,11 @@
             <button class="btn-icon" id="btn-settings" title="设置" onclick="openBspSettings()">
                 <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.49.49 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 00-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1115.6 12 3.611 3.611 0 0112 15.6z"></path></svg>
             </button>
-            <button class="btn-icon" id="btn-refresh" title="刷新股票名称、板块文件、指数归属" onclick="refreshStockNames()">
-                <svg viewBox="0 0 24 24"><path d="M17.65 6.35A7.96 7.96 0 0012 4C7.58 4 4.01 7.58 4.01 12S7.58 20 12 20c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"></path></svg>
-            </button>
-            <span id="refresh-status" style="color:#a8b2d1;font-size:11px;margin-left:4px;display:none;"></span>
+            <!-- 刷新按钮与它的文字进度（2026-11-20 一并搬走 / 删掉）：
+                 #btn-refresh 挪到顶栏最左端「代码」之前（见 .stock-input 首个子节点）；
+                 #refresh-status 那段 step 文案直接删除 —— 它夹在 flex 行里，
+                 每变一次文案就把右半段控件横移一次，后端 log 已逐步骤打印
+                 （[股名刷新] 步骤N/5 …），页面上不再重复一遍。 -->
         </div>
     </div>
     <div id="chart-container">

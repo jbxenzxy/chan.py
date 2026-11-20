@@ -51,12 +51,10 @@
             user-select: none; line-height: 1; z-index: 1;
         }
         .stock-input-clear:hover { color: #e94560; }
-        .stock-input button {
-            padding: 4px 12px; font-size: 12px;
-            background: #1a1a2e; border: 1px solid #0f3460; border-radius: 4px;
-            color: #a8b2d1; cursor: pointer; transition: all 0.2s;
-        }
-        .stock-input button:hover { background: #0f3460; color: #e0e0e0; }
+        /* 这里原有一条 `.stock-input button { padding:4px 12px; ... }`，2026-11-20 随
+           「查询」按钮下线一并删除（删后 .stock-input 内唯一的 button 是 .btn-icon 刷新键）。
+           别再按 `.stock-input button` 写通用规则：选择器权重 0,1,1 会压过 .btn-icon 的
+           `padding:0 / width:28px`，把方形图标键撑成 40px 宽的扁条。 */
         .stock-history {
             /* 2026-09-29 修复：.header 为窄屏横向滚动设了 overflow，
                会裁掉内部 absolute 子元素，导致搜索历史/搜索结果下拉弹不出。
