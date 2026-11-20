@@ -1285,8 +1285,11 @@
 
         // 当前渲染目标用的槽位数组：双窗下窗用 _subBottomSlots，其余（单窗 / 双窗上窗）
         // 用 _bottomSlots。_renderChart 会在渲染下窗时把 chartData 换成 dualSubData。
-        // 两融余额是全市场日频数据，只在上证指数日K页提供 —— 与「两融余额」按钮
-        // 同一判据（AmoPanel），不另写一份条件，避免两处可用性日后漂移。
+        // 底部槽位里的「两融余额」类MACD：仍只在上证指数日K页可选（本次未触碰）。
+        // 别与右上角「两融余额」按钮混为一谈 —— 按钮背后的面板只吃「视口日期区间」的
+        // 全市场聚合序列，2026-11-20 已取消灰化（任何标的 / 周期都能开）；槽位是逐 bar
+        // 对齐到当前 K 线的叠加指标，判据保持原样。两者已不共用同一入口，
+        // 不要再把按钮的可用性挂回 amoIsAvailable()。
         function marginIndicatorAvailable() {
             return amoIsAvailable();
         }
@@ -5668,9 +5671,9 @@
             const highlightFreq = (isDualWindow && activeDualWindow === 'sub') ? dualSubFreq : currentFreq;
             const activeBtn = document.getElementById('btn-' + highlightFreq);
             if (activeBtn) activeBtn.classList.add('active');
-            // 市场量能按钮可用性（仅上证指数日K）
-            updateAmoButtonState();
-            updateMarginButtonState();
+            // 2026-11-20：原先这里调 updateAmoButtonState / updateMarginButtonState
+            // 按「是否上证指数日K」灰化两个按钮，并顺手关闭已打开的面板。灰化已取消，
+            // 两个函数一并删除 —— 面板的取数口径与接口一字未改。
         }
 
         window.switchFreq = function(freq) {
@@ -9603,33 +9606,22 @@
 
 // ══════════════════════════════════════════════════════════════════
         // [COMPONENT] AmoPanel —— 市场量能面板（右上角「市场量能」按钮）
-        // 数据源仅 TDX 本地指数日线（sh000001 + sz399106 成交额相加），无兜底
-        // 仅上证指数(sh000001)日K图可用，其它周期/标的按钮灰化
+        // 数据源仅 TDX 本地指数日线（sh000001 + sz399106 成交额相加），无兜底。
+        // 2026-11-20：取消「仅上证指数日K可用」的灰化。面板取的是全市场日频聚合
+        // 序列，只需视口日期区间（getViewportDateRange 只读 k.date，对任何标的/
+        // 任何周期都成立），所以股票 / ETF / 期指上一律可点；数据口径与 /api/amo
+        // 接口一字未改，也没有为「当前标的」另取一份数据。
 // ══════════════════════════════════════════════════════════════════
 
+        // 仍保留：底部槽位「市场量能/两融余额」类MACD 的可用性判据（只认指数日K），
+        // 由 marginIndicatorAvailable 复用。**按钮已不再走这个判据**。
         function amoIsAvailable() {
             return !!(chartData && chartData.meta
                 && chartData.meta.symbol === 'sh000001'
                 && currentFreq === 'd');
         }
 
-        function updateAmoButtonState() {
-            var btn = document.getElementById("btn-amo");
-            if (!btn) return;
-            var available = amoIsAvailable();
-            btn.disabled = !available;
-            btn.title = available ? "市场量能" : "市场量能（仅上证指数日K可用）";
-            // 面板打开时若变为不可用（切股票/切周期）→ 关闭面板释放数据
-            if (!available) {
-                var panel = document.getElementById("amo-panel");
-                if (panel && panel.classList.contains("show")) {
-                    closeAmoPanel();
-                }
-            }
-        }
-
         window.toggleAmoPanel = function() {
-            if (!amoIsAvailable()) return;
             var panel = document.getElementById("amo-panel");
             if (panel.classList.contains("show")) {
                 closeAmoPanel();
@@ -9835,32 +9827,12 @@
         // 数据源：eltdx F10「大盘两融日序列汇总」，按 N001 日期把沪深北三市
         // N005（融资 + 融券余额，元）分行求和 → 全 A 股合计，对外换算为亿元。
         // 与「市场量能」面板互斥（共用同一浮层位置，打开一个即关闭另一个）。
-        // 仅上证指数(sh000001)日K图可用，其它周期/标的按钮灰化（与 AmoPanel 同口径）。
+        // 2026-11-20：与 AmoPanel 同步取消「仅上证指数日K可用」的灰化 —— 序列本身是
+        // 全 A 股日频聚合，只要视口日期区间；股票 / ETF / 期指上都能打开。
+        // F10 取数口径与 /api/margin 接口一字未改。
 // ══════════════════════════════════════════════════════════════════
 
-        function marginIsAvailable() {
-            // 与「市场量能」共用同一可用性判据：两融余额面板只在指数日K页提供。
-            // 直接调 AmoPanel 的函数（单一 SSOT），避免两个按钮条件日后各自漂移。
-            return amoIsAvailable();
-        }
-
-        function updateMarginButtonState() {
-            var btn = document.getElementById("btn-margin");
-            if (!btn) return;
-            var available = marginIsAvailable();
-            btn.disabled = !available;
-            btn.title = available ? "两融余额（全A股沪深北三市）" : "两融余额（仅上证指数日K可用）";
-            // 面板打开时若变为不可用（切股票/切周期）→ 关闭面板释放数据
-            if (!available) {
-                var panel = document.getElementById("margin-panel");
-                if (panel && panel.classList.contains("show")) {
-                    closeMarginPanel();
-                }
-            }
-        }
-
         window.toggleMarginPanel = function() {
-            if (!marginIsAvailable()) return;
             var panel = document.getElementById("margin-panel");
             if (panel.classList.contains("show")) {
                 closeMarginPanel();
