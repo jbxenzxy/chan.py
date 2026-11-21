@@ -25,6 +25,9 @@ v2 追加：两融余额按钮的可用性与「市场量能」一致（仅上�
   ⑪ 空序列 → 空态文案，不画曲线
   ⑫ 真跑两个按钮的点击路径：上证指数 / 个股 / ETF / 期指四场景都要能开面板
      并各取一次数，且全程不改按钮 disabled / title
+  ⑬ 切图后按需重取（2026-11-21 P3-1 闭环）：refreshOpenDataPanels 定义恰 1 处、
+     调用点恰 3 处且各紧跟装载收尾语句（其上方 45 行内必有视口重算）；真函数
+     行为三态 —— 关着不预取 / 开哪个取哪个 / 两个都开各取 1 次
 
 运行：python Test/test_margin_panel.py
 """
@@ -317,6 +320,36 @@ SCENARIOS.forEach(function(s){
 console.log(JSON.stringify(out));
 """
 
+PANEL_REFRESH_HARNESS = r"""
+var show = {amo: false, margin: false};
+var calls = {amo: 0, margin: 0};
+function mkPanel(which){
+    return {
+        classList: {
+            add: function(){ show[which] = true; },
+            remove: function(){ show[which] = false; },
+            contains: function(){ return show[which]; }
+        }
+    };
+}
+var els = {
+    "amo-panel": mkPanel("amo"), "margin-panel": mkPanel("margin")
+};
+var document = {getElementById: function(id){ return els[id] || null; }};
+function loadAmoData(){ calls.amo++; }
+function loadMarginData(){ calls.margin++; }
+%FUNCS%
+var SCEN = %SCENARIOS%;
+var out = [];
+SCEN.forEach(function(s){
+    show.amo = s.amo; show.margin = s.margin;
+    calls.amo = 0; calls.margin = 0;
+    refreshOpenDataPanels();
+    out.push({tag: s.tag, amoFetches: calls.amo, marginFetches: calls.margin});
+});
+console.log(JSON.stringify(out));
+"""
+
 
 def _run_node(harness, funcs, payload, win_funcs=()):
     """把真函数注入 node harness，跑一次并返回 JSON 结果。
@@ -454,11 +487,72 @@ def test_button_always_enabled():
               str(r))
 
 
+def test_p31_refresh_hook():
+    """⑬ 切图后按需重取打开着的数据面板（2026-11-21 P3-1 闭环）
+
+    旧自动关闭逻辑寄生在被删的 updateAmoButtonState/updateMarginButtonState 里
+    （由 updateFreqButtonStates 调用），取消灰化时一并消失 —— 键盘 Enter 切票后
+    面板保持打开且显示上一视口区间的陈旧序列。修复 = 图表装载成功分支
+    （loadStock 股票 / 期货单窗 init / 期货双窗 init，共 3 处）调用
+    refreshOpenDataPanels：面板开着就按新视口重取，关着不预取。
+    """
+    src = read(APP_JS)
+    lines = src.split("\n")
+    n_def = sum(1 for ln in lines if "function refreshOpenDataPanels(" in ln)
+    check(n_def == 1, "⑬ refreshOpenDataPanels 定义恰 1 处", str(n_def))
+    marks = [i for i, ln in enumerate(lines)
+             if "refreshOpenDataPanels(); // [P3-1]" in ln]
+    check(len(marks) == 3, "⑬ 调用点恰 3 处（标记注释 [P3-1]）", str(marks))
+
+    # 每个调用点的上一行必须是各自装载路径的收尾语句（防被挪到装载完成之前）
+    def _adjacent(prev_pat):
+        return [i for i in range(1, len(lines))
+                if prev_pat in lines[i - 1]
+                and "refreshOpenDataPanels(); // [P3-1]" in lines[i]]
+
+    check(len(_adjacent("syncOverlayControls();")) == 1,
+          "⑬ 股票成功分支：紧跟 syncOverlayControls（视口已重算）之后")
+    check(len(_adjacent("generateStats();")) == 1,
+          "⑬ 期货单窗 init：紧跟 generateStats（装载收尾）之后")
+    check(len(_adjacent("render();")) == 1,
+          "⑬ 期货双窗 init：紧跟 render（装载收尾）之后")
+
+    # 每个调用点上方 45 行内必须有视口重算：证明它挂在「数据与视口都已就位」
+    # 之后，而不是装载流程中段
+    for i in marks:
+        above = "\n".join(lines[max(0, i - 45):i])
+        check("viewOffset = Math.max(0," in above,
+              "⑬ 第 %d 行调用点上方 45 行内有视口重算" % (i + 1))
+
+    scenarios = [
+        {"tag": "both_closed", "amo": False, "margin": False},
+        {"tag": "amo_open", "amo": True, "margin": False},
+        {"tag": "both_open", "amo": True, "margin": True},
+    ]
+    out, err = _run_node(PANEL_REFRESH_HARNESS, ("refreshOpenDataPanels",),
+                         {"scenarios": scenarios})
+    if err:
+        check(False, "⑬ node 重取 harness 执行失败", err)
+        return
+    by = {r["tag"]: r for r in out}
+    check(len(by) == 3, "⑬ 3 个开合场景都跑到", str(out))
+    check(by["both_closed"]["amoFetches"] == 0
+          and by["both_closed"]["marginFetches"] == 0,
+          "⑬ 面板都关着：重取钩子不预取（0 次取数）", str(by["both_closed"]))
+    check(by["amo_open"]["amoFetches"] == 1
+          and by["amo_open"]["marginFetches"] == 0,
+          "⑬ 只开市场量能：只重取市场量能（1 次）", str(by["amo_open"]))
+    check(by["both_open"]["amoFetches"] == 1
+          and by["both_open"]["marginFetches"] == 1,
+          "⑬ 两个都开着：各重取 1 次", str(by["both_open"]))
+
+
 def main():
     print("===== 两融余额面板展示契约护栏 =====")
     test_static()
     test_real_render()
     test_button_always_enabled()
+    test_p31_refresh_hook()
     print(f"===== 合计 {len(_FAILURES)} 项失败 =====")
     if _FAILURES:
         for f in _FAILURES:

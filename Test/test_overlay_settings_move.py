@@ -26,6 +26,10 @@
      · syncOverlayControls 按状态回填，且**故意预置错误 checkbox 状态**证明它
        真写而不是恒等；
      · toggleOverlay 仍可翻转并同步复选框；
+     · onOverlayChange 的复选框回填本身也被断言（fx 选中 / 关中枢未选中，
+       2026-11-21 P3-2 补：漏掉它，入口漏调 syncOverlayControls 的变异不红）；
+     · B4 回填前先把 bi 关掉制造 showBi/showBiIdx 分离态 —— 两者同为 true 时
+       「biidx 被错映射到 showBi」的变异看不出差异（2026-11-21 P3-2 补）；
      · 两个负向：未知 type 不改状态、未知 value 不会把复选框点亮。
 
 为什么必须有 ④：删掉 DOM 节点后，`value` 写错或不写 checked 都不会报错，
@@ -305,6 +309,7 @@ var out = {};
 mkCbs();
 window.onOverlayChange({ value: "fx", checked: true });
 out.afterFx = { showFx: showFx, stored: (_stored() || {}).showFx,
+                checked: _cbs[idxOf("fx")].checked,
                 hasKey: _stored() !== null, render: _renderCalls };
 
 mkCbs();
@@ -323,6 +328,10 @@ out.afterBiIdx = {
     render: _renderCalls
 };
 
+mkCbs();
+// [P3-2] B4 回填前先把 bi 关掉：制造 showBi=false / showBiIdx=true 的分离态。
+// 两者同为 true 时，_overlayGet 把 biidx 错映射到 showBi 的变异看不出差异。
+window.onOverlayChange({ value: "bi", checked: false });
 mkCbs();
 syncOverlayControls();
 out.syncAll = [];
@@ -386,10 +395,14 @@ def behavior_checks():
     rec("B1-2", "onOverlayChange 真的落了盘",
         a["hasKey"] is True and a["stored"] is True, str(a))
     rec("B1-3", "onOverlayChange 真的重绘（render 调用 1 次）", a["render"] == 1, str(a))
+    rec("B1-4", "onOverlayChange 也回填了复选框（fx 同步为选中）",
+        a["checked"] is True, str(a))
 
     z = r["afterZsOff"]
     rec("B2-1", "关掉中枢后状态为 false", z["showZs"] is False, str(z))
     rec("B2-2", "关掉中枢后落盘同步为 false", z["stored"] is False, str(z))
+    rec("B2-3", "关掉中枢后复选框同步为未选中（onOverlayChange 内建回填）",
+        z["checked"] is False, str(z))
 
     # 笔编号：value=biidx 与持久化键 showBiIdx 不同名，映射错了就静默失效
     b = r["afterBiIdx"]
@@ -401,6 +414,10 @@ def behavior_checks():
     rec("B3-4", "biidx 变化也触发重绘", b["render"] >= 1, str(b))
 
     st = r["stateNow"]
+    # [P3-2] 前提自证：没有这个分离态，「biidx 错映射到 showBi」类变异在
+    # B4 回填上不可见（B4-3 对 biidx 的断言就退化成恒真）。
+    rec("B4-0", "前提：showBi=false / showBiIdx=true 已分离",
+        st["bi"] is False and st["biidx"] is True, str(st))
     by_val = dict((x["value"], x["checked"]) for x in r["syncAll"])
     for _i, _k in enumerate(LAYER_ORDER):
         rec("B4-%d" % (_i + 1), "syncOverlayControls 回填 %s 与状态一致" % _k,

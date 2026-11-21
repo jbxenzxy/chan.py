@@ -73,6 +73,12 @@ SCAN_EXT = (".py", ".md", ".js", ".html", ".json", ".txt", ".yml", ".yaml", ".cf
 SKIP_DIR = {".git", ".venv", "__pycache__", ".idea", "Image", "node_modules",
             ".pytest_cache", "State", "Trading/State"}
 
+# 运行时产物排除（2026-11-21 评审 P3-3）：门禁每次结束都会重写 Test/report.json
+# （.gitignore 内），其 output_tail 里带着本组件自己的通过文案 —— 「[1d] 旧名
+# check_nested_diver 已不再是类属性」「[1e] 旧名 check_nested_divergence …」。
+# 不排除的话，下一轮 [3a] 全仓扫描必命中它，恒红（两条独立树均复现）。
+SKIP_FILES = {"Test/report.json"}
+
 _passed = 0
 _failed = 0
 
@@ -146,6 +152,8 @@ for r, d, fs in os.walk(ROOT):
         p = os.path.join(r, f)
         if os.path.abspath(p) == THIS:
             continue  # 本文件必然含禁用词（它就是禁则的定义处），跳过自身
+        if rel in SKIP_FILES:
+            continue  # 运行时产物（见 SKIP_FILES 注）：内容随门禁运行变化，不作扫描对象
         scanned.append(rel)
         t = io.open(p, encoding="utf-8", errors="ignore").read()
         n_short = len(PAT_SHORT.findall(t))

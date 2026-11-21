@@ -6683,6 +6683,7 @@
                     }
                     // 保持当前开关状态，不重置（切换个股时继承）
                     syncOverlayControls();
+                    refreshOpenDataPanels(); // [P3-1] 视口已按新数据重算，开着的数据面板按需重取
                     document.getElementById("stock-name").textContent = chartData.meta.name;
                     document.getElementById("stock-code").textContent = chartData.meta.symbol;
                     document.title = "缠论分析 - " + chartData.meta.name;
@@ -9861,6 +9862,21 @@
             closeMarginPanel();
         });
 
+        // [P3-1 闭环 2026-11-21] 切图后按需重取打开着的数据面板。面板数据 =
+        // 视口日期区间的全市场日频聚合（getViewportDateRange 只读 k.date），
+        // 图表重新装载（切股票 / 切期货合约）后视口区间可能变化 —— 面板若开着
+        // 就重取一次，保证与当前视口一致；关着则什么都不做（不预取）。
+        // 调用点恰 3 处（loadStock 股票成功分支 / 期货单窗 init 成功 / 期货双窗
+        // init 成功，均带 [P3-1] 标记），数量与位置由 test_margin_panel ⑬ 钉住；
+        // 实时帧处理器（handleRealtimeDataSingle/Dual）刻意不挂 —— 那是逐拍推送，
+        // 挂上去会每拍重取。
+        function refreshOpenDataPanels() {
+            var ap = document.getElementById("amo-panel");
+            if (ap && ap.classList.contains("show")) loadAmoData();
+            var mp = document.getElementById("margin-panel");
+            if (mp && mp.classList.contains("show")) loadMarginData();
+        }
+
         function loadMarginData() {
             // 视口日期区间与市场量能同源（getViewportDateRange）
             var range = getViewportDateRange();
@@ -10149,6 +10165,7 @@
                         resizeCanvas();
                         render();
                         generateStats();
+                        refreshOpenDataPanels(); // [P3-1] 期货单窗 init 装载完成，同上
                     } catch(e) {
                         console.error('初始数据解析失败:', e);
                         document.getElementById("loading").classList.add("hidden");
@@ -10313,6 +10330,7 @@
                         document.getElementById("goto-date-input").disabled = false;
                         updateFreqButtonStates(true);
                         render();
+                        refreshOpenDataPanels(); // [P3-1] 期货双窗 init 装载完成，同上
                     } catch (e) {
                         console.error('双窗口init解析失败:', e);
                         document.getElementById("goto-date-input").disabled = false;
