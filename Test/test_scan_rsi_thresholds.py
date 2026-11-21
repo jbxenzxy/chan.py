@@ -744,11 +744,20 @@ def part4():
           "（用户须知道这一对值同时管显示与扫描）",
           "RSI 阈值（超买 / 超卖，K线图与股票扫描共用）" in html
           and "<span>留空 = 默认</span>" in html)
+    _rsi_under_at = html.index('id="rsi-threshold-under"')
+    _aside_at = html.index('</aside>')
     check("④ app.html：两个输入框落在**设置抽屉**内（在流通市值过滤之后、抽屉收尾 "
           "</aside> 之前）",
           html.index('id="scan-min-float-mc"') < html.index('id="rsi-threshold-over"')
-          < html.index('id="rsi-threshold-under"')
-          < html.index('</aside>'))
+          < _rsi_under_at < _aside_at)
+    # 补回被删分隔线的判别力（2026-11-21 P3-5）：原判据是「RSI 输入框在
+    # `<div style="border-top:1px solid #2a2a3e;margin:16px 0 12px;"></div>` 之前」，
+    # 分隔线随「其他」节一起删掉后只剩「在 </aside> 之前」—— 那等价于「在抽屉内」，
+    # 挡不住把输入框挪到抽屉中段（后面又接一节）。补一条：输入框之后直到抽屉收尾
+    # 不得再出现任何 `<div`（= 新的节标题 / 节容器）。
+    check("④ app.html：RSI 输入框之后到抽屉收尾之间没有新的节标题（补回分隔线判别力）",
+          "<div" not in html[_rsi_under_at:_aside_at],
+          "尾部片段 = %r" % html[_rsi_under_at:_aside_at][:160])
 
     node = shutil.which("node")
     if not node:

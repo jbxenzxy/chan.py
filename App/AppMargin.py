@@ -15,7 +15,8 @@ App/AppMargin.py —— 两融余额功能域
   - 三市标记：012001 沪 / 012002 深 / 012046 北。上游文档另称有 total
     汇总行，实测 0 条；本模块只认上述三个标记并**按日期求和**，即便日后
     服务端补了 total 也不会被重复计入。
-  - 北交所自 2023-02-13 才有数据，更早的日期只有沪深两行，按「有则加」处理。
+  - 北交所自 2023-02-13 才有数据，更早的日期只有沪深两行；**缺失的市场不补零**，
+    按下面那条完整性规则整日判（旧口径「有则加」已于 2026-11-21 废弃）。
   - 三市均为 T+1 存量（次一交易日开市前披露），无盘中实时值。
   - **末点完整性**（2026-11-21）：披露是分市场陆续补的，收盘次日常见「只有沪市
     一行」的残缺日（实测 2026-11-20 仅 012001）。按日求和的残缺日会得到约一半的
@@ -103,7 +104,8 @@ def _parse_rows(rows):
     - 同一 (日期, 市场) 重复行只保留最后一条，避免重复累加；
     - 坏值（None / 字符串 / 负数 / NaN）、未知市场标记只丢该行；
     - 缺失的市场不补零 —— 当日市场集合若是「上一个已接纳日」的严格子集，判为
-      尚未披露完，整日剔除；集合变大（北交所 2023-02-13 上线）正常接纳。
+      尚未披露完，整日剔除；集合变大（北交所 2023-02-13 上线）正常接纳；
+    - 剔除留痕按**连续段**汇总（每段一条 warning，含首尾日期与天数），不按日刷。
     """
     per_market = {}
     for row in rows:
@@ -131,16 +133,30 @@ def _parse_rows(rows):
     # 接纳。剔除后序列上限 = 最新一个完整发布日，前端无需再裁剪。
     complete = []
     prev_tags = None
+    # 剔除段缓冲：上游**永久**停发某市（改标记 / 停更）会让此后每个交易日都命中
+    # 判据 —— 若逐日 warning，一次 /api/margin/read 就打 N 条、N 随天数增长，而
+    # 面板是跟着视口反复重取的 ⇒ 日志线性膨胀。故按「连续段」汇总，每段一条；
+    # 正常情形（尾部若干日陆续补）只有一段，即 1 条。留痕不可省：永久缺市时曲线
+    # 静默截断，光看末点日期发现不了，这条 warning 是唯一线索。
+    gap = []
+
+    def _flush_gap():
+        if not gap:
+            return
+        log.warning("[margin] 残缺日剔除 %d 天（%s ~ %s）：市场集合 %s 为上一完整日 %s 的严格子集",
+                    len(gap), gap[0][0], gap[-1][0],
+                    sorted(gap[0][1]), sorted(gap[0][2]))
+        del gap[:]
+
     for date_raw in sorted(per_day):
         tags = frozenset(per_day[date_raw])
         if prev_tags is not None and tags < prev_tags:
-            # 留痕：永久缺某市（上游停发 / 改标记）会让此后每天都命中，曲线静默
-            # 截断，光看末点日期发现不了 —— 这条 warning 是唯一线索。
-            log.warning("[margin] 残缺日剔除 %s：市场集合 %s 是上一完整日 %s 的严格子集",
-                        date_raw, sorted(tags), sorted(prev_tags))
+            gap.append((date_raw, tags, prev_tags))
             continue
+        _flush_gap()
         complete.append((date_raw, sum(per_day[date_raw].values())))
         prev_tags = tags
+    _flush_gap()
     return complete
 
 

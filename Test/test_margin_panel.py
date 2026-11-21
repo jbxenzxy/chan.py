@@ -27,12 +27,16 @@ v3（2026-11-21）：可用性改由「是否期货 + 当前周期」决定（�
   ⑨ 画布画了曲线 + 面积 + 峰值点 + 3 个日期标签（与市场量能同形态）
   ⑩ 脏数据（amounts / RZYE / financing_balance）一个都不上屏
   ⑪ 空序列 → 空态文案，不画曲线
-  ⑫ 真跑可用性状态机：7 个场景（股票日K / 指数日K / ETF日K / 股票30分 /
-     股票周K / 期货1分 / 期货30分）的 disabled + title + 点击行为逐一对照，
-     另加「开着面板切到灰化态 → 面板立即关闭」
+  ⑫ 真跑可用性状态机：8 个场景（股票日K / 指数日K / ETF日K / 股票30分 /
+     股票周K / 期货1分 / 期货30分 / **期货页扫描中**）的 disabled + title +
+     点击行为逐一对照，另加「开着面板切到灰化态 → 面板立即关闭」。第 8 个场景
+     钉住「扫描中切到期货页按钮仍可点（= 中断入口）」这条口径
   ⑬ 切图后按需重取（2026-11-21 P3-1 闭环）：refreshOpenDataPanels 定义恰 1 处、
-     调用点恰 3 处且各紧跟装载收尾语句（其上方 45 行内必有视口重算）；真函数
-     行为三态 —— 关着不预取 / 开哪个取哪个 / 两个都开各取 1 次
+     调用点**恰 1 处**（只挂 loadStock 股票成功分支，紧跟 syncOverlayControls，
+     其上方 45 行内必有视口重算）；期货装载路径**刻意不挂** —— 同路径的
+     updateFreqButtonStates(true) 已把两个面板关掉，挂上必为 no-op（2026-11-21
+     探针实测 0/0 取数，对照组 1/1）。真函数行为三态 —— 关着不预取 / 开哪个
+     取哪个 / 两个都开各取 1 次
   ⑭ 末点完整性（2026-11-21）：F10 的 T+1 数据分市场陆续补，残缺日（市场集合是
      上一个已接纳日的严格子集，如 2026-11-20 只有沪市）必须整日剔除，曲线止于
      最新完整日；北交所上线导致的集合变大不算残缺
@@ -202,10 +206,11 @@ def test_static():
     check(all(sync_fn.count('"%s"' % b) == 1
               for b in ("btn-scan", "btn-amo", "btn-margin")),
           "⑫ 三个按钮在写入点里各出现 1 次（无遗漏）", sync_fn[:200])
-    check('title = av.scan ? "扫描股票买卖点"' in sync_fn
-          and 'title = av.panels ? "市场量能" : "市场量能（仅股票日K可用）"' in sync_fn
+    check('title = av.panels ? "市场量能" : "市场量能（仅股票日K可用）"' in sync_fn
+          and 'title = _scanRunning ? "扫描股票买卖点（正在扫描，点击中断）"' in sync_fn
           and '仅股票日K可用' in sync_fn,
-          "⑫ 灰化文案写清原因（扫描=仅股票页面 / 面板=仅股票日K）")
+          "⑫ 灰化文案写清原因（扫描=仅股票页面 / 面板=仅股票日K）；扫描中的 title "
+          "改说「点击中断」，与此时按钮仍可点击的事实一致")
     # 两个调用点：换图换周期（updateFreqButtonStates）+ 扫描收口（_setScanRunning）
     ufs = _extract_fn(js, "updateFreqButtonStates") or ""
     check("syncDataBtnState(isFutures);" in ufs,
@@ -317,6 +322,12 @@ var out = {rows: [], autoClose: {}};
 SCENARIOS.forEach(function(s){
     chartData = s.chartData;
     currentFreq = s.freq;
+    _scanRunning = !!s.scanRunning;
+    // 场景间必须重置按钮：`if (!_scanRunning)` 守卫命中时本函数**不写** disabled，
+    // 不重置就会把上一场景的灰化状态带进来（假失败）。
+    els["btn-scan"].disabled = false; els["btn-scan"].title = "";
+    els["btn-amo"].disabled = false; els["btn-amo"].title = "";
+    els["btn-margin"].disabled = false; els["btn-margin"].title = "";
     show.amo = false; show.margin = false; calls.amo = 0; calls.margin = 0;
     syncDataBtnState(s.futures);
     var r = {tag: s.tag,
@@ -478,8 +489,10 @@ def test_button_availability():
     """⑫ 三按钮可用性状态机（2026-11-21 用户口径）
 
     ⑴ 期货页三个按钮全灰；⑵ 股票页仅日K 放行「两融余额」「市场量能」；
-    ⑶ 股票页「股票扫描」恒可用、与周期无关。判据不认标的（个股 / 指数 / ETF 同）。
-    真函数 + DOM 桩实跑：disabled / title / 点击行为 / 切灰化关面板。
+    ⑶ 股票页「股票扫描」恒可用、与周期无关；⑷ 扫描**进行中**切到期货页时扫描
+    按钮不灰（守卫 `if (!_scanRunning)` 不抢），保留中断入口。判据不认标的
+    （个股 / 指数 / ETF 同）。真函数 + DOM 桩实跑：disabled / title / 点击行为 /
+    切灰化关面板。
     """
     def cd(sym, market=None, dates=("2026-11-18", "2026-11-19", "2026-11-20")):
         meta = {"symbol": sym}
@@ -498,6 +511,11 @@ def test_button_availability():
          "chartData": cd("IF2312", "futures", fut_dates)},
         {"tag": "fut_30m", "freq": "30m", "futures": True,
          "chartData": cd("IF2312", "futures", fut_dates)},
+        # 扫描中切到期货页（2026-11-21 用户问：启动扫描后能不能切页）：
+        # syncDataBtnState 的 `if (!_scanRunning)` 守卫此时**不抢**按钮，
+        # 按钮保持可点 = 保留中断入口。
+        {"tag": "fut_1m_scanning", "freq": "1m", "futures": True,
+         "scanRunning": True, "chartData": cd("IF2312", "futures", fut_dates)},
     ]
     # True = 灰化不可用
     EXPECT = {
@@ -508,6 +526,7 @@ def test_button_availability():
         "stock_w":   {"scan": False, "amo": True,  "margin": True},
         "fut_1m":    {"scan": True,  "amo": True,  "margin": True},
         "fut_30m":   {"scan": True,  "amo": True,  "margin": True},
+        "fut_1m_scanning": {"scan": False, "amo": True, "margin": True},
     }
     out, err = _run_node(BUTTON_HARNESS, ("dataBtnAvailability", "syncDataBtnState"),
                          {"scenarios": scenarios},
@@ -516,7 +535,7 @@ def test_button_availability():
         check(False, "⑫ node 可用性状态机 harness 执行失败", err)
         return
     rows = {r["tag"]: r for r in out["rows"]}
-    check(len(rows) == len(scenarios), "⑫ 7 个场景都跑到", str(list(rows)))
+    check(len(rows) == len(scenarios), "⑫ %d 个场景都跑到" % len(scenarios), str(list(rows)))
 
     for s in scenarios:
         tag, cn = s["tag"], s["tag"]
@@ -548,6 +567,18 @@ def test_button_availability():
         check(amo_ok and margin_ok, f"⑫ {cn}：点击行为与可用性一致（灰化点不开）",
               str(r))
 
+    # 扫描中切到期货页（2026-11-21 用户问「启动扫描后能不能切到期货页」）：
+    # 能切 —— 扫描是独立面板 + 后端任务，不依赖当前图；此时 syncDataBtnState 的
+    # `if (!_scanRunning)` 守卫不抢按钮，按钮保持可点（= 保留中断入口），
+    # title 也从「仅股票页面可用」改为「点击中断」，避免与亮着的按钮自相矛盾。
+    # 扫描一结束 _setScanRunning(false) → syncDataBtnState() 会把按钮按期货页灰化。
+    sc = rows["fut_1m_scanning"]
+    check(sc["scan"] is False and "点击中断" in sc["scanTitle"],
+          "⑫ 扫描中切到期货页：扫描按钮仍可点（= 中断入口），title 说明点击语义",
+          str(sc))
+    check(rows["fut_1m"]["scan"] is True,
+          "⑫ 对照：同一期货页、非扫描态 → 扫描按钮灰化", str(rows["fut_1m"]))
+
     ac = out["autoClose"]
     check(ac["amoOpened"] is True and ac["amoClosed"] is True,
           "⑫ 开着「市场量能」切到灰化态（期货）→ 面板立即关闭", str(ac))
@@ -558,9 +589,13 @@ def test_p31_refresh_hook():
 
     旧自动关闭逻辑寄生在被删的 updateAmoButtonState/updateMarginButtonState 里
     （由 updateFreqButtonStates 调用），取消灰化时一并消失 —— 键盘 Enter 切票后
-    面板保持打开且显示上一视口区间的陈旧序列。修复 = 图表装载成功分支
-    （loadStock 股票 / 期货单窗 init / 期货双窗 init，共 3 处）调用
+    面板保持打开且显示上一视口区间的陈旧序列。修复 = 图表装载成功分支调用
     refreshOpenDataPanels：面板开着就按新视口重取，关着不预取。
+
+    **只挂 1 处**（loadStock 股票成功分支）：期货装载路径（单窗 / 双窗 init）的
+    updateFreqButtonStates(true) → syncDataBtnState → av.panels=false 已经把两个
+    面板关掉，那两处调用恒为 no-op（2026-11-21 探针 0/0 vs 对照 1/1）。原护栏
+    写「调用点恰 3 处」，等于把死代码钉成契约，已一并收窄为 1 处。
     """
     src = read(APP_JS)
     lines = src.split("\n")
@@ -568,9 +603,9 @@ def test_p31_refresh_hook():
     check(n_def == 1, "⑬ refreshOpenDataPanels 定义恰 1 处", str(n_def))
     marks = [i for i, ln in enumerate(lines)
              if "refreshOpenDataPanels(); // [P3-1]" in ln]
-    check(len(marks) == 3, "⑬ 调用点恰 3 处（标记注释 [P3-1]）", str(marks))
+    check(len(marks) == 1, "⑬ 调用点恰 1 处（标记注释 [P3-1]）", str(marks))
 
-    # 每个调用点的上一行必须是各自装载路径的收尾语句（防被挪到装载完成之前）
+    # 唯一那一处必须紧跟自己的装载收尾语句（防被挪到装载完成之前）
     def _adjacent(prev_pat):
         return [i for i in range(1, len(lines))
                 if prev_pat in lines[i - 1]
@@ -578,10 +613,9 @@ def test_p31_refresh_hook():
 
     check(len(_adjacent("syncOverlayControls();")) == 1,
           "⑬ 股票成功分支：紧跟 syncOverlayControls（视口已重算）之后")
-    check(len(_adjacent("generateStats();")) == 1,
-          "⑬ 期货单窗 init：紧跟 generateStats（装载收尾）之后")
-    check(len(_adjacent("render();")) == 1,
-          "⑬ 期货双窗 init：紧跟 render（装载收尾）之后")
+    # 不另设「期货路径不得挂」的反向断言：`updateFreqButtonStates(true)` 在换品种 /
+    # 换周期 / 双窗切换里共 6 处，逐段扫会误伤将来合法的挂点；「恰 1 处」+ 上面
+    # 「只此一处紧跟 syncOverlayControls」已经等价于「期货两处没有挂」。
 
     # 每个调用点上方 45 行内必须有视口重算：证明它挂在「数据与视口都已就位」
     # 之后，而不是装载流程中段

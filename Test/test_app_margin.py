@@ -21,6 +21,8 @@
   ⑫ 口径边界：total 汇总行不重复计入、残缺日整日剔除（2026-11-21：
      市场集合是上一已接纳日的严格子集 ⇒ 当日未披露完，不留半截合计）、
      区间外日期被过滤
+  ⑬ 残缺日留痕按**连续段**汇总（2026-11-21 P3-3）：尾部连续 4 个残缺日只记
+     1 条 warning（旧实现按日刷，永久缺市时随天数线性膨胀）；两段残缺记 2 条
 
 测试数据全部由内存打桩提供（不联网、不写任何生产数据文件）：
 交易日 = 2024-01-02 / 01-03 / 01-04 / 01-05 / 01-08
@@ -30,6 +32,7 @@
 
 运行：python Test/test_app_margin.py
 """
+import logging
 import math
 import os
 import re
@@ -332,6 +335,66 @@ def test_three_market_scope():
           "⑫ 全历史内存过滤，区间外日期不进结果", str(rows))
 
 
+class _LogCapture(logging.Handler):
+    """只收 WARNING 及以上的日志文本（用于断言留痕条数）。"""
+
+    def __init__(self):
+        super().__init__(level=logging.WARNING)
+        self.messages = []
+
+    def emit(self, record):
+        if record.levelno >= logging.WARNING:
+            self.messages.append(record.getMessage())
+
+
+def test_partial_day_warning_batched():
+    """⑬ 残缺日 warning 按连续段汇总（2026-11-21 P3-3）
+
+    逐日 warning 在上游**永久**停发某市（改标记 / 停更）时会线性膨胀：此后每个
+    交易日都命中判据，一次 /api/margin/read 就打 N 条、N 随天数增长，而面板是
+    跟着视口反复重取的。老代码还有一处更糟的错位：warning 写在 `continue` 之前、
+    按日逐条 —— 首日剔除时打的 prev_tags 是「上一被接纳日」，看起来像单日异常。
+    """
+    H, S, B = "012001", "012002", "012046"
+
+    def row(d, tag, yuan):
+        return {"N001": d, "N010": tag, "N005": yuan}
+
+    def full(d, base):
+        return [row(d, H, base), row(d, S, base * 0.9), row(d, B, base * 0.01)]
+
+    cap = _LogCapture()
+    AppMargin.log.addHandler(cap)
+    try:
+        # 尾部 4 个连续残缺日（模拟「北交所永久停发」）→ 恰好 1 条
+        rows = (full("2024-01-02", 1e12)
+                + [row(d, H, 9e11) for d in ("2024-01-03", "2024-01-04",
+                                             "2024-01-05", "2024-01-08")])
+        got = AppMargin._parse_rows(rows)
+        check([d for d, _ in got] == ["2024-01-02"],
+              "⑬ 永久缺市：序列止于最后一个完整日", str([d for d, _ in got]))
+        check(len(cap.messages) == 1,
+              "⑬ 连续 4 个残缺日只记 1 条 warning（旧实现 4 条，随天数线性膨胀）",
+              str(cap.messages))
+        check(bool(cap.messages) and "4 天" in cap.messages[0]
+              and "2024-01-03" in cap.messages[0] and "2024-01-08" in cap.messages[0],
+              "⑬ 那一条带天数与首尾日期（留痕仍可查到范围）", str(cap.messages))
+
+        # 两段残缺（中间夹一个完整日）→ 2 条，段数 = 条数
+        cap.messages[:] = []
+        rows2 = (full("2024-01-02", 1e12)
+                 + [row("2024-01-03", H, 9e11)]
+                 + full("2024-01-04", 1e12)
+                 + [row("2024-01-05", H, 9e11)])
+        got2 = AppMargin._parse_rows(rows2)
+        check([d for d, _ in got2] == ["2024-01-02", "2024-01-04"],
+              "⑬ 中段残缺日只剔当日，前后完整日不受影响", str([d for d, _ in got2]))
+        check(len(cap.messages) == 2,
+              "⑬ 两段残缺各记 1 条（不合并成 1 条、也不退化成 3 条）", str(cap.messages))
+    finally:
+        AppMargin.log.removeHandler(cap)
+
+
 def main():
     print("===== 两融余额行为护栏（eltdx F10 口径）=====")
     for fn in (test_full_range, test_range_filter, test_empty_range,
@@ -339,7 +402,8 @@ def main():
                test_balance_field_is_three_market_total,
                test_unit_conversion, test_bad_rows_dropped,
                test_fetch_failure_propagates, test_no_persistence,
-               test_market_rows_merge, test_three_market_scope):
+               test_market_rows_merge, test_three_market_scope,
+               test_partial_day_warning_batched):
         fn()
     print(f"===== 合计 {len(_FAILURES)} 项失败 =====")
     if _FAILURES:

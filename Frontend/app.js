@@ -5651,8 +5651,11 @@
             if (scan) {
                 // 扫描进行中（含「正在中断」）由扫描流程自己管这个按钮，此处不抢
                 if (!_scanRunning) scan.disabled = !av.scan;
-                scan.title = av.scan ? "扫描股票买卖点"
-                                     : "扫描股票买卖点（仅股票页面可用）";
+                // title 跟着**此刻可否点击**走，不能只看 av.scan：扫描中切到期货页时
+                // 按钮是活的（点击 = 中断），再写「仅股票页面可用」就与按钮亮着的事实
+                // 自相矛盾。保留「扫描股票买卖点」前缀，其余 UI 文案一律挂在括号里。
+                scan.title = _scanRunning ? "扫描股票买卖点（正在扫描，点击中断）"
+                    : (av.scan ? "扫描股票买卖点" : "扫描股票买卖点（仅股票页面可用）");
             }
             var amo = document.getElementById("btn-amo");
             if (amo) {
@@ -8945,8 +8948,12 @@
         //   的 progress_callback 原文）左移最多 272.6px，并在 ≤1440px 视口把顶栏撑出
         //   横向滚动条（1440 溢出 89px / 1366 溢出 53px / 1280 溢出 139px）。
         //   后端 log 已逐步打印（[股名刷新] 步骤N/5 …、[板块刷新] …），页面上不重复。
-        //   页内只剩三个不占布局的信号：图标转圈（进行中）、按钮置灰（防重入）、
-        //   失败走 showAlert（原有）。
+        //   页内信号只剩四个，**都不参与顶栏布局**：图标转圈（进行中）、按钮置灰
+        //   （防重入）、失败走 showAlert（原有）、成功走 showToast（2026-11-21 补）。
+        //   补成功的动因是成功/失败不对称：失败有模态，成功只剩「图标停转」——
+        //   一次几十秒的刷新跑完，用户无法区分「跑完了」和「早就停了」。toast 栈
+        //   是 position:fixed 的独立层，不进 .header-right 的 flex 流，因此不会
+        //   重现上面那段横移 / 横向滚动条。
         function _resetRefreshBtn(btn) {
             btn.disabled = false;
             btn.classList.remove("active");
@@ -8981,7 +8988,11 @@
                         setTimeout(function() { pollRefreshStatus(btn); }, 500);
                     } else {
                         _resetRefreshBtn(btn);
+                        // 成功与失败必须对称：失败有弹窗，成功也给一条不占布局的
+                        // 提示（2026-11-21 P3-6）。数据里带 error 才算失败，其余
+                        // 终态（含 already_running 被别人跑完）都是完成。
                         if (data.error) showAlert("刷新失败: " + data.error);
+                        else showToast("刷新完成");
                     }
                 })
                 .catch(function() {
@@ -9917,11 +9928,16 @@
 
         // [P3-1 闭环 2026-11-21] 切图后按需重取打开着的数据面板。面板数据 =
         // 视口日期区间的全市场日频聚合（getViewportDateRange 只读 k.date），
-        // 图表重新装载（切股票 / 切期货合约）后视口区间可能变化 —— 面板若开着
-        // 就重取一次，保证与当前视口一致；关着则什么都不做（不预取）。
-        // 调用点恰 3 处（loadStock 股票成功分支 / 期货单窗 init 成功 / 期货双窗
-        // init 成功，均带 [P3-1] 标记），数量与位置由 test_margin_panel ⑬ 钉住；
-        // 实时帧处理器（handleRealtimeDataSingle/Dual）刻意不挂 —— 那是逐拍推送，
+        // 图表重新装载（切股票）后视口区间可能变化 —— 面板若开着就重取一次，
+        // 保证与当前视口一致；关着则什么都不做（不预取）。
+        // 调用点恰 1 处（loadStock 股票成功分支，带 [P3-1] 标记），数量与位置由
+        // test_margin_panel ⑬ 钉住。
+        // 期货装载路径（单窗 init / 双窗 init）**刻意不挂**：同路径上的
+        // updateFreqButtonStates(true) → syncDataBtnState(isFutures) → av.panels=false
+        // 已把两个面板关掉，挂上去必然是 no-op（2026-11-21 探针实测 0/0 取数，
+        // 对照组 1/1）。等期货放开数据面板（dataBtnAvailability 的 panels 认期货）
+        // 再连同判据一并挂上，否则就是给测试留一条恒真契约。
+        // 实时帧处理器（handleRealtimeDataSingle/Dual）同样不挂 —— 那是逐拍推送，
         // 挂上去会每拍重取。
         function refreshOpenDataPanels() {
             var ap = document.getElementById("amo-panel");
@@ -10218,7 +10234,6 @@
                         resizeCanvas();
                         render();
                         generateStats();
-                        refreshOpenDataPanels(); // [P3-1] 期货单窗 init 装载完成，同上
                     } catch(e) {
                         console.error('初始数据解析失败:', e);
                         document.getElementById("loading").classList.add("hidden");
@@ -10383,7 +10398,6 @@
                         document.getElementById("goto-date-input").disabled = false;
                         updateFreqButtonStates(true);
                         render();
-                        refreshOpenDataPanels(); // [P3-1] 期货双窗 init 装载完成，同上
                     } catch (e) {
                         console.error('双窗口init解析失败:', e);
                         document.getElementById("goto-date-input").disabled = false;

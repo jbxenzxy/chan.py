@@ -179,7 +179,8 @@ def test_static():
 
     avail = _extract_fn(js, "marginIndicatorAvailable") or ""
     check("return amoIsAvailable();" in avail,
-          "① 可用性单一 SSOT：仅上证指数日K，与两融面板按钮同判据")
+          "① 可用性单一 SSOT：仍仅上证指数日K，但**只服务底部槽位**；已与两融"
+          "面板按钮解耦 —— 面板按钮自 2026-11-21 起不认标的（见 test_margin_panel ⑫）")
     slot = _extract_fn(js, "_slotAt") or ""
     cyc = _extract_fn(js, "cycleBottomSlot") or ""
     check("_bottomIndicatorEnabled(id)" in slot and "_bottomIndicatorEnabled(next)" in cyc

@@ -236,9 +236,11 @@ rec("S3-2", ".btn-icon 仍是 28×28 + padding:0（尺寸单一来源）",
 DRV = u"""var window = globalThis;
 var _fetches = [];
 var _alerts = [];
+var _toasts = [];
 var _timers = [];
 var _threw = [];
 function showAlert(m) { _alerts.push(String(m)); }
+function showToast(m) { _toasts.push(String(m)); }
 function setTimeout(fn, ms) { _timers.push({ fn: fn, ms: ms }); return _timers.length; }
 function loadStock() { _loadCalls += 1; }
 var _loadCalls = 0;
@@ -334,18 +336,19 @@ out.reentry = { delta: _fetches.length - _n0, disabled: _btn.disabled };
 /* —— 3) 收尾（无错误）：按钮复位，不弹窗 —— */
 _fetches = []; _timers = [];
 _useRoute({ "/api/stocks/refresh/read/status": { running: false, step: "" } });
-try { _timers.length = 0; pollRefreshStatus(_btn); }
+try { _timers.length = 0; _toasts = []; pollRefreshStatus(_btn); }
 catch (e) { _threw.push("done:" + String(e)); }
 out.done = { disabled: _btn.disabled, active: _btn.classList.contains("active"),
-             anim: _btn._anim, alerts: _alerts.slice(), timers: _timers.length };
+             anim: _btn._anim, alerts: _alerts.slice(), toasts: _toasts.slice(),
+             timers: _timers.length };
 
-/* —— 4) 收尾（有错误）：弹窗 + 照样复位 —— */
-_alerts = [];
+/* —— 4) 收尾（有错误）：弹窗 + 照样复位（成功/失败不得同时给两份反馈） —— */
+_alerts = []; _toasts = [];
 _useRoute({ "/api/stocks/refresh/read/status": { running: false, error: "补全失败" } });
 try { pollRefreshStatus(_btn); }
 catch (e) { _threw.push("err:" + String(e)); }
 out.fail = { disabled: _btn.disabled, active: _btn.classList.contains("active"),
-             anim: _btn._anim, alerts: _alerts.slice() };
+             anim: _btn._anim, alerts: _alerts.slice(), toasts: _toasts.slice() };
 
 /* —— 5) 启动请求被拒：弹窗 + 复位（不许永久置灰） —— */
 _alerts = []; _btn.disabled = false; _btn._cls = {}; _btn._anim = "";
@@ -417,14 +420,22 @@ def behavior_checks():
     rec("B4-1", "running=false 后解除置灰", D["disabled"] is False, str(D))
     rec("B4-2", "跑完摘掉 .active", D["active"] is False, str(D))
     rec("B4-3", "跑完停转（animation 清空）", (D["anim"] or "") == "", repr(D["anim"]))
-    rec("B4-4", "正常完成不弹窗", D["alerts"] == [], str(D["alerts"]))
+    rec("B4-4", "正常完成不弹**模态**（改用不占布局的 toast）",
+        D["alerts"] == [], str(D["alerts"]))
     rec("B4-5", "正常完成后不再挂定时器", D["timers"] == 0, str(D["timers"]))
+    # 2026-11-21 P3-6：删掉 #refresh-status 后成功侧零反馈（失败有模态），补 toast。
+    # toast 栈是 position:fixed 独立层、不进 .header-right 的 flex 流 ⇒ 不会重现
+    # 被删那段文案造成的横移 / 横向滚动条。
+    rec("B4-6", "正常完成给恰好一条 toast（成功/失败反馈对称）",
+        len(D["toasts"]) == 1 and "刷新完成" in D["toasts"][0], str(D["toasts"]))
 
     F = r["fail"]
     rec("B5-1", "后端报错时弹窗一次", len(F["alerts"]) == 1 and "补全失败" in F["alerts"][0],
         str(F["alerts"]))
     rec("B5-2", "报错后按钮照样复位（否则永久置灰）",
         F["disabled"] is False and (F["anim"] or "") == "", str(F))
+    rec("B5-3", "报错时不再叠一条成功 toast（两种反馈互斥）",
+        F["toasts"] == [], str(F["toasts"]))
 
     J = r["reject"]
     rec("B6-1", "启动请求被拒时弹窗", len(J["alerts"]) == 1 and "启动刷新失败" in J["alerts"][0],
