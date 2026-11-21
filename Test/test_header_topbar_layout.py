@@ -30,7 +30,7 @@
      · 轮询 running=true → 500ms 后再轮询；running=false → 按钮复位；
      · 失败走 showAlert，且按钮照样复位（否则键永久置灰，只能刷新页面）；
      · 置灰期间重复点击不再发请求（防重入）；
-     · 回车 → loadStock 恰好一次（删查询按钮的前提，⑥/⑦ 的行为面）。
+     · 回车 → loadStock 恰好一次（删查询按钮的前提，S2-1 删除面 + B7-1 行为面）。
 跑法：python Test/test_header_topbar_layout.py
 """
 import io

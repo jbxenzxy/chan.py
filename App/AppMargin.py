@@ -102,7 +102,8 @@ def _parse_rows(rows):
 
     - 同一 (日期, 市场) 重复行只保留最后一条，避免重复累加；
     - 坏值（None / 字符串 / 负数 / NaN）、未知市场标记只丢该行；
-    - 缺失的市场按「有则加」，不补零、不丢弃该交易日。
+    - 缺失的市场不补零 —— 当日市场集合若是「上一个已接纳日」的严格子集，判为
+      尚未披露完，整日剔除；集合变大（北交所 2023-02-13 上线）正常接纳。
     """
     per_market = {}
     for row in rows:
@@ -133,6 +134,10 @@ def _parse_rows(rows):
     for date_raw in sorted(per_day):
         tags = frozenset(per_day[date_raw])
         if prev_tags is not None and tags < prev_tags:
+            # 留痕：永久缺某市（上游停发 / 改标记）会让此后每天都命中，曲线静默
+            # 截断，光看末点日期发现不了 —— 这条 warning 是唯一线索。
+            log.warning("[margin] 残缺日剔除 %s：市场集合 %s 是上一完整日 %s 的严格子集",
+                        date_raw, sorted(tags), sorted(prev_tags))
             continue
         complete.append((date_raw, sum(per_day[date_raw].values())))
         prev_tags = tags

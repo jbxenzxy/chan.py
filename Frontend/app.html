@@ -115,10 +115,10 @@
                  localStorage 键 chan_overlay_settings 一律未变 —— 只有入口位置变了。 -->
             <button class="btn" id="btn-draw" onclick="toggleDrawToolbar()" title="画线工具（同花顺式：倾斜线 / 水平线）">画线</button>
             <!-- 这两个面板展示的是「全市场日频聚合序列」（沪+深+北两融余额 / 沪+深成交额），
-                 只依赖视口日期区间，与当前 K 线是什么标的、什么周期无关 —— 因此
-                 2026-11-20 取消灰化：股票 / ETF / 期指上一律可点。
-                 title 只写数据口径，不再有「仅上证指数日K可用」的分支；
-                 JS 里也不再运行时覆写 title（静态值就是唯一来源）。 -->
+                 只依赖视口日期区间，与当前 K 线是什么标的无关 —— 但能否点由「是否期货 +
+                 当前周期」决定（不认标的）。disabled 与 title 的唯一写入点是
+                 window.syncDataBtnState()：期货页全灰，股票页仅日K 放行；下面静态写的是
+                 初始值，运行时会按状态覆写成「仅股票日K可用」。 -->
             <button class="btn" id="btn-margin" onclick="toggleMarginPanel()" title="两融余额（全A股沪深北三市）">两融余额</button>
             <button class="btn" id="btn-amo" onclick="toggleAmoPanel()" title="市场量能">市场量能</button>
             <button class="btn" id="btn-scan" onclick="startScanZxg()" title="扫描股票买卖点">股票扫描</button>
