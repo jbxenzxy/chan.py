@@ -1287,9 +1287,10 @@
         // 用 _bottomSlots。_renderChart 会在渲染下窗时把 chartData 换成 dualSubData。
         // 底部槽位里的「两融余额」类MACD：仍只在上证指数日K页可选（本次未触碰）。
         // 别与右上角「两融余额」按钮混为一谈 —— 按钮背后的面板只吃「视口日期区间」的
-        // 全市场聚合序列，2026-11-20 已取消灰化（任何标的 / 周期都能开）；槽位是逐 bar
-        // 对齐到当前 K 线的叠加指标，判据保持原样。两者已不共用同一入口，
-        // 不要再把按钮的可用性挂回 amoIsAvailable()。
+        // 全市场聚合序列，不认标的；但**按钮可用性**按 2026-11-21 口径收口在
+        // syncDataBtnState()（期货页灰化、股票页仅日K可用），与下面这个判据无关。
+        // 槽位是逐 bar 对齐到当前 K 线的叠加指标，判据保持原样（含 symbol 判据）。
+        // 不要把按钮的可用性挂回 amoIsAvailable()。
         function marginIndicatorAvailable() {
             return amoIsAvailable();
         }
@@ -5625,6 +5626,52 @@
             return labels[freq] || freq;
         }
 
+        // ══════════════════════════════════════════════════════════════════
+        // 顶栏三个数据按钮的可用性 —— 唯一写入点（2026-11-21 用户口径）
+        //   ⑴ 期货页：「两融余额」「市场量能」「股票扫描」一律灰化；
+        //   ⑵ 股票页且周期为日K：前两个才可用，其它周期灰化；
+        //   ⑶ 股票页：「股票扫描」恒可用，与周期无关。
+        // 判据只认「是否期货 + 当前周期」，**不认标的**：两个面板取的是全市场
+        // 日频聚合序列（只吃视口日期区间），个股 / 指数 / ETF 一视同仁。别把这里
+        // 改成 amoIsAvailable() —— 那个带着 symbol === 'sh000001'，只服务底部槽位
+        // 的「量能/两融 类MACD」叠加指标，二者互不影响。
+        // 调用点：updateFreqButtonStates()（换图 / 换周期 / 双窗切换都会过）与
+        // _setScanRunning()（扫描结束收口）。面板在自己的按钮变不可用时立即关闭，
+        // 免得停在上一张图的视口区间。
+        // ══════════════════════════════════════════════════════════════════
+        function dataBtnAvailability(isFutures) {
+            var fut = (typeof isFutures === "boolean") ? isFutures : isFuturesMode();
+            var stock = !!(chartData && chartData.meta) && !fut;
+            return { scan: stock, panels: stock && currentFreq === "d" };
+        }
+
+        function syncDataBtnState(isFutures) {
+            var av = dataBtnAvailability(isFutures);
+            var scan = document.getElementById("btn-scan");
+            if (scan) {
+                // 扫描进行中（含「正在中断」）由扫描流程自己管这个按钮，此处不抢
+                if (!_scanRunning) scan.disabled = !av.scan;
+                scan.title = av.scan ? "扫描股票买卖点"
+                                     : "扫描股票买卖点（仅股票页面可用）";
+            }
+            var amo = document.getElementById("btn-amo");
+            if (amo) {
+                amo.disabled = !av.panels;
+                amo.title = av.panels ? "市场量能" : "市场量能（仅股票日K可用）";
+            }
+            var margin = document.getElementById("btn-margin");
+            if (margin) {
+                margin.disabled = !av.panels;
+                margin.title = av.panels ? "两融余额（全A股沪深北三市）"
+                                         : "两融余额（仅股票日K可用）";
+            }
+            if (!av.panels) {
+                // 灰化即关面板：否则面板会停在上一张图 / 上一个周期的视口区间
+                if (typeof closeAmoPanel === "function") closeAmoPanel();
+                if (typeof closeMarginPanel === "function") closeMarginPanel();
+            }
+        }
+
         // 根据市场类型更新频率按钮的启用/禁用状态
         function updateFreqButtonStates(isFutures) {
             // 按市场折叠按钮（腾出顶部空间，用户要求）：
@@ -5671,9 +5718,8 @@
             const highlightFreq = (isDualWindow && activeDualWindow === 'sub') ? dualSubFreq : currentFreq;
             const activeBtn = document.getElementById('btn-' + highlightFreq);
             if (activeBtn) activeBtn.classList.add('active');
-            // 2026-11-20：原先这里调 updateAmoButtonState / updateMarginButtonState
-            // 按「是否上证指数日K」灰化两个按钮，并顺手关闭已打开的面板。灰化已取消，
-            // 两个函数一并删除 —— 面板的取数口径与接口一字未改。
+            // 顶栏三个数据按钮的可用性（含「变不可用即关面板」）统一在这里收口
+            syncDataBtnState(isFutures);
         }
 
         window.switchFreq = function(freq) {
@@ -8068,6 +8114,8 @@
         }
 
         window.startScanZxg = function() {
+            var btnScanTop = document.getElementById("btn-scan");
+            if (btnScanTop && btnScanTop.disabled) return;  // 灰化态（期货页）不许扫
             if (_scanRunning) {
                 // 正在扫描中，再次点击 = 中断扫描
                 _scanAborted = true;
@@ -8659,7 +8707,6 @@
                                 _setScanRunning(false);
                                 _scanAborted = false;
                                 btn.classList.remove("active");
-                                btn.disabled = false;
                                 btn.textContent = "股票扫描";
                                 body.innerHTML = '<div class="scan-no-result">扫描失败: ' + err + '</div>';
                                 return;
@@ -8667,7 +8714,6 @@
                             _setScanRunning(false);
                             _scanAborted = false;
                             btn.classList.remove("active");
-                            btn.disabled = false;
                             btn.textContent = "股票扫描";
                             finishScan(interrupted);
                         });
@@ -9543,6 +9589,9 @@
                 closeBtn.classList.toggle("disabled", !!v);
                 closeBtn.title = v ? "扫描中不可关闭（请先点「股票扫描」中断）" : "关闭面板";
             }
+            // 扫描开始/结束都收口一次按钮可用性：结束后若页面已切到期货，按钮必须
+            // 保持灰化（扫描流程里的 `btn.disabled = false` 已被本函数取代）。
+            syncDataBtnState();
         }
 
         window.closeScanPanel = function() {
@@ -9608,10 +9657,10 @@
 // ══════════════════════════════════════════════════════════════════
         // [COMPONENT] AmoPanel —— 市场量能面板（右上角「市场量能」按钮）
         // 数据源仅 TDX 本地指数日线（sh000001 + sz399106 成交额相加），无兜底。
-        // 2026-11-20：取消「仅上证指数日K可用」的灰化。面板取的是全市场日频聚合
-        // 序列，只需视口日期区间（getViewportDateRange 只读 k.date，对任何标的/
-        // 任何周期都成立），所以股票 / ETF / 期指上一律可点；数据口径与 /api/amo
-        // 接口一字未改，也没有为「当前标的」另取一份数据。
+        // 面板取的是全市场日频聚合序列，只需视口日期区间（getViewportDateRange 只读
+        // k.date），所以「什么标的」不构成限制；**按钮能否点**由 syncDataBtnState()
+        // 按 2026-11-21 口径决定：期货页灰化、股票页仅日K可用（其它周期灰化）。
+        // 数据口径与 /api/amo 接口一字未改，也没有为「当前标的」另取一份数据。
 // ══════════════════════════════════════════════════════════════════
 
         // 仍保留：底部槽位「市场量能/两融余额」类MACD 的可用性判据（只认指数日K），
@@ -9623,6 +9672,8 @@
         }
 
         window.toggleAmoPanel = function() {
+            var btnAmo = document.getElementById("btn-amo");
+            if (btnAmo && btnAmo.disabled) return;  // 灰化态（期货页 / 非日K）不许开
             var panel = document.getElementById("amo-panel");
             if (panel.classList.contains("show")) {
                 closeAmoPanel();
@@ -9828,12 +9879,14 @@
         // 数据源：eltdx F10「大盘两融日序列汇总」，按 N001 日期把沪深北三市
         // N005（融资 + 融券余额，元）分行求和 → 全 A 股合计，对外换算为亿元。
         // 与「市场量能」面板互斥（共用同一浮层位置，打开一个即关闭另一个）。
-        // 2026-11-20：与 AmoPanel 同步取消「仅上证指数日K可用」的灰化 —— 序列本身是
-        // 全 A 股日频聚合，只要视口日期区间；股票 / ETF / 期指上都能打开。
-        // F10 取数口径与 /api/margin 接口一字未改。
+        // 序列本身是全 A 股日频聚合，不认标的；按钮能否点由 syncDataBtnState()
+        // 按 2026-11-21 口径决定：期货页灰化、股票页仅日K可用（其它周期灰化）。
+        // F10 取数口径与 /api/margin 接口一字未改（末点完整性见 AppMargin._parse_rows）。
 // ══════════════════════════════════════════════════════════════════
 
         window.toggleMarginPanel = function() {
+            var btnMargin = document.getElementById("btn-margin");
+            if (btnMargin && btnMargin.disabled) return;  // 灰化态（期货页 / 非日K）不许开
             var panel = document.getElementById("margin-panel");
             if (panel.classList.contains("show")) {
                 closeMarginPanel();

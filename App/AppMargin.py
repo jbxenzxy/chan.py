@@ -17,6 +17,11 @@ App/AppMargin.py —— 两融余额功能域
     服务端补了 total 也不会被重复计入。
   - 北交所自 2023-02-13 才有数据，更早的日期只有沪深两行，按「有则加」处理。
   - 三市均为 T+1 存量（次一交易日开市前披露），无盘中实时值。
+  - **末点完整性**（2026-11-21）：披露是分市场陆续补的，收盘次日常见「只有沪市
+    一行」的残缺日（实测 2026-11-20 仅 012001）。按日求和的残缺日会得到约一半的
+    假余额，画出来就是末点垂直下扎。故 `_parse_rows` 按「当日市场集合不得是上一个
+    已接纳日的严格子集」整日剔除，序列上限即最新完整发布日（当日为 11-19 时，
+    曲线与统计都止于 11-19，不留半截点）。
   - 单位：接口为「元」，本模块对外统一换算为「亿元」。
 
 口径交叉验证（2026-11-10 实测）：三市自算合计与第三方同口径的
@@ -115,9 +120,23 @@ def _parse_rows(rows):
             continue
         per_market[(date_raw, tag)] = fv
     per_day = {}
-    for (date_raw, _tag), fv in per_market.items():
-        per_day[date_raw] = per_day.get(date_raw, 0.0) + fv
-    return sorted(per_day.items())
+    for (date_raw, tag), fv in per_market.items():
+        per_day.setdefault(date_raw, {})[tag] = fv
+    # 完整性收口（2026-11-21）：F10 的 T+1 数据是**分市场陆续补**的 —— 收盘次日
+    # 往往只剩沪市一行（实测 2026-11-20 只有 012001 = 11,394.48 亿），按日求和会
+    # 得到约一半的假余额，画在曲线上就是末点垂直下扎。
+    # 判据：某交易日的市场集合不得是「上一个已接纳日」的**严格子集**（等价于当日
+    # 尚未发布完），命中即整日剔除；集合变大（北交所 2023-02-13 起才有数据）正常
+    # 接纳。剔除后序列上限 = 最新一个完整发布日，前端无需再裁剪。
+    complete = []
+    prev_tags = None
+    for date_raw in sorted(per_day):
+        tags = frozenset(per_day[date_raw])
+        if prev_tags is not None and tags < prev_tags:
+            continue
+        complete.append((date_raw, sum(per_day[date_raw].values())))
+        prev_tags = tags
+    return complete
 
 
 def fetch_margin_rows(start_date: str, end_date: str):

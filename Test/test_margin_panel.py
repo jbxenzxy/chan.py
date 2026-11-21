@@ -4,7 +4,9 @@
 =====================================================================
 需求原文：在「市场量能」选项卡前增加「两融余额」按钮，点按钮后生成类似
 「市场量能」那样的图形；两融余额指全 A 股（沪深北三市）的两融余额。
-v2 追加：两融余额按钮的可用性与「市场量能」一致（仅上证指数日K可用）。
+v2 追加：两融余额按钮的可用性与「市场量能」一致。
+v3（2026-11-21）：可用性改由「是否期货 + 当前周期」决定（见 ⑫），不再认标的；
+   与「市场量能」同口径，且「股票扫描」另有一条独立规则。
 
 静态层（零浏览器、零网络）：
   ① 按钮顺序：btn-margin 必须排在 btn-amo 之前
@@ -14,20 +16,26 @@ v2 追加：两融余额按钮的可用性与「市场量能」一致（仅上�
   ⑤ 前端组件区块 + 取数接口 + 与市场量能互斥
   ⑥ 后端路由 / AppOrch re-export / eltdx N005 三市求和口径
   ⑦ phase6 window API 面登记（新增两个内联事件桥）
-  ⑫ 按钮恒可用契约（2026-11-20 取消「仅上证指数日K可用」灰化）：toggle 里没有
-     前置可用性判据、按钮上除「点面板外关闭」外无第二处 getElementById（即无
-     disabled / title 运行时写入点）、title 只写数据口径、底部槽位判据未被动到
+  ⑫ 三按钮可用性契约（2026-11-21 用户口径，取代 2026-11-20 的「恒可用」）：
+     期货页三个按钮全灰；股票页「股票扫描」恒可用、与周期无关；股票页仅日K
+     才放行「两融余额」「市场量能」。判据只认「是否期货 + 周期」不认标的，
+     唯一写入点是 syncDataBtnState()，由 updateFreqButtonStates() 与
+     _setScanRunning() 收口；按钮变灰时面板必须同时关闭。
 
 真渲染层（node 抽 app.js 真函数 + canvas/DOM 桩，喂脏数据）：
   ⑧ 三格统计逐字正确（峰值 / 当前 / 缩至峰值）
   ⑨ 画布画了曲线 + 面积 + 峰值点 + 3 个日期标签（与市场量能同形态）
   ⑩ 脏数据（amounts / RZYE / financing_balance）一个都不上屏
   ⑪ 空序列 → 空态文案，不画曲线
-  ⑫ 真跑两个按钮的点击路径：上证指数 / 个股 / ETF / 期指四场景都要能开面板
-     并各取一次数，且全程不改按钮 disabled / title
+  ⑫ 真跑可用性状态机：5 个场景（股票日K / 股票30分 / 指数日K / ETF日K /
+     期货 1分 / 期货 30分）的 disabled + title + 点击行为逐一对照，另加
+     「开着面板切到灰化态 → 面板立即关闭」
   ⑬ 切图后按需重取（2026-11-21 P3-1 闭环）：refreshOpenDataPanels 定义恰 1 处、
      调用点恰 3 处且各紧跟装载收尾语句（其上方 45 行内必有视口重算）；真函数
      行为三态 —— 关着不预取 / 开哪个取哪个 / 两个都开各取 1 次
+  ⑭ 末点完整性（2026-11-21）：F10 的 T+1 数据分市场陆续补，残缺日（市场集合是
+     上一个已接纳日的严格子集，如 2026-11-20 只有沪市）必须整日剔除，曲线止于
+     最新完整日；北交所上线导致的集合变大不算残缺
 
 运行：python Test/test_margin_panel.py
 """
@@ -152,7 +160,7 @@ def test_static():
     # 只认代码不认注释：函数无论被调用还是被声明都必然带 "("，注释里不会
     check("updateAmoButtonState(" not in js
           and "updateMarginButtonState(" not in js,
-          "⑤ 两个按钮状态函数已删除（切标的 / 切周期不再改按钮 disabled/title）")
+          "⑤ 旧的两个按钮状态函数未被复活（可用性统一走 syncDataBtnState）")
 
     check('@router.get("/api/margin/read")' in api and "orch.call_margin" in api,
           "⑥ REST 路由 /api/margin/read → orch.call_margin")
@@ -177,30 +185,50 @@ def test_static():
     check('"toggleMarginPanel"' in guards and '"closeMarginPanel"' in guards,
           "⑦ phase6 window API 面已登记两个内联事件桥")
 
-    # ⑫ 可用性契约：两个按钮恒可用（2026-11-20 取消「仅上证指数日K可用」灰化）
+    # ⑫ 三按钮可用性契约（2026-11-21 用户口径）
     html_title = re.search(r'id="btn-margin"[^>]*title="([^"]*)"', html)
     amo_html_title = re.search(r'id="btn-amo"[^>]*title="([^"]*)"', html)
     check(bool(html_title) and "仅上证指数日K可用" not in html_title.group(1)
           and "全A股沪深北三市" in html_title.group(1),
-          "⑫ 两融余额按钮 title 只写数据口径，无「仅上证指数日K可用」",
+          "⑫ 两融余额按钮静态 title 只写数据口径（灰化文案由运行时写）",
           html_title.group(1) if html_title else "缺 title")
     check(bool(amo_html_title)
           and "仅上证指数日K可用" not in amo_html_title.group(1),
-          "⑫ 市场量能按钮 title 同上",
+          "⑫ 市场量能按钮静态 title 同上",
           amo_html_title.group(1) if amo_html_title else "缺 title")
-    # 打开面板不许有前置可用性判据：否则按钮不灰化、看着可点，点了却没反应
-    check("amoIsAvailable" not in toggle_amo,
-          "⑫ toggleAmoPanel 无「仅指数日K」前置判据")
-    check("marginIsAvailable" not in toggle_margin,
-          "⑫ toggleMarginPanel 无「仅指数日K」前置判据")
-    # 按钮上不许有第二处写入点（disabled / title 运行时覆写都算）
-    check(js.count('"btn-amo"') == 1 and js.count('"btn-margin"') == 1,
-          "⑫ 两个按钮各只有 1 处 getElementById（点击面板外关闭时用），"
-          "无第二个改写点",
-          f'btn-amo x{js.count(chr(34) + "btn-amo" + chr(34))} '
-          f'btn-margin x{js.count(chr(34) + "btn-margin" + chr(34))}')
+    # 唯一写入点：三个按钮的 disabled / title 只在 syncDataBtnState 里写
+    sync_fn = _extract_fn(js, "syncDataBtnState") or ""
+    check(sync_fn != "", "⑫ 可用性唯一写入点 syncDataBtnState 在位")
+    check(all(sync_fn.count('"%s"' % b) == 1
+              for b in ("btn-scan", "btn-amo", "btn-margin")),
+          "⑫ 三个按钮在写入点里各出现 1 次（无遗漏）", sync_fn[:200])
+    check('title = av.scan ? "扫描股票买卖点"' in sync_fn
+          and 'title = av.panels ? "市场量能" : "市场量能（仅股票日K可用）"' in sync_fn
+          and '仅股票日K可用' in sync_fn,
+          "⑫ 灰化文案写清原因（扫描=仅股票页面 / 面板=仅股票日K）")
+    # 两个调用点：换图换周期（updateFreqButtonStates）+ 扫描收口（_setScanRunning）
+    ufs = _extract_fn(js, "updateFreqButtonStates") or ""
+    check("syncDataBtnState(isFutures);" in ufs,
+          "⑫ updateFreqButtonStates 末尾收口（换图 / 换周期 / 双窗都会过）")
+    ssr = _extract_fn(js, "_setScanRunning") or ""
+    check("syncDataBtnState();" in ssr,
+          "⑫ _setScanRunning 收口（扫描结束后若已切期货仍保持灰化）")
+    # 灰化守卫：按钮 disabled 时 directly 调用也进不去（键盘 / 脚本入口同兜底）
+    check("btnAmo.disabled" in toggle_amo,
+          "⑫ toggleAmoPanel 带灰化守卫（判的是按钮态，不是标的）")
+    check("btnMargin.disabled" in toggle_margin,
+          "⑫ toggleMarginPanel 带灰化守卫")
+    start_scan = _extract_win_fn(js, "startScanZxg") or ""
+    check("btnScanTop.disabled" in start_scan,
+          "⑫ startScanZxg 带灰化守卫（期货页扫不了）")
+    # 判据只认「是否期货 + 周期」，不许再引入标的条件
+    avail_fn = _extract_fn(js, "dataBtnAvailability") or ""
+    check(avail_fn != "" and "symbol" not in avail_fn,
+          "⑫ 可用性判据不认标的（个股 / 指数 / ETF 一视同仁）", avail_fn[:200])
+    check("amoIsAvailable" not in avail_fn and "marginIsAvailable" not in avail_fn,
+          "⑫ 可用性判据不挂底部槽位那套（含 symbol === 'sh000001'）")
     check("marginIsAvailable(" not in js,
-          "⑫ 按钮专用判据 marginIsAvailable 已删（无死代码）")
+          "⑫ 按钮专用旧判据 marginIsAvailable 已删（无死代码）")
     # 底部槽位那条判据必须原样保留：改的是按钮，不是叠加指标
     check("function marginIndicatorAvailable(" in js
           and "return amoIsAvailable();" in js[
@@ -270,53 +298,59 @@ function mkPanel(which){
         contains: function(){ return false; }
     };
 }
-function mkBtn(id){
-    // disabled / title 故意初始化成「从未被写过」的样子：
-    // 任何运行时改写都会在结果里露出来（旧实现会写 !available 和提示文案）
-    return {id: id, disabled: false, title: "",
-            contains: function(){ return false; }};
-}
+function mkBtn(id){ return {id: id, disabled: false, title: "",
+                            contains: function(){ return false; }}; }
 var els = {
     "amo-panel": mkPanel("amo"), "margin-panel": mkPanel("margin"),
-    "btn-amo": mkBtn("btn-amo"), "btn-margin": mkBtn("btn-margin")
+    "btn-amo": mkBtn("btn-amo"), "btn-margin": mkBtn("btn-margin"),
+    "btn-scan": mkBtn("btn-scan")
 };
 var document = {getElementById: function(id){ return els[id] || null; }};
 var window = {};
-var chartData = null, currentFreq = null;
+var chartData = null, currentFreq = null, _scanRunning = false;
 function loadAmoData(){ calls.amo++; }
 function loadMarginData(){ calls.margin++; }
 function closeAmoPanel(){ show.amo = false; }
 function closeMarginPanel(){ show.margin = false; }
-// 可用性判据恒为 false（模拟「非上证指数日K」）：谁把判据加回按钮路径，
-// 面板就打不开，断言会直接指到那一行，而不是变成 ReferenceError。
-function amoIsAvailable(){ return false; }
-function marginIsAvailable(){ return false; }
 %FUNCS%
-var out = [];
+var out = {rows: [], autoClose: {}};
 SCENARIOS.forEach(function(s){
     chartData = s.chartData;
     currentFreq = s.freq;
-    show.amo = false; show.margin = false;
-    calls.amo = 0; calls.margin = 0;
-
-    // 市场量能：一次点击 = 开面板 + 取一次数；再点一次 = 关
+    show.amo = false; show.margin = false; calls.amo = 0; calls.margin = 0;
+    syncDataBtnState(s.futures);
+    var r = {tag: s.tag,
+             scan: els["btn-scan"].disabled,
+             amo: els["btn-amo"].disabled,
+             margin: els["btn-margin"].disabled,
+             scanTitle: els["btn-scan"].title,
+             amoTitle: els["btn-amo"].title,
+             marginTitle: els["btn-margin"].title};
+    // 灰化就点不开（守卫在 toggle 里），可用就一次点击 = 开面板 + 取一次数
     window.toggleAmoPanel();
-    var r = {tag: s.tag, amoOpened: show.amo, amoFetches: calls.amo,
-             amoDisabled: els["btn-amo"].disabled,
-             amoTitle: els["btn-amo"].title};
-    window.toggleAmoPanel();
-    r.amoClosedAgain = (show.amo === false);
-
-    // 两融余额：同上
+    r.amoOpened = show.amo; r.amoFetches = calls.amo;
+    if (show.amo) { window.toggleAmoPanel(); r.amoToggledOff = !show.amo; }
     window.toggleMarginPanel();
-    r.marginOpened = show.margin;
-    r.marginFetches = calls.margin;
-    r.marginDisabled = els["btn-margin"].disabled;
-    r.marginTitle = els["btn-margin"].title;
-    window.toggleMarginPanel();
-    r.marginClosedAgain = (show.margin === false);
-    out.push(r);
+    r.marginOpened = show.margin; r.marginFetches = calls.margin;
+    if (show.margin) { window.toggleMarginPanel(); r.marginToggledOff = !show.margin; }
+    out.rows.push(r);
 });
+// 开着面板 → 切到灰化态（期货 / 非日K），面板必须立即关闭
+chartData = SCENARIOS[0].chartData; currentFreq = "d";
+show.amo = false; show.margin = false;
+syncDataBtnState(false);
+window.toggleAmoPanel();
+out.autoClose.amoOpened = show.amo;
+chartData = SCENARIOS[SCENARIOS.length - 1].chartData; currentFreq = "1m";
+syncDataBtnState(true);
+out.autoClose.amoClosed = !show.amo;
+chartData = SCENARIOS[0].chartData; currentFreq = "d";
+syncDataBtnState(false);
+window.toggleMarginPanel();
+out.autoClose.marginOpened = show.margin;
+currentFreq = "30m";
+syncDataBtnState(false);
+out.autoClose.marginClosed = !show.margin;
 console.log(JSON.stringify(out));
 """
 
@@ -440,11 +474,12 @@ def test_real_render():
           "⑪ 空序列显示空态且不画曲线", str(out))
 
 
-def test_button_always_enabled():
-    """⑫ 真跑两个按钮的点击路径：任何标的/周期都要能开面板取数、且不改按钮状态
+def test_button_availability():
+    """⑫ 三按钮可用性状态机（2026-11-21 用户口径）
 
-    这里的可用性判据桩（amoIsAvailable / marginIsAvailable）**恒返回 false**，
-    等价于「当前打开的是个股 / ETF / 期指」。它们还留在按钮路径上，面板就打不开。
+    ⑴ 期货页三个按钮全灰；⑵ 股票页仅日K 放行「两融余额」「市场量能」；
+    ⑶ 股票页「股票扫描」恒可用、与周期无关。判据不认标的（个股 / 指数 / ETF 同）。
+    真函数 + DOM 桩实跑：disabled / title / 点击行为 / 切灰化关面板。
     """
     def cd(sym, market=None, dates=("2026-11-18", "2026-11-19", "2026-11-20")):
         meta = {"symbol": sym}
@@ -452,41 +487,72 @@ def test_button_always_enabled():
             meta["market"] = market
         return {"meta": meta, "klines": [{"date": d} for d in dates]}
 
+    fut_dates = ("2026-11-20 09:01", "2026-11-20 09:02", "2026-11-20 14:59")
     scenarios = [
-        {"tag": "index_daily", "freq": "d", "chartData": cd("sh000001")},
-        {"tag": "stock_daily", "freq": "d", "chartData": cd("sh600519")},
-        {"tag": "etf_daily", "freq": "d", "chartData": cd("sh510300")},
-        # 期指 1 分钟：k.date 带时分，getViewportDateRange 只 slice(0,10)
-        {"tag": "index_future_1m", "freq": "1m",
-         "chartData": cd("IF2312", "futures",
-                         ("2026-11-20 09:01", "2026-11-20 09:02",
-                          "2026-11-20 14:59"))},
+        {"tag": "stock_d", "freq": "d", "futures": False, "chartData": cd("sh600519")},
+        {"tag": "index_d", "freq": "d", "futures": False, "chartData": cd("sh000001")},
+        {"tag": "etf_d", "freq": "d", "futures": False, "chartData": cd("sh510300")},
+        {"tag": "stock_30m", "freq": "30m", "futures": False, "chartData": cd("sh600519")},
+        {"tag": "stock_w", "freq": "w", "futures": False, "chartData": cd("sh600519")},
+        {"tag": "fut_1m", "freq": "1m", "futures": True,
+         "chartData": cd("IF2312", "futures", fut_dates)},
+        {"tag": "fut_30m", "freq": "30m", "futures": True,
+         "chartData": cd("IF2312", "futures", fut_dates)},
     ]
-    out, err = _run_node(BUTTON_HARNESS, (), {"scenarios": scenarios},
+    # True = 灰化不可用
+    EXPECT = {
+        "stock_d":   {"scan": False, "amo": False, "margin": False},
+        "index_d":   {"scan": False, "amo": False, "margin": False},
+        "etf_d":     {"scan": False, "amo": False, "margin": False},
+        "stock_30m": {"scan": False, "amo": True,  "margin": True},
+        "stock_w":   {"scan": False, "amo": True,  "margin": True},
+        "fut_1m":    {"scan": True,  "amo": True,  "margin": True},
+        "fut_30m":   {"scan": True,  "amo": True,  "margin": True},
+    }
+    out, err = _run_node(BUTTON_HARNESS, ("dataBtnAvailability", "syncDataBtnState"),
+                         {"scenarios": scenarios},
                          win_funcs=("toggleAmoPanel", "toggleMarginPanel"))
     if err:
-        check(False, "⑫ node 点击路径 harness 执行失败", err)
+        check(False, "⑫ node 可用性状态机 harness 执行失败", err)
         return
-    by = {r["tag"]: r for r in out}
-    check(len(by) == 4, "⑫ 4 种标的/周期场景都跑到", str(out))
+    rows = {r["tag"]: r for r in out["rows"]}
+    check(len(rows) == len(scenarios), "⑫ 7 个场景都跑到", str(list(rows)))
 
-    LABEL = {"index_daily": "上证指数日K", "stock_daily": "个股日K",
-             "etf_daily": "ETF 日K", "index_future_1m": "期指 1 分钟"}
-    for tag, cn in LABEL.items():
-        r = by[tag]
-        check(r["amoOpened"] is True and r["amoFetches"] == 1,
-              f"⑫ {cn}：点「市场量能」即开面板并取一次数", str(r))
-        check(r["marginOpened"] is True and r["marginFetches"] == 1,
-              f"⑫ {cn}：点「两融余额」即开面板并取一次数", str(r))
-        check(r["amoClosedAgain"] is True and r["marginClosedAgain"] is True,
-              f"⑫ {cn}：再点一次正常关闭（toggle 语义未被改坏）", str(r))
-        check(r["amoDisabled"] is False and r["marginDisabled"] is False,
-              f"⑫ {cn}：两个按钮的 disabled 全程没被写过（不灰化）", str(r))
-        check(r["amoTitle"] == "" and r["marginTitle"] == "",
-              f"⑫ {cn}：两个按钮的 title 全程没被运行时覆写（静态值唯一来源）",
+    for s in scenarios:
+        tag, cn = s["tag"], s["tag"]
+        r, want = rows[tag], EXPECT[tag]
+        got = {"scan": r["scan"], "amo": r["amo"], "margin": r["margin"]}
+        check(got == want, f"⑫ {cn}：disabled 三元组 = {want}", str(got))
+        # title：灰化的必须写明原因，可用的回到静态口径（无「仅」字样）
+        ok_title = True
+        for k, base in (("scan", "扫描股票买卖点"), ("amo", "市场量能"),
+                        ("margin", "两融余额")):
+            t = r[k + "Title"]
+            if want[k]:
+                ok_title = ok_title and ("仅" in t and base in t)
+            else:
+                ok_title = ok_title and t.startswith(base) and "仅" not in t
+        check(ok_title, f"⑫ {cn}：title 随可用性切换（灰化带原因）",
+              f"scan={r['scanTitle']!r} amo={r['amoTitle']!r} margin={r['marginTitle']!r}")
+        # 点击行为：灰化 → 开不了且不取数；可用 → 开 + 取 1 次 + 再点关掉
+        if want["amo"]:
+            amo_ok = r["amoOpened"] is False and r["amoFetches"] == 0
+        else:
+            amo_ok = (r["amoOpened"] is True and r["amoFetches"] == 1
+                      and r["amoToggledOff"] is True)
+        if want["margin"]:
+            margin_ok = r["marginOpened"] is False and r["marginFetches"] == 0
+        else:
+            margin_ok = (r["marginOpened"] is True and r["marginFetches"] == 1
+                         and r["marginToggledOff"] is True)
+        check(amo_ok and margin_ok, f"⑫ {cn}：点击行为与可用性一致（灰化点不开）",
               str(r))
 
-
+    ac = out["autoClose"]
+    check(ac["amoOpened"] is True and ac["amoClosed"] is True,
+          "⑫ 开着「市场量能」切到灰化态（期货）→ 面板立即关闭", str(ac))
+    check(ac["marginOpened"] is True and ac["marginClosed"] is True,
+          "⑫ 开着「两融余额」切到灰化态（非日K）→ 面板立即关闭", str(ac))
 def test_p31_refresh_hook():
     """⑬ 切图后按需重取打开着的数据面板（2026-11-21 P3-1 闭环）
 
@@ -547,12 +613,62 @@ def test_p31_refresh_hook():
           "⑬ 两个都开着：各重取 1 次", str(by["both_open"]))
 
 
+def test_margin_completeness():
+    """⑭ 末点完整性（2026-11-21）：残缺日整日剔除，曲线止于最新完整日
+
+    实测形态：2026-11-20 的 F10 只回了沪市一行（012001 = 11,394.48 亿），
+    按日求和得到约一半的假余额 —— 画出来就是末点垂直下扎。判据是「当日市场集合
+    不得是上一个已接纳日的严格子集」，与「哪一天」「哪个市场」都无关。
+    """
+    from App import AppMargin
+
+    def row(d, tag, yuan):
+        return {"N001": d, "N010": tag, "N005": yuan}
+
+    H, S, B = "012001", "012002", "012046"
+
+    def full(d, base):
+        return [row(d, H, base), row(d, S, base * 0.9), row(d, B, base * 0.01)]
+
+    # 11-19 完整 → 11-20 只剩沪市（实测形态）
+    rows = (full("2026-11-18", 1.20e12) + full("2026-11-19", 1.19e12)
+            + [row("2026-11-20", H, 1.18e12)])
+    got = AppMargin._parse_rows(rows)
+    check([d for d, _ in got] == ["2026-11-18", "2026-11-19"],
+          "⑭ 只有沪市的残缺末点整日剔除（曲线止于 11-19）",
+          str([d for d, _ in got]))
+    check(abs(got[-1][1] - 1.19e12 * 1.91) < 1e6,
+          "⑭ 留下来的仍是三市合计（不是只剩沪市那一半）", str(got[-1][1]))
+
+    # 中段残缺日同样剔除，其后的完整日不受影响
+    rows2 = (full("2026-11-17", 1.20e12) + [row("2026-11-18", H, 1.10e12)]
+             + full("2026-11-19", 1.10e12))
+    got2 = AppMargin._parse_rows(rows2)
+    check([d for d, _ in got2] == ["2026-11-17", "2026-11-19"],
+          "⑭ 中段残缺日剔除且不影响后续完整日", str([d for d, _ in got2]))
+
+    # 北交所 2023-02-13 才有数据：集合变大不算残缺
+    rows3 = ([row("2023-02-10", H, 1e12), row("2023-02-10", S, 9e11)]
+             + [row("2023-02-13", H, 1e12), row("2023-02-13", S, 9e11),
+                row("2023-02-13", B, 1e10)])
+    got3 = AppMargin._parse_rows(rows3)
+    check([d for d, _ in got3] == ["2023-02-10", "2023-02-13"],
+          "⑭ 市场集合变大（北交所上线）不算残缺", str([d for d, _ in got3]))
+
+    # 脏值 / 未知市场标记的老规矩不变（负数不覆盖同日好值、未知标记不计入）
+    rows4 = (full("2026-11-19", 1.20e12)
+             + [row("2026-11-19", H, -5), row("2026-11-19", "999999", 1e12)])
+    got4 = AppMargin._parse_rows(rows4)
+    check(len(got4) == 1 and abs(got4[0][1] - 1.20e12 * 1.91) < 1e6,
+          "⑭ 负数 / 未知市场标记照旧丢弃，不重复累加", str(got4))
+
 def main():
     print("===== 两融余额面板展示契约护栏 =====")
     test_static()
     test_real_render()
-    test_button_always_enabled()
+    test_button_availability()
     test_p31_refresh_hook()
+    test_margin_completeness()
     print(f"===== 合计 {len(_FAILURES)} 项失败 =====")
     if _FAILURES:
         for f in _FAILURES:
