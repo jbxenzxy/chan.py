@@ -309,8 +309,16 @@ def test_period_map_coverage():
             pairs = {k.value: {e.value for e in v.elts}
                      for k, v in zip(node.value.keys, node.value.values)}
     assert pairs, "App/AppSSE.py 找不到 _FUTURES_DUAL_PAIRS"
-    assert set(dual) <= set(pairs), \
-        f"默认配对表上窗 {sorted(set(dual) - set(pairs))} 不在配对空间表内（只传上窗会 400）"
+    # 键集合必须**相等**，不能写成子集：`_FUTURES_DUAL_FREQ_MAP` 是「只传上窗」时的
+    # 默认下窗来源，漏 key ⇒ `_resolve_futures_dual_sub_freq` 返 None ⇒ 该上窗的
+    # 双窗请求 400（配对空间里明明有它）。用 `<=` 时「默认表比配对表少」不报，
+    # 恰好放过漏 key —— 而循环 `for main, sub in dual.items()` 也遍历不到不存在的键，
+    # 等于这条护栏对该维度没有判别力。
+    assert set(dual) == set(pairs), (
+        f"默认配对表上窗与配对空间表不一致："
+        f"仅默认表有 {sorted(set(dual) - set(pairs))}，"
+        f"仅空间表有 {sorted(set(pairs) - set(dual))}"
+        f"（漏 key 会让「只传上窗」的请求 400）")
     for main, sub in dual.items():
         assert sub in pairs[main], (
             f"默认配对 {main}+{sub} 不在配对空间 {sorted(pairs[main])} 内"

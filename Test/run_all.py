@@ -382,6 +382,12 @@ COMPONENTS = [
     # 双窗口一致性等。原先漏登记，等于没有该回归（详见 15m 对比评审）。
     ("15m_period",
      [sys.executable, os.path.join("Test", "test_15m_period.py")]),
+    # 期货区间套「显式下窗周期」的**运行时行为**断言。`15m_period` 里那三条接线
+    # 断言读的是源码文本（能防删行，不能证明运行时真拿显式周期去取缓存）：实证
+    # 把读侧改成「getattr 还在、赋值去掉」后文本断言仍全绿，而本条变红。手工配
+    # 30m+15m 时红框按 15m 画、背驰却按 5m 判，正是这条要拦的静默错级别。
+    ("futures_nesting_subfreq",
+     [sys.executable, os.path.join("Test", "test_futures_nesting_subfreq.py")]),
     # 股票 K 线回看窗口截断：`_analyze_stock_internal` 的两条同型分支（复盘 /
     # 冷启动）此前在门禁内零执行、零断言——快照与回放入口为隔离宿主机配置把
     # STOCKS_LOOKBACK_CONFIG 置空（= 不截断），15m 用例只看 keys 不看条数。
