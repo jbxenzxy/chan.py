@@ -624,7 +624,7 @@ def test_load_stock_dispatch(failures):
     断言「谁调用了、用什么周期」：
       T1 股票→股票：/api/stocks/...?freq=<lastStockFreq>，不连期货 SSE；
       T2 期货→股票：先 POST /api/futures/cleanup，再 /api/stocks/...?freq=d；
-      T3 股票→期货：connectRealtimeInit(freq='5m')，不请求股票接口；
+      T3 股票→期货：connectRealtimeInit(freq='1m')，不请求股票接口；
       T4 期货→期货：connectRealtimeInit(freq=<lastFuturesFreq>，继承不重置)。
     判别力：把任一处改回裸引用 `isFuturesCode`，T1/T2 立刻红（全部走期货 SSE）。
     """
@@ -828,8 +828,8 @@ def test_load_stock_dispatch(failures):
     if not i3:
         bad("⑨ T3 期货代码未连期货 SSE，实际调用 %r" % (kinds(t3),))
         return
-    if i3[1] != "KQ.m@CFFEX.IM" or i3[2] != "5m":
-        bad("⑨ T3 股票→期货应默认 5m，实际 %r" % (i3,))
+    if i3[1] != "KQ.m@CFFEX.IM" or i3[2] != "1m":
+        bad("⑨ T3 股票→期货应默认 1m，实际 %r" % (i3,))
         return
     if (first(t3, "freqButtons") or [None, None])[1] is not True:
         bad("⑨ T3 期货页周期按钮未按期货态刷新（1m/15s 会不可用）")
@@ -843,7 +843,7 @@ def test_load_stock_dispatch(failures):
         return
 
     print("[PASS] ⑨ 取数分流: 股票→/api/stocks（继承/重置周期）"
-          " / 期货→SSE（5m 首进、30m 继承），无一走错端点")
+          " / 期货→SSE（1m 首进、30m 继承），无一走错端点")
 
 
 def main():

@@ -6616,10 +6616,10 @@
                     resizeCanvas();
                 }
             } else {
-                // 股票 → 期指：默认5分钟，重置为单窗口
+                // 股票 → 期指：默认1分钟，重置为单窗口
                 // 股票和期货周期体系不同（股票: w/d/30m/5m，期货: 30m/5m/1m/15s），
                 // 下窗周期无法跨市场继承，强行继承会导致下窗周期>上窗周期
-                fetchFreq = '5m';
+                fetchFreq = '1m';
                 if (isDualWindow) {
                     isDualWindow = false;
                     activeDualWindow = 'main';

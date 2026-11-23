@@ -2,7 +2,7 @@
 """画线工具护栏（同花顺式：线段 / 水平线，2026-11-18）。
 
 钉住两类回归面：
-  ① 结构与接线（静态）：按钮在「两融余额」之前、工具条 DOM/样式存在、render 流
+  ① 结构与接线（静态）：按钮在「股票扫描」之后（统计之前）、工具条 DOM/样式存在、render 流
      调用绘制、mousedown/move/up 分流、Del 键删除、click 守卫。
   ② 算法与手势（node 抽真实源码执行，桩只覆盖 DOM/坐标壳）：
      · 坐标换算 drawGlobalIdxToX / drawXToGlobalIdx 互为逆运算；
@@ -133,9 +133,11 @@ css = read(APP_CSS)
 
 def static_checks():
     btn = 'id="btn-draw"'
-    margin = 'id="btn-margin"'
-    rec("S1", "画线按钮存在且在「两融余额」之前",
-        btn in html and margin in html and html.index(btn) < html.index(margin))
+    scan = 'id="btn-scan"'
+    stats = 'id="btn-stats"'
+    rec("S1", "画线按钮在「股票扫描」之后、「统计」之前（2026-11-23 用户口径）",
+        all(x in html for x in (btn, scan, stats))
+        and html.index(scan) < html.index(btn) < html.index(stats))
     rec("S2", "工具条 DOM 含三种模式 + 删除/清空/退出",
         all(x in html for x in ("draw-toolbar", "draw-tool-select", "draw-tool-segment",
                                 "draw-tool-horizontal", "draw-tool-delete",
