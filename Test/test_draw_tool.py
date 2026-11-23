@@ -16,8 +16,9 @@
      · 手势边界：主绘图区外不接管（不吞底部 chip）、跨图残留选中不误删、
        拖动被取消时回滚不落盘、点空白立刻重绘。
   ③ 工具条停靠（2026-11-23 用户口径）：默认贴绘图区右上角（不再顶端居中）、
-     右偏移与窗口宽度无关、手动拖过后位置归用户、倒计时（流逝时间）在画时
-     让到它左边并与之同一行（不钻到它下面、也不压它）；
+     右偏移与窗口宽度无关、**真拖**（位移 ≥ 阈值）后位置归用户 —— 单击手柄
+     不算拖、不能把自动停靠关掉、也不能改写停靠写下的定位；倒计时（流逝时间）
+     在画时让到它左边并与之同一行（不钻到它下面、也不压它）；
      双窗重建 #chart-container 后工具条节点必须归位。
 
 抽取手法与 test_measure_gesture.py 同型：注释感知花括号配平抽真实函数，
@@ -214,6 +215,8 @@ def static_checks():
     _dock_fn = fn_src(js, "_drawToolbarDock")
     _dock_sync = fn_src(js, "_drawSyncToolbar")
     _dock_cd = fn_src(js, "drawCountdownBar")
+    _bind_fn = fn_src(js, "_drawBindToolbarDrag")
+    _arm_fn = fn_src(js, "_drawToolbarDragArmed")
     rec("S17", "工具条默认停靠右上角（顶端居中定位零残留）",
         "right: 6px" in _dock_css and
         "left: 50%" not in _dock_css and "translateX(-50%)" not in _dock_css)
@@ -233,6 +236,18 @@ def static_checks():
         'const keepDrawBar = document.getElementById("draw-toolbar");' in js and
         js.count("if (keepDrawBar) container.appendChild(keepDrawBar);") == 1 and
         js.count("if (keepDrawBar) container2.appendChild(keepDrawBar);") == 1)
+    # 2026-11-23 评审⑴：单击手柄（按下即抬起）曾经在 mousedown 就置 _drawToolbarDragged，
+    # 于是「点一下标题」= 自动停靠永久关闭直到刷新。落地必须推迟到越过阈值那一帧。
+    _drag_down = _bind_fn[_bind_fn.index('addEventListener("mousedown"'):
+                           _bind_fn.index('addEventListener("mousemove"')]
+    _drag_move = _bind_fn[_bind_fn.index('addEventListener("mousemove"'):]
+    rec("S21", "拖拽起手：mousedown 只记起手点，越过阈值才写样式/置「位置归用户」",
+        "_drawToolbarDragged = true;" not in _drag_down and
+        "bar.style" not in _drag_down and
+        "_drawToolbarDragged = true;" in _drag_move and
+        "_drawToolbarDragArmed(d, e.clientX, e.clientY)" in _drag_move and
+        "DRAW_TOOLBAR_DRAG_MIN" in _arm_fn and
+        "d.live = true;" in _drag_move)
 
 
 # ══════════════════ node 行为断言 ══════════════════
@@ -242,6 +257,7 @@ FNS = ["_drawCurrentKey", "_drawVisibleLines", "buildGlobalDateMap", "globalIdxT
        "drawPointSegDist", "drawHitTest", "drawDrawings", "_drawMousePos",
        "_drawHandleDown", "_drawHandleMove", "_drawHandleUp", "_drawCancelGesture",
        "deleteSelectedDraw", "clearAllDraws", "_drawToolbarPos", "_drawToolbarDock",
+       "_drawBindToolbarDrag", "_drawToolbarDragArmed",
        "_drawSerialize", "_drawDeserialize", "_drawNextIdFrom", "priceToY", "yToPrice"]
 
 PREAMBLE = r"""
@@ -285,10 +301,30 @@ const _dockStyle = new Proxy({}, {
   get(t, k) { return t[k]; }
 });
 const _dockHost = { clientWidth: 1500 };
+// 拖拽起手要量 bar 的视觉矩形（B43 用 _barRect 摆一个「已停靠在右上角」的位置）
+const _barRect = { left: 900, top: 6, w: 216, h: 33 };
 // offsetHeight 给真机工具条高度（真机 ~33px）；隐藏态量到 0 的分支由 B39f 单独覆盖
-const _dockBar = { style: _dockStyle, parentNode: _dockHost, offsetHeight: 33 };
-const document = { getElementById(id) { return id === "draw-toolbar" ? _dockBar : null; } };
+const _dockBar = { style: _dockStyle, parentNode: _dockHost, offsetHeight: 33,
+  getBoundingClientRect() { return { left: _barRect.left, top: _barRect.top,
+                                     width: _barRect.w, height: _barRect.h }; } };
+// ── DOM 桩（B43 用真源码驱动「单击 / 真拖」两条路径，不重写一遍判定逻辑）──
+const _handleEl = { _h: [], addEventListener(k, f) { this._h.push(f); } };
+const _chartContainer = { clientWidth: 1200, clientHeight: 700,
+  getBoundingClientRect() { return { left: 0, top: 0 }; } };
+const _docHandlers = {};
+const document = {
+  getElementById(id) {
+    if (id === "draw-toolbar") return _dockBar;
+    if (id === "draw-toolbar-handle") return _handleEl;
+    if (id === "chart-container") return _chartContainer;
+    return null;
+  },
+  addEventListener(k, f) { (_docHandlers[k] = _docHandlers[k] || []).push(f); }
+};
+const _winHandlers = {};
+const window = { addEventListener(k, f) { (_winHandlers[k] = _winHandlers[k] || []).push(f); } };
 let _drawToolbarDragged = false;
+let _drawToolbarDrag = null;
 let _countdownBounds = null;
 // 绘图区宽度跟着容器宽走（真机：w = clientWidth − PADDING.left/right − rightGap(55)）；
 // 写死 1413 会让「右偏移与窗口宽无关」那条断言假红/假绿
@@ -599,6 +635,43 @@ _dockHost.clientWidth = 1000; resetDock(); _drawToolbarDock();
 check('B42', _dockStyle.right, '77px');
 _dockHost.clientWidth = 1500;
 
+// ── B43 拖拽起手语义：单击不关自动停靠、真拖才接管（2026-11-23 评审⑴）──
+// 驱动 app.js 真源码：mousedown 只记起手点，位移越过 DRAW_TOOLBAR_DRAG_MIN 的那一帧
+// 才写样式 + 置 _drawToolbarDragged ⇒「点一下标题」不会把停靠永久关掉。
+_drawBindToolbarDrag();
+const _fireDoc = function(k, e) { (_docHandlers[k] || []).forEach(function(f) { f(e); }); };
+const _pressHandle = function(x, y) {
+  _handleEl._h.forEach(function(f) {
+    f({ clientX: x, clientY: y, preventDefault: function() {}, stopPropagation: function() {} });
+  });
+};
+const _mv = function(x, y) { return { clientX: x, clientY: y }; };
+const _resetDragState = function() {
+  for (const k in _dockStyle) delete _dockStyle[k];
+  _dockWrites = 0; _drawToolbarDragged = false; _drawToolbarDrag = null;
+};
+_resetDragState();
+_pressHandle(900, 20);                        // 按下手柄（bar 视觉左上角 900,6）
+check('B43a', _drawToolbarDragged, false);    // 按下 ≠ 拖过
+check('B43b', _dockWrites, 0);                // 且没改写停靠写下的 right/top
+check('B43c', !!_drawToolbarDrag, true);      // 只记了起手点
+_fireDoc('mousemove', _mv(902, 21));          // 阈值内抖动（2px）
+check('B43d', _drawToolbarDragged, false);
+check('B43e', _dockWrites, 0);
+_fireDoc('mousemove', _mv(906, 20));          // 越过阈值（6px）⇒ 这一刻才接管
+check('B43f', _drawToolbarDragged, true);
+check('B43g', _dockStyle.right, 'auto');      // right 必须清掉（left+right 并存会拉成整行宽）
+check('B43h', _dockStyle.left, '906px');
+check('B43i', _dockStyle.top, '6px');
+_fireDoc('mouseup', _mv(906, 20));
+check('B43j', _drawToolbarDrag, null);        // 松手复位：不按键移动鼠标不再拖
+// 纯单击（按下 → 抬起，中间无 mousemove）必须一个样式都不改，停靠照旧有效
+_resetDragState();
+_pressHandle(900, 20);
+_fireDoc('mouseup', _mv(900, 20));
+check('B43k', _drawToolbarDragged, false);
+check('B43l', _dockWrites, 0);
+
 console.log(JSON.stringify(res));
 """
 
@@ -607,9 +680,10 @@ def behavior_checks():
     try:
         parts = [PREAMBLE]
         # 停靠常量取 app.js 真值（测试不另写一份默认值，避免两边各说各话）
-        consts = re.findall(r"^\s*const (DRAW_TOOLBAR_DOCK_\w+) = (\d+);", js, re.M)
-        if len(consts) != 2:
-            rec("B0b", "抽取停靠常量", False, repr(consts))
+        consts = re.findall(r"^\s*const (DRAW_TOOLBAR_\w+) = (\d+);", js, re.M)
+        need = ("DRAW_TOOLBAR_DOCK_TOP", "DRAW_TOOLBAR_DOCK_GAP", "DRAW_TOOLBAR_DRAG_MIN")
+        if not set(need) <= set(k for k, _ in consts):
+            rec("B0b", "抽取工具条常量", False, repr(consts))
             return
         parts.append("".join("const %s = %s;\n" % (k, v) for k, v in consts))
         for name in FNS:
@@ -627,8 +701,16 @@ def behavior_checks():
             "got=%s want=%s" % (json.dumps(item["got"]), json.dumps(item["want"])))
 
 
-static_checks()
-behavior_checks()
+try:
+    static_checks()
+except AssertionError as e:
+    # 抽取锚点缺失（典型场景：拿旧树跑新护栏）=== 记一条红、照常出合计与失败清单。
+    # 直接抛栈会把「失败清单」一起吞掉，只剩一个 traceback，看不出断在哪一条。
+    rec("S0", "静态断言段跑完（抽取锚点齐全）", False, str(e))
+try:
+    behavior_checks()
+except AssertionError as e:
+    rec("B0z", "行为断言段跑完（抽取锚点齐全）", False, str(e))
 
 print("\n合计 %d 项，通过 %d，失败 %d" % (_passed + len(_failed), _passed, len(_failed)))
 if _failed:

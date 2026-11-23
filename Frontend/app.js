@@ -255,7 +255,7 @@
         let _drawClickGuardArmed = false;  // 吞掉画线手势尾巴那次 click（不切底部 chip）
         let _drawNextId = 1;
         const DRAW_STORAGE_KEY = 'chan_draw_lines';  // 画线持久化（localStorage，跨重启）
-        let _drawToolbarDrag = null;   // 工具条拖拽 { sx, sy, mx, my }（屏幕坐标）
+        let _drawToolbarDrag = null;   // 工具条拖拽 { sx, sy, mx, my, w, h, live }（屏幕坐标 + 是否已越过阈值）
         let _drawDateMapCache = null;  // 日期→下标映射缓存 { arr, len, tail, map }
         const DRAW_HIT_PX = 6;        // 命中容差（px）
         const DRAW_MIN_PX = 4;        // 线段短于此像素按误触丢弃
@@ -5253,7 +5253,10 @@
         //     ⇒ 窗口 resize 后无需重算停靠。
         const DRAW_TOOLBAR_DOCK_TOP = 6;    // 没有倒计时时的上沿（与 CSS 兜底一致）
         const DRAW_TOOLBAR_DOCK_GAP = 4;    // 与「流逝时间」盒子之间的呼吸位
-        let _drawToolbarDragged = false;    // 用户手动拖过 ⇒ 停靠让位，位置归用户
+        // 位移 ≥ 3px 才算「拖」：单击手柄（按下即抬起）不该关掉自动停靠 ——
+        // 那是拖拽的副作用，不是点击的语义（2026-11-23 评审⑴）。
+        const DRAW_TOOLBAR_DRAG_MIN = 3;
+        let _drawToolbarDragged = false;    // 用户**真拖**过 ⇒ 停靠让位，位置归用户
         // 实时周期（期货 30m/5m/1m/15s、股票分钟级）的绘图区**右上角画着「流逝时间」**：
         // 灰底 + 红色剩余 + MM:SS 文本，全是 canvas 内容 —— DOM 元素只会盖住它，
         // 反过来盖不住。所以这里不跟它抢位置，而是**让到它左边、跟它同一行**
@@ -5355,9 +5358,17 @@
                 y: Math.max(0, Math.min(ny, Math.max(0, ch - bh)))
             };
         }
-        // 事件绑定放在独立 IIFE：不触碰 canvas 的 onMouseDown/Move/Up/Leave，
-        // 这样 measure_gesture Tests 抽取那四个函数时无需新增符号桩。
-        (function _drawBindToolbarDrag() {
+        // 起手后要不要把「位置归用户」兑现：只看位移是否越过阈值。
+        // 纯判定、无副作用，便于护栏直测「单击 vs 真拖」这条分界。
+        function _drawToolbarDragArmed(d, cx, cy) {
+            return !!d && !d.live &&
+                (Math.abs(cx - d.mx) >= DRAW_TOOLBAR_DRAG_MIN ||
+                 Math.abs(cy - d.my) >= DRAW_TOOLBAR_DRAG_MIN);
+        }
+        // 事件绑定放在独立函数里（定义后立即调用）：不触碰 canvas 的 onMouseDown/Move/Up/Leave，
+        // 这样 measure_gesture Tests 抽取那四个函数时无需新增符号桩；
+        // 写成具名函数而非 IIFE，是为了护栏能抽取它、用 DOM 桩直测两种起手路径。
+        function _drawBindToolbarDrag() {
             const bar = document.getElementById("draw-toolbar");
             const handle = document.getElementById("draw-toolbar-handle");
             const container = document.getElementById("chart-container");
@@ -5366,22 +5377,30 @@
                 e.preventDefault(); e.stopPropagation();
                 const br = bar.getBoundingClientRect();
                 const cr = container.getBoundingClientRect();
-                // 停靠态是 right 定位 ⇒ 按当前视觉位置固化成 left/top 之后必须清掉 right：
-                // abs 元素 width:auto 时 left+right 同时生效会被拉成整行宽。
-                // 固化的意义不变：首帧把视觉位置原样接管，拖动不跳。
-                _drawToolbarDragged = true;     // 位置自此归用户，_drawToolbarDock 不再插手
-                bar.style.left = (br.left - cr.left) + "px";
-                bar.style.top = (br.top - cr.top) + "px";
-                bar.style.right = "auto";
+                // 这里只记起手点：**不写样式、不置 _drawToolbarDragged**。
+                // 单击手柄（按下即抬起）不等于「拖过」，不该把自动停靠永久关掉；
+                // 真拖起来的那一帧才固化成 left/top 并清 right（见下面 mousemove）。
                 _drawToolbarDrag = { sx: br.left - cr.left, sy: br.top - cr.top,
-                                     mx: e.clientX, my: e.clientY };
+                                     mx: e.clientX, my: e.clientY,
+                                     w: br.width, h: br.height, live: false };
             });
             document.addEventListener("mousemove", function(e) {
-                if (!_drawToolbarDrag) return;
                 const d = _drawToolbarDrag;
+                if (!d) return;
+                if (!d.live) {
+                    if (!_drawToolbarDragArmed(d, e.clientX, e.clientY)) return;  // 阈值内抖动不接管
+                    d.live = true;
+                    _drawToolbarDragged = true;     // 位置自此归用户，_drawToolbarDock 不再插手
+                    // 停靠态是 right 定位 ⇒ 固化成 left/top 之后必须清掉 right：
+                    // abs 元素 width:auto 时 left+right 同时生效会被拉成整行宽。
+                    // 固化的意义不变：把按下那一刻的视觉位置原样接管，拖动不跳。
+                    bar.style.left = d.sx + "px";
+                    bar.style.top = d.sy + "px";
+                    bar.style.right = "auto";
+                }
                 const p = _drawToolbarPos(d.sx, d.sy, d.mx, d.my, e.clientX, e.clientY,
                                           container.clientWidth, container.clientHeight,
-                                          bar.offsetWidth, bar.offsetHeight);
+                                          d.w, d.h);
                 bar.style.left = p.x + "px";
                 bar.style.top = p.y + "px";
             });
@@ -5391,7 +5410,8 @@
             document.addEventListener("mouseup", endDrag);
             window.addEventListener("blur", endDrag);
             document.addEventListener("mouseleave", endDrag);
-        })();
+        }
+        _drawBindToolbarDrag();
 
 
         // 辅助：根据chartData中的saved_selection_date恢复「取消选点」菜单项状态
