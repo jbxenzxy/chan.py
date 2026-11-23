@@ -211,6 +211,7 @@ from App.AppSSE import (  # noqa: F401
     sse_futures_stream_dual,
     _sse_frame,
     _validate_futures_dual_pair,
+    _validate_futures_freq,
 )
 
 
@@ -585,6 +586,11 @@ async def api_futures_select_point(
     （缺省时退回 CSV 选点 → 方式C 默认窗口）"""
     if not symbol or bi_idx == "-1":
         return _json_response({"error": "缺少必要参数 symbol 或 bi_idx"}, 400)
+    # 选点周期也必须落在期货开放集内（同 read/stream：此前无校验，
+    # `?freq=1h` 会按 15s 重建再选点，`60m`/`d` 会照单全收取点）。
+    _freq_err = _validate_futures_freq(freq)
+    if _freq_err:
+        return _json_response({"error": _freq_err}, 400)
     try:
         result = await run_in_threadpool(orch.call_futures_manual_select_point, symbol,
                                          freq=freq, bi_idx=bi_idx, end_date=end_date,
@@ -701,6 +707,11 @@ def api_futures_read_stream(
         gen = sse_futures_stream_dual(symbol, freq, sub_freq, start_time, sub_start_time,
                                       end_time, reset_selection=reset_selection, live=live)
     else:
+        # 单窗周期同样要在建流前拒：`freq` 是 Query 参数，前端按钮折叠挡不住
+        # 直接打接口；此前 `?freq=d`/`60m`（表内未开放）真会出图，`1h` 变 15s。
+        _freq_err = _validate_futures_freq(freq)
+        if _freq_err:
+            raise HTTPException(status_code=400, detail=_freq_err)
         gen = sse_futures_stream_single(symbol, freq, start_time, end_time,
                                         reset_selection=reset_selection, live=live)
 

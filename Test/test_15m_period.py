@@ -266,6 +266,84 @@ def test_futures_dual_pairs_mirror():
     print("[PASS] 期货双窗配对表两端镜像一致、等价于「严格更小」、校验与显式透传均已接线")
 
 
+def test_period_map_coverage():
+    """周期映射表覆盖护栏：区间套静态表 / 双窗默认配对 / 前端按钮开关。
+
+    这三张表都不在运行期校验链上，漏 key 的后果全是**静默降级**：
+      - `_*_SUB_FREQ_MAP` 漏 key → 区间套 `sub_freq=None` → 缓存键 `SYMBOL:None`
+        → `check_nesting_divergence` miss 恒 `return True`（当"子级别背驰"放行），
+        买卖点失去嵌套过滤，图上照样画；
+      - `_FUTURES_DUAL_FREQ_MAP` 漏 key → 只传上窗时 `_resolve` 返 None → 400；
+        值不在配对空间 → 同样 400，但前端按钮还亮着（点下去才报错）；
+      - 前端 `SHOW` 漏 key → 按钮永不出现（后端改好了也点不到）。
+    加 15m 那轮全靠人工逐处补，本测试把「漏一处必红」钉住。
+    """
+    from Common.CEnum import STOCKS_FREQS, FUTURES_FREQS, FREQ_SEC_MAP
+
+    # ── A. 区间套静态表：keys == 本市场周期 − 最小周期；值 ∈ 本市场且严格更小 ──
+    maps = extract_from_file("BuySellPoint/BSPointList.py",
+                             ["_STOCKS_SUB_FREQ_MAP", "_FUTURES_SUB_FREQ_MAP"])
+    for label, key, freqs in (("股票", "_STOCKS_SUB_FREQ_MAP", STOCKS_FREQS),
+                              ("期货", "_FUTURES_SUB_FREQ_MAP", FUTURES_FREQS)):
+        table = maps[key]
+        smallest = min(freqs, key=lambda f: FREQ_SEC_MAP[f])
+        expect = set(freqs) - {smallest}
+        assert set(table) == expect, (
+            f"{label} {key} 覆盖不全：缺 {sorted(expect - set(table))}，"
+            f"多 {sorted(set(table) - expect)}（最小周期 {smallest} 无下窗）")
+        for main, sub in table.items():
+            assert sub in freqs, f"{label} {key}['{main}']='{sub}' 不是本市场周期"
+            assert FREQ_SEC_MAP[sub] < FREQ_SEC_MAP[main], (
+                f"{label} {key}['{main}']='{sub}' 没有严格更小"
+                f"（区间套会取到同级或更粗的级别）")
+
+    # ── B. 双窗默认配对：值必须落在配对空间内；后端默认值 == 前端默认值 ──
+    dual = extract_from_file("App/AppUtils.py",
+                             ["_FUTURES_DUAL_FREQ_MAP"])["_FUTURES_DUAL_FREQ_MAP"]
+    with open(os.path.join(ROOT, "App/AppSSE.py"), encoding="utf-8") as f:
+        be_tree = ast.parse(f.read())
+    pairs = None
+    for node in be_tree.body:
+        if isinstance(node, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == "_FUTURES_DUAL_PAIRS" for t in node.targets):
+            pairs = {k.value: {e.value for e in v.elts}
+                     for k, v in zip(node.value.keys, node.value.values)}
+    assert pairs, "App/AppSSE.py 找不到 _FUTURES_DUAL_PAIRS"
+    assert set(dual) <= set(pairs), \
+        f"默认配对表上窗 {sorted(set(dual) - set(pairs))} 不在配对空间表内（只传上窗会 400）"
+    for main, sub in dual.items():
+        assert sub in pairs[main], (
+            f"默认配对 {main}+{sub} 不在配对空间 {sorted(pairs[main])} 内"
+            f"（前端只传上窗时后端会 400）")
+
+    with open(os.path.join(ROOT, "Frontend/app.js"), encoding="utf-8") as f:
+        js = f.read()
+    # getDualSubFreq 是前端唯一默认下窗来源；与后端 _resolve 的默认值必须逐项相同，
+    # 否则"前端默认 5m、后端默认 1m"会让同一操作得到两种级别（且都不报错）。
+    js_dual = dict(re.findall(r"if \(mainFreq === '(\w+)'\) return '(\w+)';", js))
+    for main, sub in dual.items():
+        assert js_dual.get(main) == sub, (
+            f"getDualSubFreq('{main}')={js_dual.get(main)!r} 与后端默认 {sub!r} 不一致")
+
+    # ── C. 前端按钮开关：覆盖两市场并集，且按市场可见性不得写反 ──
+    m = re.search(r"const SHOW = \{(.*?)\};", js, re.S)
+    assert m, "前端未找到 updateFreqButtonStates 的 SHOW 映射"
+    shown = {k: v.strip() for k, v in re.findall(r"'(\w+)':\s*([^,}]+)", m.group(1))}
+    union = set(STOCKS_FREQS) | set(FUTURES_FREQS)
+    assert set(shown) >= union, f"SHOW 缺周期 {sorted(union - set(shown))}（按钮永不出现）"
+    both = set(STOCKS_FREQS) & set(FUTURES_FREQS)
+    for f_, expr in shown.items():
+        if f_ in both:
+            assert expr == "true", f"SHOW['{f_}'] = {expr}：两市场共有周期须为 true"
+        elif f_ in FUTURES_FREQS:
+            assert expr in ("true", "isFutures"), \
+                f"SHOW['{f_}'] = {expr}：期货周期必须可见（否则期货页无此按钮）"
+        else:
+            assert expr in ("true", "!isFutures"), \
+                f"SHOW['{f_}'] = {expr}：股票周期必须可见"
+    print("[PASS] 区间套表覆盖完整、双窗默认配对两端一致、前端 SHOW 覆盖两市场且方向正确")
+
+
 def test_market_freq_partition():
     """市场周期支持集单一事实源：股票/期货周期按市场隔离，消费方与其一致，前端镜像守卫。"""
     from Common.CEnum import (STOCKS_FREQS, FUTURES_FREQS, STOCKS_FREQS_ORDERED,
@@ -329,6 +407,7 @@ def main():
     test_freq_single_source()
     test_market_freq_partition()
     test_futures_dual_pairs_mirror()
+    test_period_map_coverage()
 
     test_dual_consistency()
     print("ALL 15m/30m TESTS PASS")

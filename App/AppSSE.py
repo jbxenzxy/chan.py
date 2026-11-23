@@ -46,7 +46,7 @@ from App.AppData import app_data
 from BuySellPoint.BSPointList import _main_bi_range, _futures_red_range, CMyBSPointList, set_replay_mode
 # chan.py 核心（与 AppEngine 同源；期货分析链路统一走 SSE init_chan_symbol）
 from Chan import CChan
-from Common.CEnum import AUTYPE, FX_TYPE, FREQ_SEC_MAP
+from Common.CEnum import AUTYPE, FX_TYPE, FREQ_SEC_MAP, FUTURES_FREQS
 # SSE 数据源抽象（tqsdk 仅在 DataAPI 可见；生成器消费 src.* 协议；
 # close_all/CSSESource 一并 re-export，API 层经本模块消费，不直连 DataAPI）
 from DataAPI.TqSdkCSSESource import (  # noqa: F401
@@ -98,6 +98,32 @@ _FUTURES_DUAL_PAIRS = {
     "1m": {"15s"},
     # 15s 为期货最小周期，无下窗可选（与股票 5m 同语义）
 }
+
+
+def _validate_futures_freq(freq, where="期货"):
+    """周期是否落在期货开放集内：合法返回 None，否则返回错误信息（调用方 4xx）。
+
+    `CTqSdkAPI.FREQ_SEC_MAP` 是 FREQ_TABLE 的**全表**（15s…w/M，含股票专用周期），
+    而期货只开放 `FUTURES_FREQS`。单窗与手工选点两条入口此前只查全表，于是
+    `?freq=60m`/`?freq=d`（表内但期货未开放）照单全收、`?freq=1h`（表外）静默
+    退化成 15s。开放集的语义必须在这里兑现，不能只靠前端按钮折叠。
+    """
+    if freq in FUTURES_FREQS:
+        return None
+    _opts = "、".join(sorted(FUTURES_FREQS, key=lambda f: -FREQ_SEC_MAP[f]))
+    return f"{where}不支持的周期: {freq}（可选 {_opts}）"
+
+
+def _futures_freq_sec(freq):
+    """期货周期 → 秒数的唯一取值处（**严格取值**，不做静默兜底）。
+
+    正常路径由路由层 `_validate_futures_freq` 拦成 4xx；此处再抛是最后一道防线：
+    绕过路由直接调用生成器/选点函数时，宁可报错，也不要拿 15s 冒充一个没开放的周期。
+    """
+    _err = _validate_futures_freq(freq)
+    if _err:
+        raise ValueError(_err)
+    return FREQ_SEC_MAP[freq]
 
 
 def _resolve_futures_dual_sub_freq(main_freq, sub_freq=None):
@@ -988,6 +1014,12 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, end_time=None
     构造只做实例级初始化（TqApi 在 `src.connect()` 内才创建，此处无网络
     I/O），故提前创建没有副作用。
     """
+    # 周期先校验：非法周期不建会话、不连天勤，直接以 init 错误帧收敛
+    # （与「非期货代码」同形）。此前本函数对 freq 零校验，`?freq=d`/`60m`
+    # 会真的去拉一条期货日线并出图，`?freq=1h` 则静默变成 15s。
+    _freq_err = _validate_futures_freq(freq)
+    if _freq_err:
+        return iter([_sse_frame("init", {"error": _freq_err, "symbol": symbol})])
     src = source if source is not None else CTqSdkSession()
     return _per_frame_session(
         _sse_single_gen(symbol, freq, start_time, end_time, src,
@@ -1035,7 +1067,9 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
         # 所以不能在这里简单 upper()——那会把能用的改成不能用的。
         symbol = CTqSdkAPI.normalize_futures_symbol(symbol) or symbol
 
-        freq_sec = CTqSdkAPI.FREQ_SEC_MAP.get(freq, 15)
+        # 严格取值：非法周期由 sse_futures_stream_single 入口拦成 init 错误帧，
+        # 走不到这里；此处不再 `.get(freq, 15)` 兜底（会把 1h 冒充成 15s）。
+        freq_sec = _futures_freq_sec(freq)
         freq_label = freq
         freq_cn = CTqSdkAPI.FREQ_LABEL_CN.get(freq_label, freq_label)
         display_key = f"{symbol}:{freq_cn}"
@@ -1485,8 +1519,10 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
     # 确定周期：下窗默认值走唯一解析处（与路由校验共用）。此前写死
     # `.get(main_freq, "15s")`，未登记上窗会静默配 15s、差 60 倍还不报错。
     sub_freq = _resolve_futures_dual_sub_freq(main_freq, sub_freq)
-    main_freq_sec = CTqSdkAPI.FREQ_SEC_MAP.get(main_freq, 60)
-    sub_freq_sec = CTqSdkAPI.FREQ_SEC_MAP.get(sub_freq, 15)
+    # 严格取值：合法配对已由路由 400 拦在前，直接调用（绕过路由）时宁可抛错，
+    # 也不要把上窗/下窗的秒数兜底成 60/15（错周期的图比报错更难发现）。
+    main_freq_sec = _futures_freq_sec(main_freq)
+    sub_freq_sec = _futures_freq_sec(sub_freq)
 
     display_key = f"{symbol} 双窗口({main_freq}/{sub_freq})"
     if _SSE_DEBUG:
@@ -2664,7 +2700,12 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0", end_date=None, s
     # 期货符号规范化（与单窗/双窗同一入口）
     symbol = CTqSdkAPI.normalize_futures_symbol(symbol) or symbol
 
-    freq_sec = CTqSdkAPI.FREQ_SEC_MAP.get(freq, 15)
+    # 周期必须是期货开放集内：此前 `.get(freq, 15)` 让 `?freq=1h` 静默退化成
+    # 15s（按 15 秒重建一遍再选点），`60m`/`d`/`w` 表内未开放却照单全收。
+    _freq_err = _validate_futures_freq(freq)
+    if _freq_err:
+        raise AnalysisError(_freq_err)
+    freq_sec = _futures_freq_sec(freq)
     freq_label = freq
     freq_cn = CTqSdkAPI.FREQ_LABEL_CN.get(freq_label, freq_label)
     display_key = f"{symbol}:{freq_cn}"
