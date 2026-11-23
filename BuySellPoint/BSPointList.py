@@ -527,7 +527,7 @@ def _get_kl_type(freq):
 # 下窗集合」（多对多），本表是「区间套时取子级别的一对一映射」。
 # 两者既不同名也不同义，分开维护更清晰。
 _STOCKS_SUB_FREQ_MAP = {'w': 'd', 'd': '30m', '30m': '5m', '15m': '5m'}
-_FUTURES_SUB_FREQ_MAP = {'30m': '5m', '5m': '1m', '1m': '15s'}
+_FUTURES_SUB_FREQ_MAP = {'30m': '5m', '15m': '5m', '5m': '1m', '1m': '15s'}
 
 
 class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
@@ -786,6 +786,15 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             # 保证此处取到的下窗 sub_chan 是已更新到最新的笔结构。
             # （下窗缓存经 AppData 公共 API 读取）
             from App.AppData import app_data, make_futures_sub_key_from_code
+            # 显式下窗周期优先（与股票 _stocks_dual_sub_freq 同构）：SSE 建上窗前写入
+            # chan._futures_dual_sub_freq。手工配对（如 30m+15m）时静态表给的是默认
+            # 对子（5m），必须让「红框用的配对」与「区间套取的缓存」同源，否则红框
+            # 画在 15m、背驰却拿 5m 判，属静默错级别。
+            if parent.chan is not None:
+                _explicit_sub_freq = getattr(parent.chan, "_futures_dual_sub_freq", None)
+                if _explicit_sub_freq:
+                    sub_freq = _explicit_sub_freq       # 三套映射统一：显式传入优先
+                    sub_kl_type = _get_kl_type(sub_freq)
             # P0-2 修复：parent.code 形如 "SYMBOL:freq_sec"（CChan.code 含周期后缀），
             # 经 make_futures_sub_key_from_code 去掉 ":freq_sec" 还原纯 symbol 后
             # 委托 make_futures_sub_key 工厂生成下窗缓存 key（大小写/分隔符单一

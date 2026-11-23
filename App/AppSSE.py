@@ -46,7 +46,7 @@ from App.AppData import app_data
 from BuySellPoint.BSPointList import _main_bi_range, _futures_red_range, CMyBSPointList, set_replay_mode
 # chan.py 核心（与 AppEngine 同源；期货分析链路统一走 SSE init_chan_symbol）
 from Chan import CChan
-from Common.CEnum import AUTYPE, FX_TYPE
+from Common.CEnum import AUTYPE, FX_TYPE, FREQ_SEC_MAP
 # SSE 数据源抽象（tqsdk 仅在 DataAPI 可见；生成器消费 src.* 协议；
 # close_all/CSSESource 一并 re-export，API 层经本模块消费，不直连 DataAPI）
 from DataAPI.TqSdkCSSESource import (  # noqa: F401
@@ -86,6 +86,50 @@ def _non_futures_reject(symbol):
 # 期货窗口取数的公共参数（对齐股票 A/B/C 语义；见 _futures_window_fetch_bars）
 _TQ_MAX_BARS = 10000      # 天勤单序列上限（官方 docstring「每个序列最大支持请求 10000 个数据」）
 _BAR_ESTIMATE_MARGIN = 50 # 墙钟估算根数的固定余量（覆盖会话边界的不完整K线/估算误差）
+
+# ── 期货双窗配对空间（显式登记；前端镜像 = Frontend/app.js 的 FUTURES_DUAL_PAIRS_JS）──
+# 上窗周期 → 可选下窗周期集合。内容等价于「严格更小即可」的全部组合——显式登记
+# 不是为了收紧，而是为了①错误信息能给出可选集②路由能在建流前 4xx 拒绝，不再只靠
+# 前端弹窗兜（前端校验可被绕过）。**改本表必须同步前端镜像，否则两端口径分叉。**
+_FUTURES_DUAL_PAIRS = {
+    "30m": {"15m", "5m", "1m", "15s"},
+    "15m": {"5m", "1m", "15s"},
+    "5m": {"1m", "15s"},
+    "1m": {"15s"},
+    # 15s 为期货最小周期，无下窗可选（与股票 5m 同语义）
+}
+
+
+def _resolve_futures_dual_sub_freq(main_freq, sub_freq=None):
+    """双窗下窗周期的唯一解析处：显式传入优先，否则取默认配对表。
+
+    返回 None 表示该上窗没有默认下窗（15s）——调用方应报错，不要兜底成其它周期。
+    路由校验与 `_sse_dual_gen` 共用本函数，避免"两处各写一遍默认值"。
+    """
+    if sub_freq:
+        return sub_freq
+    return _FUTURES_DUAL_FREQ_MAP.get(main_freq)
+
+
+def _validate_futures_dual_pair(main_freq, sub_freq=None):
+    """校验期货双窗配对（显式守卫，不做静默降级）。
+
+    与 `AppEngine._validate_stock_dual_pair` 同签名同返回：合法返回 None，
+    否则返回错误信息（调用方以 4xx/400 拒绝）。sub_freq 为空时先按默认配对表
+    解析再校验，所以"只传上窗"与"传了非法下窗"都走同一套判定。
+    """
+    if main_freq not in _FUTURES_DUAL_PAIRS:
+        _opts = "、".join(sorted(_FUTURES_DUAL_PAIRS, key=lambda f: -FREQ_SEC_MAP[f]))
+        return f"双窗口不支持当前上窗周期: {main_freq}（可选 {_opts}）"
+    subs = _FUTURES_DUAL_PAIRS[main_freq]
+    _opts = "、".join(sorted(subs, key=lambda f: -FREQ_SEC_MAP[f]))
+    resolved = _resolve_futures_dual_sub_freq(main_freq, sub_freq)
+    if not resolved:
+        return f"双窗口缺少下窗周期 sub_freq（{main_freq} 可选 {_opts}）"
+    if resolved not in subs:
+        return (f"双窗口周期配对无效: {main_freq}+{resolved}"
+                f"（上窗须严格大于下窗；{main_freq} 可选 {_opts}）")
+    return None
 
 
 def _parse_flex_time(s):
@@ -715,7 +759,7 @@ def _live_target_blocked(src, symbol, freq_sec, last_dt):
 
 
 def init_chan_symbol(src, symbol, _name, freq_sec, freq_label, start_time=None, end_time=None, num_bars=None,
-                     live=False):
+                     live=False, dual_sub_freq=None):
     """拉取历史K线 + 运行 chan.py 分析，返回 (chan, klines, kl_type, records) 或 None。
     由 SSE handler 调用，每个 SSE 连接自包含。
     start_time: 选点起始时间，有值时只拉取该时间之后的K线（B 操作：左边界=T，全量到最新）；
@@ -795,7 +839,8 @@ def init_chan_symbol(src, symbol, _name, freq_sec, freq_label, start_time=None, 
 
         # 统一构造：set_data + 周期映射 + 建 CChan + step_load（见 _build_futures_chan）
         # 数据注入经 src.set_data（Session 协议），不落类级缓存
-        chan, kl_type = _build_futures_chan(records, symbol, freq_sec, src=src)
+        chan, kl_type = _build_futures_chan(records, symbol, freq_sec, src=src,
+                                            dual_sub_freq=dual_sub_freq)
 
         klines = src.get_kline_serial(symbol, freq_sec)
 
@@ -1437,9 +1482,9 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
 
     from datetime import datetime
 
-    # 确定周期
-    if not sub_freq:
-        sub_freq = _FUTURES_DUAL_FREQ_MAP.get(main_freq, "15s")
+    # 确定周期：下窗默认值走唯一解析处（与路由校验共用）。此前写死
+    # `.get(main_freq, "15s")`，未登记上窗会静默配 15s、差 60 倍还不报错。
+    sub_freq = _resolve_futures_dual_sub_freq(main_freq, sub_freq)
     main_freq_sec = CTqSdkAPI.FREQ_SEC_MAP.get(main_freq, 60)
     sub_freq_sec = CTqSdkAPI.FREQ_SEC_MAP.get(sub_freq, 15)
 
@@ -1602,7 +1647,7 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
         _replay_prev2 = set_replay_mode(bool(end_time))
         try:
             main_result = init_chan_symbol(src, symbol, name, main_freq_sec, main_freq_label, main_start_time, end_time,
-                                           live=live)
+                                           live=live, dual_sub_freq=sub_freq)
         except FuturesReplayBlocked as _blk:
             # 同上/下窗：诊断落成错误帧（上窗被钉住同样要能提示 + 给「切换」）
             _msg = f"上窗：{_blk.message}" if _blk.code == "before_selection" else _blk.message
@@ -2010,7 +2055,8 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
 # 区域 2 · 期货分析
 # ═══════════════════════════════════════════════════════════════════════
 
-def _build_futures_chan(records, symbol, freq_sec, config=None, code=None, src=None):
+def _build_futures_chan(records, symbol, freq_sec, config=None, code=None, src=None,
+                        dual_sub_freq=None):
     """统一期货 CChan 构造：注入数据源 → 周期映射 → 建链 → 全量消费。
 
     期货各链路唯一的「数据 → CChan」构造入口。单一定义：
@@ -2051,6 +2097,11 @@ def _build_futures_chan(records, symbol, freq_sec, config=None, code=None, src=N
             lv_list=[kl_type], config=config, autype=AUTYPE.NONE,
             market_type="futures",
         )
+        # 独立双窗：把「实际下窗周期」钉在上窗 CChan 上，供区间套读取
+        # （与股票 AppEngine 的 chan._stocks_dual_sub_freq 同构）。必须写在
+        # step_load 之前——首轮 bsp 计算就要用它去取下窗缓存，晚了首屏判据即错级别。
+        if dual_sub_freq:
+            chan._futures_dual_sub_freq = dual_sub_freq
         for _snapshot in chan.step_load():
             pass
     return chan, kl_type

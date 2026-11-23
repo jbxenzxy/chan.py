@@ -13,7 +13,7 @@ test_engine_config.py — 引擎时序配置：自动兜底拆除后的形态
       _close_stuck_bars 均不存在）
   [4] PositionBook 容量（D2：笔数上限已删除）+ 旧配置键丢弃（D17）
   [5] Period.SESSION_SECS 收口（原 main.py 硬编码 4.5h）
-  [6] bars_per_day(SESSION_SECS) 与四周期对账
+  [6] bars_per_day(SESSION_SECS) 与五周期对账
 """
 from __future__ import annotations
 
@@ -115,8 +115,8 @@ from Trading.Infra.Period import bars_per_day  # noqa: E402
 from Trading.Infra.Clock import SESSION_SECS  # noqa: E402
 check("SESSION_SECS == 4.5h", SESSION_SECS, 4.5 * 3600)
 
-# ═══ [6] bars_per_day 四周期对账 ═══
-print("\n[6] bars_per_day(SESSION_SECS) 四周期")
+# ═══ [6] bars_per_day 五周期对账 ═══
+print("\n[6] bars_per_day(SESSION_SECS) 五周期")
 from Trading.Infra.Period import FREQ_SEC  # noqa: E402
 for freq, secs in FREQ_SEC.items():
     expect = int(SESSION_SECS // secs)

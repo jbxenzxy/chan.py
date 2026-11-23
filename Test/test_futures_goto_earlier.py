@@ -746,7 +746,7 @@ def test_switch_connection_drops_selection():
         """止步哨兵：跑到取数就够，后面的快照/推送逻辑本测试不关心。"""
 
     def _stub_init(api, symbol, name, freq_sec, freq_label, start_time=None,
-                   end_time=None, num_bars=None, live=False):
+                   end_time=None, num_bars=None, live=False, dual_sub_freq=None):
         captured["args"] = (symbol, start_time, end_time)
         captured["live"] = live
         raise _Stop("stop at init_chan_symbol")

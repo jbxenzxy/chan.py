@@ -81,7 +81,7 @@ def seeded(signal_symbol: str) -> TradingConfig:
 
 def main():
     print("\n[1] Period 周期档案（仅 freq / bar_secs 时间语义）")
-    check("PERIOD_PROFILES 仍是 4 周期", len(PERIOD_PROFILES), 4)
+    check("PERIOD_PROFILES 已是 5 周期", len(PERIOD_PROFILES), 5)
     for f in SUPPORTED_FREQS:
         p = PERIOD_PROFILES[f]
         check("{} bar_secs 与 FREQ_SEC 一致".format(f), p.bar_secs, FREQ_SEC[f])
@@ -107,7 +107,9 @@ def main():
 
     print("\n[4] 未知 freq 容错（fail-fast 在 main.py）")
     try:
-        c_unk = TradingConfig(source={"freq": "15m"})
+        # 取 60m：主程序 FREQ_TABLE 有、Trading 未登记，正是"未登记周期"的形态
+        # （15m 已于 2026-11-23 登记，不能再拿它当未知样例）
+        c_unk = TradingConfig(source={"freq": "60m"})
         check("未知 freq 不抛异常", True, True)
         check("未知 freq period_profile=None", c_unk.period_profile, None)
     except Exception as e:

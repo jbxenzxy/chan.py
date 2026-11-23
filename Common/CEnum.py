@@ -67,7 +67,7 @@ SUBSECOND_FREQS   = {f for f, r in FREQ_TABLE.items() if r[4]}     # 秒级
 
 # ═══════════════════════════════════════════════════════════════════
 # 市场周期支持集（单一事实源）——按市场界定「开放哪些周期」，股票/期货的周期
-# 差异（股票 w/d/30m/15m/5m，期货 30m/5m/1m/15s）在此一次划分清楚，各自的变更
+# 差异（股票 w/d/30m/15m/5m，期货 30m/15m/5m/1m/15s）在此一次划分清楚，各自的变更
 # 互不牵连（如股票新增 60m 只动 STOCKS_FREQS，不影响期货；反之亦然）。
 # ── 为什么拆开 ──────────────────────────────────────────────
 #   股票与期货的周期表本质不同（股票含 w/d 周月，期货含 15s 秒级），若共用一份
@@ -86,7 +86,7 @@ SUBSECOND_FREQS   = {f for f, r in FREQ_TABLE.items() if r[4]}     # 秒级
 #   · _ORDERED 列表按 FREQ_TABLE 顺序稳定展开，供需要稳定序的场景（如前端按钮序）。
 # ═══════════════════════════════════════════════════════════════════
 STOCKS_FREQS          = frozenset({"w", "d", "30m", "15m", "5m"})
-FUTURES_FREQS         = frozenset({"30m", "5m", "1m", "15s"})
+FUTURES_FREQS         = frozenset({"30m", "15m", "5m", "1m", "15s"})
 STOCKS_FREQS_ORDERED   = [f for f in FREQ_TABLE if f in STOCKS_FREQS]
 FUTURES_FREQS_ORDERED  = [f for f in FREQ_TABLE if f in FUTURES_FREQS]
 

@@ -677,6 +677,23 @@
             return !!(subs && subFreq && subs.indexOf(subFreq) >= 0);
         }
 
+        // 期货双窗口配对空间（与后端 AppSSE._FUTURES_DUAL_PAIRS 同表、同口径）
+        // 内容等价于「严格更小即可」的全部组合——显式登记是为了配对校验与可选集提示，
+        // 不收紧任何现有组合。**改这张表必须同步后端 _FUTURES_DUAL_PAIRS。**
+        const FUTURES_DUAL_PAIRS_JS = {
+            '30m': ['15m', '5m', '1m', '15s'],
+            '15m': ['5m', '1m', '15s'],
+            '5m':  ['1m', '15s'],
+            '1m':  ['15s'],
+            // 15s 为期货最小周期，无下窗可选（与股票 5m 同语义）
+        };
+
+        // 校验期货双窗配对（与 isValidStockDualPair 同实现，只是表不同）
+        function isValidFuturesDualPair(mainFreq, subFreq) {
+            const subs = FUTURES_DUAL_PAIRS_JS[mainFreq];
+            return !!(subs && subFreq && subs.indexOf(subFreq) >= 0);
+        }
+
         // 双窗口：获取上面窗口某根K线对应的灰框边界（子级别K线时间字符串）
         // 通用方案：利用相邻K线时间，不依赖周期长度假设
         //   期货：K线时间=开始时间。左边界=当前时间X，右边界=(下一根时间Y - bottom_sec)
@@ -5433,8 +5450,10 @@
             }
             const isFutures = chartData && chartData.meta && chartData.meta.market === 'futures';
             if (isFutures) {
-                // 期货：30m/5m/1m 可双窗口，15s 不可
-                document.getElementById("btn-dual").disabled = (currentFreq === '15s');
+                // 期货：30m/5m/1m 可双窗口；15m 与股票同口径不得单窗进双窗（2026-11-23 裁决），
+                // 15s 无下窗亦不可。注意 5m 保留——它有 1m 下窗，"最小周期"规则不适用。
+                document.getElementById("btn-dual").disabled =
+                    (currentFreq === '15m' || currentFreq === '15s');
             } else {
                 // 股票：w/d/30m 可双窗口；15m/5m 不可（15m/5m 不单独作为主窗切双窗）
                 document.getElementById("btn-dual").disabled = (currentFreq === '15m' || currentFreq === '5m');
@@ -5757,9 +5776,10 @@
         // 根据市场类型更新频率按钮的启用/禁用状态
         function updateFreqButtonStates(isFutures) {
             // 按市场折叠按钮（腾出顶部空间，用户要求）：
-            //   股票: 周K/日K/30分/15分/5分；期货: 30分/5分/1分/15秒
+            //   股票: 周K/日K/30分/15分/5分；期货: 30分/15分/5分/1分/15秒
+            //   15m 起两市场共享（期货 2026-11-23 开放），故不再按市场折叠
             const SHOW = {'w': !isFutures, 'd': !isFutures, '30m': true,
-                          '15m': !isFutures, '5m': true, '1m': isFutures,
+                          '15m': true, '5m': true, '1m': isFutures,
                           '15s': isFutures};
             for (const f in SHOW) {
                 const el = document.getElementById('btn-' + f);
@@ -5772,25 +5792,27 @@
             document.getElementById('btn-15s').disabled = !isFutures;
             // 共享周期：30m 始终启用
             document.getElementById('btn-30m').disabled = false;
-            // 15m：股票周期（股票单窗/双窗可用；期货无 15m，禁用）
-            document.getElementById('btn-15m').disabled = isFutures;
-            // 5m: 期货双窗口→全部启用（上下窗解耦）；股票双窗口→按焦点窗口（配对放宽）
-            if (isDualWindow && isFutures) {
-                document.getElementById('btn-5m').disabled = false;
-                document.getElementById('btn-15m').disabled = true;
-                // 期货双窗口：上下窗独立切换，15s不再禁用
-            } else if (isDualWindow && !isFutures) {
+            // 15m：两市场共享（单窗两市场都可用；双窗下按焦点/配对开合，见下）
+            document.getElementById('btn-15m').disabled = false;
+            // 双窗口下按焦点窗口开合 —— 两市场同构，只有配对空间表不同：
+            //   下窗焦点：仅启用当前上窗配对空间内的周期（w 永不可作下窗）
+            //   上窗焦点：禁用该市场的最小周期（无下窗可选）
+            // 期货 5m 不在此列：它有 1m 下窗，"禁最小周期"的规则不适用（股票 5m 才是最小）
+            if (isDualWindow) {
+                const _pairs = isFutures ? FUTURES_DUAL_PAIRS_JS : STOCKS_DUAL_PAIRS_JS;
                 if (activeDualWindow === 'sub') {
-                    // 股票下窗焦点：仅启用当前上窗配对空间内的周期（w 不可作下窗）
-                    const subs = STOCKS_DUAL_PAIRS_JS[currentFreq] || [];
+                    const subs = _pairs[currentFreq] || [];
                     document.getElementById('btn-w').disabled = true;
                     document.getElementById('btn-d').disabled = subs.indexOf('d') < 0;
                     document.getElementById('btn-30m').disabled = subs.indexOf('30m') < 0;
                     document.getElementById('btn-15m').disabled = subs.indexOf('15m') < 0;
                     document.getElementById('btn-5m').disabled = subs.indexOf('5m') < 0;
+                    document.getElementById('btn-1m').disabled = (!isFutures) || subs.indexOf('1m') < 0;
+                    document.getElementById('btn-15s').disabled = (!isFutures) || subs.indexOf('15s') < 0;
+                } else if (isFutures) {
+                    document.getElementById('btn-15s').disabled = true;   // 期货最小周期，无下窗
                 } else {
-                    // 股票上窗焦点：5m 为最小周期无下窗，禁用
-                    document.getElementById('btn-5m').disabled = true;
+                    document.getElementById('btn-5m').disabled = true;    // 股票最小周期，无下窗
                 }
             } else {
                 document.getElementById('btn-5m').disabled = false;
@@ -5817,10 +5839,11 @@
             // 期货双窗口下窗焦点：独立切换下窗周期，不联动上窗
             if (isDualWindow && activeDualWindow === 'sub' && isFutures) {
                 if (dualSubFreq === freq) return;
-                // 校验：下窗周期必须严格小于上窗周期，否则弹窗提示并取消
-                if (freqLevel(freq) >= freqLevel(currentFreq)) {
-                    showAlert("下窗周期必须小于上窗周期，当前上窗周期为" + freqLabel(currentFreq)
-                        + "，无法切换到" + freqLabel(freq));
+                // 校验：下窗周期须在上窗的配对空间内（显式表，与后端 _FUTURES_DUAL_PAIRS 同源）
+                if (!isValidFuturesDualPair(currentFreq, freq)) {
+                    const subs = (FUTURES_DUAL_PAIRS_JS[currentFreq] || []).map(freqLabel).join("、");
+                    showAlert("下窗周期配对无效: " + freqLabel(currentFreq) + "+" + freqLabel(freq)
+                        + (subs ? "（" + freqLabel(currentFreq) + " 可选 " + subs + "）" : "（当前上窗无下窗可选）"));
                     return;
                 }
                 // 切换周期时取消区间选择
@@ -5896,11 +5919,16 @@
                 return;
             }
             if (currentFreq === freq) return;
-            // 期货双窗口校验：上窗周期必须严格大于下窗周期，否则弹窗提示并取消
-            if (isDualWindow && isFutures && freqLevel(freq) <= freqLevel(dualSubFreq)) {
-                showAlert("上窗周期必须大于下窗周期，当前下窗周期为" + freqLabel(dualSubFreq)
-                    + "，无法切换到" + freqLabel(freq));
-                return;
+            // 期货双窗口（显式配对表）：新上窗必须有下窗可选（15s 是最小周期，不可作上窗），
+            // 且当前下窗仍须落在新上窗的配对空间内，否则回退默认配对（同股票口径）
+            if (isDualWindow && isFutures) {
+                if (!FUTURES_DUAL_PAIRS_JS[freq]) {
+                    showAlert("上窗周期必须大于下窗周期，" + freqLabel(freq) + "为期货最小周期，双窗口下不可选");
+                    return;
+                }
+                if (!isValidFuturesDualPair(freq, dualSubFreq)) {
+                    dualSubFreq = getDualSubFreq(freq);
+                }
             }
             // 股票双窗口（配对放宽）：新上窗周期无任何下窗可选 → 拒绝切换
             // （5m 为股票最小周期）；当前下窗仍为合法配对则保持，否则回退默认配对

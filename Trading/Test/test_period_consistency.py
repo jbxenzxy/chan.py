@@ -63,13 +63,13 @@ def check(name, got, expected):
 def main():
     global _SKIPPED
     print("\n[1] Trading 自持周期表")
-    check("支持 4 个周期", len(SUPPORTED_FREQS), 4)
+    check("支持 5 个周期", len(SUPPORTED_FREQS), 5)
     check("15s = 15 秒", FREQ_SEC.get("15s"), 15)
     check("1m = 60 秒", FREQ_SEC.get("1m"), 60)
     check("5m = 300 秒", FREQ_SEC.get("5m"), 300)
     check("30m = 1800 秒", FREQ_SEC.get("30m"), 1800)
     check("SUPPORTED_FREQS 按粗细升序", list(SUPPORTED_FREQS),
-          ["15s", "1m", "5m", "30m"])
+          ["15s", "1m", "5m", "15m", "30m"])
 
     print("\n[2] Period 档案自洽")
     for f in SUPPORTED_FREQS:
@@ -110,8 +110,11 @@ def main():
             check("{} 主程序也是 {} 秒".format(f, secs),
                   MAIN_FREQ_SEC_MAP.get(f), secs)
         # 反向：主程序登记的"期货可用周期"必须都被 Trading 覆盖
+        # 取数来源必须是 Common.CEnum（FUTURES_FREQS 的定义处）；此前写
+        # `from App.AppConfig import FUTURES_FREQS` —— 该模块从不导出此符号，
+        # except 必然命中、每次都打印"⚠ 跳过"，等于一条哑护栏。
         try:
-            from App.AppConfig import FUTURES_FREQS  # noqa: E402
+            from Common.CEnum import FUTURES_FREQS  # noqa: E402
         except Exception:
             FUTURES_FREQS = None
         if FUTURES_FREQS:

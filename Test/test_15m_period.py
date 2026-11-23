@@ -213,15 +213,69 @@ def test_dual_consistency():
     print("[PASS] 单窗15m/5m 灰化入口 + 双窗内15m可作上窗，两端一致")
 
 
+def test_futures_dual_pairs_mirror():
+    """期货双窗配对表：两端镜像一致 + 覆盖完整 + 等价于「严格更小」。
+
+    这张表在 AppSSE._FUTURES_DUAL_PAIRS（后端校验）与 app.js 的
+    FUTURES_DUAL_PAIRS_JS（前端按钮/切换守卫）各存一份，无法 import；
+    靠本测试钉住，否则两端口径分叉时前端放行、后端 400（或反之）。
+    """
+    from Common.CEnum import FREQ_SEC_MAP, FUTURES_FREQS
+    with open(os.path.join(ROOT, "App/AppSSE.py"), encoding="utf-8") as f:
+        be_src = f.read()
+    be_tree = ast.parse(be_src)
+    back = None
+    for node in be_tree.body:
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name) and t.id == "_FUTURES_DUAL_PAIRS":
+                    back = {k.value: {e.value for e in v.elts}
+                            for k, v in zip(node.value.keys, node.value.values)}
+    assert back, "App/AppSSE.py 找不到 _FUTURES_DUAL_PAIRS"
+
+    with open(os.path.join(ROOT, "Frontend/app.js"), encoding="utf-8") as f:
+        js = f.read()
+    m = re.search(r"const FUTURES_DUAL_PAIRS_JS = \{(.*?)\n        \};", js, re.S)
+    assert m, "前端未找到 FUTURES_DUAL_PAIRS_JS"
+    front = {}
+    for k, body in re.findall(r"'(\w+)':\s*\[([^\]]*)\]", m.group(1)):
+        front[k] = {s.strip().strip("'") for s in body.split(",") if s.strip()}
+    assert back == front, f"期货配对表两端不一致：后端 {back} / 前端 {front}"
+
+    expect_mains = set(FUTURES_FREQS) - {"15s"}
+    assert set(back) == expect_mains, \
+        f"配对表上窗集合 {set(back)} 应 == 期货周期去掉最小周期 {expect_mains}"
+    for main, subs in back.items():
+        want = {f for f in FUTURES_FREQS if FREQ_SEC_MAP[f] < FREQ_SEC_MAP[main]}
+        assert subs == want, f"{main} 配对空间 {subs} 应 == 严格更小的全部周期 {want}"
+    # 守卫函数与接线存在（防"只建表不校验"）
+    assert "def _validate_futures_dual_pair(" in be_src, "缺 _validate_futures_dual_pair"
+    assert "def _resolve_futures_dual_sub_freq(" in be_src, "缺 _resolve_futures_dual_sub_freq"
+    with open(os.path.join(ROOT, "FrontAPI.py"), encoding="utf-8") as f:
+        api_src = f.read()
+    assert "_validate_futures_dual_pair(freq, sub_freq)" in api_src, \
+        "双窗路由未接配对校验（非法配对应在建流前 400）"
+    # 显式下窗透传链：写侧（SSE 建上窗前钉属性）→ 读侧（区间套优先读它）
+    assert "dual_sub_freq=sub_freq" in be_src, "双窗建上窗未透传实际下窗周期"
+    assert "chan._futures_dual_sub_freq = dual_sub_freq" in be_src, \
+        "上窗 CChan 未钉 _futures_dual_sub_freq（区间套读不到显式配对）"
+    with open(os.path.join(ROOT, "BuySellPoint/BSPointList.py"), encoding="utf-8") as f:
+        bsp_src = f.read()
+    assert 'getattr(parent.chan, "_futures_dual_sub_freq"' in bsp_src, \
+        "区间套期货分支未读显式下窗周期（会退回静态表判错级别）"
+    print("[PASS] 期货双窗配对表两端镜像一致、等价于「严格更小」、校验与显式透传均已接线")
+
+
 def test_market_freq_partition():
     """市场周期支持集单一事实源：股票/期货周期按市场隔离，消费方与其一致，前端镜像守卫。"""
     from Common.CEnum import (STOCKS_FREQS, FUTURES_FREQS, STOCKS_FREQS_ORDERED,
                               FUTURES_FREQS_ORDERED, FREQ_SEC_MAP)
     assert STOCKS_FREQS == frozenset({"w", "d", "30m", "15m", "5m"}), "STOCKS_FREQS 不符合股票周期"
-    assert FUTURES_FREQS == frozenset({"30m", "5m", "1m", "15s"}), "FUTURES_FREQS 不符合期货周期"
+    assert FUTURES_FREQS == frozenset({"30m", "15m", "5m", "1m", "15s"}), "FUTURES_FREQS 不符合期货周期"
     # 客观属性仍共享，未按市场复制 FREQ_TABLE（两市场并集须落在客观周期表内）
     assert set(STOCKS_FREQS) | set(FUTURES_FREQS) <= set(FREQ_TABLE), "市场周期并集越出 FREQ_TABLE"
-    # 期货 SUPPORTED_FREQS 派生自 FUTURES_FREQS，且顺序 = FREQ_TABLE 序
+    # 期货 SUPPORTED_FREQS 是**手写字面量**（非派生）：改 FUTURES_FREQS 不会自动同步，
+    # 必须手工改 TqSdkAPI 里那份列表，且顺序要按 FREQ_TABLE 序。故此处用 AST 取字面量比对。
     tq = extract_from_file("DataAPI/TqSdkAPI.py", ["SUPPORTED_FREQS"],
                            extras={"FUTURES_FREQS_ORDERED": FUTURES_FREQS_ORDERED})
     assert set(tq["SUPPORTED_FREQS"]) == FUTURES_FREQS, "期货 SUPPORTED_FREQS 与 FUTURES_FREQS 失配"
@@ -243,7 +297,9 @@ def test_market_freq_partition():
     stk_keys = _lookback_keys("STOCKS_LOOKBACK_CONFIG")
     fut_keys = _lookback_keys("FUTURES_LOOKBACK_CONFIG")
     assert stk_keys <= STOCKS_FREQS, f"STOCKS_LOOKBACK_CONFIG keys {stk_keys} 超出 STOCKS_FREQS"
-    assert fut_keys <= FUTURES_FREQS, f"FUTURES_LOOKBACK_CONFIG keys {fut_keys} 超出 FUTURES_FREQS"
+    assert fut_keys == FUTURES_FREQS, \
+        f"FUTURES_LOOKBACK_CONFIG keys {fut_keys} 与 FUTURES_FREQS {set(FUTURES_FREQS)} 不等" \
+        f"（缺: {set(FUTURES_FREQS) - fut_keys}，多: {fut_keys - set(FUTURES_FREQS)}）"
     # 股票主周期时长 keys ⊆ STOCKS_FREQS
     appeng = extract_from_file("App/AppEngine.py", ["_STOCKS_MAIN_PERIOD"],
                                extras={"FREQ_SEC_MAP": FREQ_SEC_MAP})
@@ -272,6 +328,7 @@ def main():
     test_get_date_fmt_15m({"_get_date_fmt": _get_date_fmt})
     test_freq_single_source()
     test_market_freq_partition()
+    test_futures_dual_pairs_mirror()
 
     test_dual_consistency()
     print("ALL 15m/30m TESTS PASS")

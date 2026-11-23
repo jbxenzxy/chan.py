@@ -210,6 +210,7 @@ from App.AppSSE import (  # noqa: F401
     sse_futures_stream_single,
     sse_futures_stream_dual,
     _sse_frame,
+    _validate_futures_dual_pair,
 )
 
 
@@ -692,6 +693,11 @@ def api_futures_read_stream(
         raise HTTPException(status_code=503, detail="天勤数据源不可用")
 
     if dual:
+        # 配对校验放在建流之前：非法配对直接 400，不进 SSE（生成器一旦开流，
+        # 错误只能落成 init 帧，且前端可绕过自己的弹窗直接打接口）。
+        _pair_err = _validate_futures_dual_pair(freq, sub_freq)
+        if _pair_err:
+            raise HTTPException(status_code=400, detail=_pair_err)
         gen = sse_futures_stream_dual(symbol, freq, sub_freq, start_time, sub_start_time,
                                       end_time, reset_selection=reset_selection, live=live)
     else:

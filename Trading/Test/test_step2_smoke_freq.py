@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Step 2.6 收官测试：--freq {30m,5m,1m,15s} 四周期启动冒烟全通。
+"""Step 2.6 收官测试：--freq {30m,15m,5m,1m,15s} 五周期启动冒烟全通。
 
 范围（交接文档的 2.6 定义）：
   对四个支持周期各完整走一遍 main.build_runtime() 启动链路（不联网）：
@@ -92,14 +92,14 @@ def isolated_trading_env(**overrides):
 
 
 # 期望值（SSOT 校验对账：Period.FREQ_SEC / 4.5h 交易日近似）
-_EXPECT_BAR_SECS = {"30m": 1800, "5m": 300, "1m": 60, "15s": 15}
-_EXPECT_BPD = {"30m": 9, "5m": 54, "1m": 270, "15s": 1080}
+_EXPECT_BAR_SECS = {"30m": 1800, "15m": 900, "5m": 300, "1m": 60, "15s": 15}
+_EXPECT_BPD = {"30m": 9, "15m": 18, "5m": 54, "1m": 270, "15s": 1080}
 
 print("=" * 60)
-print("Step 2.6 测试：--freq 四周期启动冒烟（30m / 5m / 1m / 15s）")
+print("Step 2.6 测试：--freq 五周期启动冒烟（30m / 15m / 5m / 1m / 15s）")
 print("=" * 60)
 
-for freq in ("30m", "5m", "1m", "15s"):
+for freq in ("30m", "15m", "5m", "1m", "15s"):
     print("\n── freq={} ──".format(freq))
     out_dir = os.path.join(tempfile.mkdtemp(prefix="gw_smoke_"), "out")
     _real_stdout, _real_stderr = sys.stdout, sys.stderr
@@ -162,20 +162,22 @@ _env_after = {k: v for k, v in os.environ.items() if k.startswith(_TRADING_PREFI
 check("隔离退出后环境原样恢复（不泄漏到其他测试）", _env_after, _env_before)
 
 # 反向用例：不支持的周期必须在启动期 fail-fast（bar_secs_for 校验）
-print("\n── 反向：freq=15m 应被启动校验拦截 ──")
+# 取 60m：主程序 FREQ_TABLE 里有、Trading 未登记——正是"主程序加周期而网关没跟上"
+# 的形态（15m 已登记，不能再拿它当反例）。
+print("\n── 反向：freq=60m 应被启动校验拦截 ──")
 args_bad = argparse.Namespace(
     source="sse", broker=None, replay_dir=None, symbol=None,
-    freq="15m", sse_base=None, speed=None, only_alive=None,
+    freq="60m", sse_base=None, speed=None, only_alive=None,
     bar_mode=None, out=tempfile.mkdtemp(prefix="gw_smoke_bad_"),
     fresh=None, summary_json=None, max_bars=None, quiet=True, echo_all=None)
 try:
     with isolated_trading_env(BROKER="dry_run"):
         gw.build_runtime(args_bad)
-    check("freq=15m 启动即 SystemExit", "no_raise", "raise")
+    check("freq=60m 启动即 SystemExit", "no_raise", "raise")
 except SystemExit:
-    check("freq=15m 启动即 SystemExit", "raise", "raise")
+    check("freq=60m 启动即 SystemExit", "raise", "raise")
 except Exception as e:
-    check("freq=15m 启动即 SystemExit（实际 {}）".format(type(e).__name__),
+    check("freq=60m 启动即 SystemExit（实际 {}）".format(type(e).__name__),
           "wrong_exc", "raise")
 
 print("\n结果: {} 通过 / {} 失败".format(_PASSED, _FAILED))

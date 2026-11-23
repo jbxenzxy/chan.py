@@ -224,7 +224,7 @@ FUTURES_ALIASES = {
 }
 
 # 前端可用的周期列表（用于变灰不可用按钮）
-SUPPORTED_FREQS = ["15s", "1m", "5m", "30m"]
+SUPPORTED_FREQS = ["15s", "1m", "5m", "15m", "30m"]
 DISABLED_FREQS = ["d", "w"]
 
 # 天勤K线周期映射：标签 -> 秒数

@@ -2,7 +2,7 @@
 """
 周期档案（Trading/Infra/Period.py）
 ===================================
-本模块是「周期轴」的唯一登记处：freq → 秒 的单一事实源 + 4 个周期的档案。
+本模块是「周期轴」的唯一登记处：freq → 秒 的单一事实源 + 5 个周期的档案。
 
 ⚠️ 周期特有参数当前为空（诚实答案，2026-09-15 P-C 改名时重申）：
   周期相关的行为参数（max_hold_bars / eod_lead_bars / session_end_hhmm /
@@ -54,6 +54,7 @@ FREQ_SEC: Dict[str, int] = {
     "15s": 15,
     "1m": 60,
     "5m": 300,
+    "15m": 900,
     "30m": 1800,
 }
 
@@ -121,12 +122,13 @@ class Period:
         return self.freq
 
 
-# 4 个周期的档案：仅时间语义（freq / bar_secs），与 FREQ_SEC 一一对应。
+# 5 个周期的档案：仅时间语义（freq / bar_secs），与 FREQ_SEC 一一对应。
 # 盈利参数（R 地板 / 盈亏比）随品种变，见 Infra/Product.py。
 PERIOD_PROFILES: Dict[str, Period] = {
     "15s": Period(freq="15s", bar_secs=15),
     "1m": Period(freq="1m", bar_secs=60),
     "5m": Period(freq="5m", bar_secs=300),
+    "15m": Period(freq="15m", bar_secs=900),
     "30m": Period(freq="30m", bar_secs=1800),
 }
 

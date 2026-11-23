@@ -662,6 +662,7 @@ def is_st_like_name(name):
 # ── 期货双窗口周期映射（上窗周期 → 下窗周期）──
 _FUTURES_DUAL_FREQ_MAP = {
     "30m": "5m",
+    "15m": "5m",
     "5m": "1m",
     "1m": "15s",
 }
