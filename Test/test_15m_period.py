@@ -277,6 +277,8 @@ def test_period_map_coverage():
         值不在配对空间 → 同样 400，但前端按钮还亮着（点下去才报错）；
       - 前端 `SHOW` 漏 key → 按钮永不出现（后端改好了也点不到）。
     加 15m 那轮全靠人工逐处补，本测试把「漏一处必红」钉住。
+    除键集合外还钉值：15m 的默认下窗规格为 5m，且区间套静态表与双窗默认表必须同键同值
+    ——「严格更小」这条通用规则区分不了 15m→5m 与 15m→1m。
     """
     from Common.CEnum import STOCKS_FREQS, FUTURES_FREQS, FREQ_SEC_MAP
 
@@ -296,6 +298,15 @@ def test_period_map_coverage():
             assert FREQ_SEC_MAP[sub] < FREQ_SEC_MAP[main], (
                 f"{label} {key}['{main}']='{sub}' 没有严格更小"
                 f"（区间套会取到同级或更粗的级别）")
+
+    # ── A2. 规格值：通用规则「严格更小」钉不住默认下窗的具体值 ──
+    # 15m→1m 同样满足严格更小，但期货 15m 的规格默认下窗是 5m（与股票 15m 一致）。
+    # 静态表是「无显式配对」时区间套的唯一回退来源，值漂移不报错、只在图上取错级别。
+    fut_sub = maps["_FUTURES_SUB_FREQ_MAP"]
+    assert fut_sub["15m"] == "5m", (
+        f"_FUTURES_SUB_FREQ_MAP['15m'] 应为 '5m'，实为 {fut_sub['15m']!r}"
+        "（15m 无显式配对时区间套按 5m 取；若确为规格变更，"
+        "请同步 test_futures_nesting_subfreq 的前提断言）")
 
     # ── B. 双窗默认配对：值必须落在配对空间内；后端默认值 == 前端默认值 ──
     dual = extract_from_file("App/AppUtils.py",
@@ -323,6 +334,12 @@ def test_period_map_coverage():
         assert sub in pairs[main], (
             f"默认配对 {main}+{sub} 不在配对空间 {sorted(pairs[main])} 内"
             f"（前端只传上窗时后端会 400）")
+        # 两张表都表示「未显式指定时的下窗」：单窗走静态表、双窗走默认表。
+        # 单边漂移会让同一周期在单窗与双窗取到不同级别，全程不报错。
+        static_sub = maps["_FUTURES_SUB_FREQ_MAP"].get(main)
+        assert static_sub == sub, (
+            f"{main} 的默认下窗两表不一致：区间套静态表 {static_sub!r} / "
+            f"双窗默认表 {sub!r}（应同值）")
 
     with open(os.path.join(ROOT, "Frontend/app.js"), encoding="utf-8") as f:
         js = f.read()

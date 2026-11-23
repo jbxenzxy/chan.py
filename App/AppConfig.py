@@ -119,7 +119,7 @@ _FIELD_DEFAULTS = {
     "STOCKS_LOOKBACK_CONFIG": {"w": (0, "不限制"), "d": (600, "不限制"), "30m": (800, "近5个月"), "15m": (960, "近3个月"), "5m": (960, "近1个月")},
     # ── 期货 FUTURES_LOOKBACK_CONFIG ──
     # 与股票 STOCKS_LOOKBACK_CONFIG 值格式及 bars 语义一致：(bars, label)，<=0=不限制；
-    # 但【键】不同：期货为 15s/1m/5m/30m（天勤主连不支持 d/w，已排除）。
+    # 但【键】不同：期货为 15s/1m/5m/15m/30m（天勤主连不支持 d/w，已排除）。
     #   bars —— 真正生效的字段：初始快照向天勤回看多少根K线（整数，单位=根）。
     #           作为 api.get_kline_serial(..., num_bars) 的第三参传给 tqsdk，
     #           fetch_futures_kline 末尾还会强制截断到 num_bars 以控制 step_load 耗时。
