@@ -4043,12 +4043,19 @@
             const state = _calcCountdownState();
             if (!state) {
                 if (canvas === subCanvas) _subCountdownBounds = null;
-                else _countdownBounds = null;
+                else {
+                    _countdownBounds = null;
+                    _drawToolbarDock(area);   // 倒计时没了 ⇒ 工具条回到贴顶位
+                }
                 return;
             }
             const bounds = _drawCountdownImpl(area, state);
             if (canvas === subCanvas) _subCountdownBounds = bounds;
-            else _countdownBounds = bounds;
+            else {
+                _countdownBounds = bounds;
+                // 只有上窗（mainCanvas）的倒计时才落在「整页右上角」，下窗不参与停靠
+                _drawToolbarDock(area);
+            }
         }
 
         function _redrawCountdown() {
@@ -4426,6 +4433,9 @@
                 const container = document.getElementById("chart-container");
                 // 保存原始canvas引用
                 const origCanvas = mainCanvas;
+                // 清空前先摘下画线工具条：它也是 #chart-container 的子节点，
+                // innerHTML='' 会把节点连同标题拖拽监听一起销毁，重建后必须原样放回。
+                const keepDrawBar = document.getElementById("draw-toolbar");
                 // 清空容器
                 container.innerHTML = '';
                 // 创建上面窗口
@@ -4644,6 +4654,9 @@
                 maTooltip.className = "ma-tooltip";
                 maTooltip.id = "ma-tooltip";
                 container.appendChild(maTooltip);
+                // 画线工具条同样被 innerHTML='' 删掉过：放回**原节点**（不是重建），
+                // 节点身份不变 ⇒ 标题拖拽监听、当前显示态、按钮选中态都还在。
+                if (keepDrawBar) container.appendChild(keepDrawBar);
                 resizeCanvas();
                 const code = chartData.meta.symbol;
                 const isFutures = chartData.meta.market === 'futures';
@@ -4700,6 +4713,7 @@
                             mt2.className = "ma-tooltip";
                             mt2.id = "ma-tooltip";
                             container2.appendChild(mt2);
+                            if (keepDrawBar) container2.appendChild(keepDrawBar);
                             container2.appendChild(origCanvas);
                             canvas = mainCanvas; ctx = mainCtx;
                             resizeCanvas();
@@ -5232,10 +5246,53 @@
             _drawDrag = null;
         }
 
+        // ── 工具条停靠（2026-11-23 用户口径：从「K 线顶端居中」挪到右上角）──
+        // 默认右沿对齐绘图区右沿（容器宽 − getChartArea() 的右侧留白），好处两条：
+        //   · 不飞出可视区，也不压右侧价格轴（刻度 + 最新价标签都在那 55+22px 里）；
+        //   · 该偏移只由 PADDING.right 与 rightGap 决定，**与窗口宽度无关**
+        //     ⇒ 窗口 resize 后无需重算停靠。
+        const DRAW_TOOLBAR_DOCK_TOP = 6;    // 没有倒计时时的上沿（与 CSS 兜底一致）
+        const DRAW_TOOLBAR_DOCK_GAP = 4;    // 与「流逝时间」盒子之间的呼吸位
+        let _drawToolbarDragged = false;    // 用户手动拖过 ⇒ 停靠让位，位置归用户
+        // 实时周期（期货 30m/5m/1m/15s、股票分钟级）的绘图区**右上角画着「流逝时间」**：
+        // 灰底 + 红色剩余 + MM:SS 文本，全是 canvas 内容 —— DOM 元素只会盖住它，
+        // 反过来盖不住。所以这里不跟它抢位置，而是**让到它左边、跟它同一行**
+        // （2026-11-23 用户口径：左边画线工具、右边流逝时间，不要钻到它下面）：
+        // 右沿 = 倒计时盒左沿 − GAP，竖向按两者中线对齐。
+        // 盒子尺寸只取**上一帧真画出来的** _countdownBounds，不另算一套
+        // （倒计时盒以后改高改矮，两边也不会脱节）。
+        function _drawToolbarDock(area) {
+            const bar = document.getElementById("draw-toolbar");
+            if (!bar || _drawToolbarDragged) return;   // 拖过 ⇒ 位置归用户，不再自动停靠
+            const host = bar.parentNode;
+            const a = area || getChartArea();
+            const hostW = (host && host.clientWidth) || (a.x + a.w);
+            let right = Math.round(hostW - (a.x + a.w));   // 默认：贴绘图区右沿
+            let top = DRAW_TOOLBAR_DOCK_TOP;               // 默认：贴顶
+            const cd = _countdownBounds;
+            if (cd) {
+                right = Math.round(hostW - cd.x + DRAW_TOOLBAR_DOCK_GAP);
+                // 竖向对齐要用工具条真实高度；隐藏时 offsetHeight = 0 ⇒ 退回贴顶，
+                // 等 _drawSyncToolbar 先显示再停靠时再对齐（同帧不会绘制，不闪）。
+                const barH = bar.offsetHeight;
+                if (barH) top = Math.round(cd.y + (cd.h - barH) / 2);
+            }
+            const rightPx = right + "px", topPx = top + "px";
+            // 只在变化时写：render / 每秒倒计时都会调进来，无谓赋值会平白触发重排
+            if (bar.style.right !== rightPx) bar.style.right = rightPx;
+            if (bar.style.top !== topPx) bar.style.top = topPx;
+            if (bar.style.left !== "auto") bar.style.left = "auto";
+        }
+
         function _drawSyncToolbar() {
             const open = !!_drawMode;
             const bar = document.getElementById("draw-toolbar");
-            if (bar) bar.style.display = open ? "flex" : "none";
+            if (bar) {
+                bar.style.display = open ? "flex" : "none";
+                // 先显示再停靠：避让「流逝时间」要按工具条真实高度对齐中线，
+                // 隐藏时量不到高度。JS 里不落帧 ⇒ 不会先闪在旧位置。
+                _drawToolbarDock();
+            }
             const btn = document.getElementById("btn-draw");
             if (btn) btn.classList.toggle("active", open);
             const ids = { select: "draw-tool-select", segment: "draw-tool-segment",
@@ -5309,11 +5366,13 @@
                 e.preventDefault(); e.stopPropagation();
                 const br = bar.getBoundingClientRect();
                 const cr = container.getBoundingClientRect();
-                // 从 CSS 居中（left:50% + translateX(-50%)）切换为绝对像素定位，
-                // 首帧把视觉位置原样固化，避免拖动瞬间跳动。
+                // 停靠态是 right 定位 ⇒ 按当前视觉位置固化成 left/top 之后必须清掉 right：
+                // abs 元素 width:auto 时 left+right 同时生效会被拉成整行宽。
+                // 固化的意义不变：首帧把视觉位置原样接管，拖动不跳。
+                _drawToolbarDragged = true;     // 位置自此归用户，_drawToolbarDock 不再插手
                 bar.style.left = (br.left - cr.left) + "px";
                 bar.style.top = (br.top - cr.top) + "px";
-                bar.style.transform = "none";
+                bar.style.right = "auto";
                 _drawToolbarDrag = { sx: br.left - cr.left, sy: br.top - cr.top,
                                      mx: e.clientX, my: e.clientY };
             });

@@ -107,9 +107,14 @@
         .btn.active { background: #e94560; border-color: #e94560; color: #fff; }
         .btn:disabled { opacity: 0.35; cursor: not-allowed; }
         .btn:disabled:hover { background: #1a1a2e; color: #a8b2d1; }
-        /* 画线工具条（同花顺式）：浮在主图顶部，线型区 + 辅助区 */
+        /* 画线工具条（同花顺式）：默认停靠 K 线区右上角，线型区 + 辅助区。
+           真正的 right/top 由 _drawToolbarDock() 按绘图区几何写进 inline style
+           （右沿对齐绘图区右沿、不压右侧价格轴；实时周期「流逝时间」在画时
+           让到它左边、与它同一行 —— 用户口径：左边工具、右边流逝时间）；
+           这里的 top/right 只是 JS 未跑时的兜底 —— 不得再回到 left:50% 居中
+           （2026-11-23 用户口径：从顶端居中挪到右上角）。 */
         .draw-toolbar {
-            position: absolute; top: 6px; left: 50%; transform: translateX(-50%);
+            position: absolute; top: 6px; right: 6px;
             display: flex; align-items: center; gap: 4px; z-index: 30;
             padding: 4px 6px; background: rgba(22, 33, 62, 0.96);
             border: 1px solid #0f3460; border-radius: 5px;

@@ -15,6 +15,10 @@
      · 日期锚定：换数据窗口（下标整体平移）后线仍贴住同一批 K 线；
      · 手势边界：主绘图区外不接管（不吞底部 chip）、跨图残留选中不误删、
        拖动被取消时回滚不落盘、点空白立刻重绘。
+  ③ 工具条停靠（2026-11-23 用户口径）：默认贴绘图区右上角（不再顶端居中）、
+     右偏移与窗口宽度无关、手动拖过后位置归用户、倒计时（流逝时间）在画时
+     让到它左边并与之同一行（不钻到它下面、也不压它）；
+     双窗重建 #chart-container 后工具条节点必须归位。
 
 抽取手法与 test_measure_gesture.py 同型：注释感知花括号配平抽真实函数，
 零网络、零浏览器、秒级。
@@ -204,6 +208,32 @@ def static_checks():
                               "if (!Array.isArray(arr)) return [];",
                               "function _drawNextIdFrom", "return m + 1;")))
 
+    # ── 工具条停靠（2026-11-23：右上角 + 避开「流逝时间」）──
+    # 片段限定：app.css 里别处也有 left:50%（居中遮罩），全局搜会把那条误算进来
+    _dock_css = css[css.index(".draw-toolbar {"):css.index(".draw-toolbar-label {")]
+    _dock_fn = fn_src(js, "_drawToolbarDock")
+    _dock_sync = fn_src(js, "_drawSyncToolbar")
+    _dock_cd = fn_src(js, "drawCountdownBar")
+    rec("S17", "工具条默认停靠右上角（顶端居中定位零残留）",
+        "right: 6px" in _dock_css and
+        "left: 50%" not in _dock_css and "translateX(-50%)" not in _dock_css)
+    rec("S18", "停靠接线：打开前就位 + 倒计时两分支都回写 + 拖拽改 left 必须清 right",
+        "_drawToolbarDock();" in _dock_sync and
+        _dock_cd.count("_drawToolbarDock(area)") == 2 and
+        _dock_fn.count("bar.style.right") == 2 and
+        'bar.style.right = "auto";' in js and
+        "_drawToolbarDragged = true;" in js)
+    rec("S19", "拖过后不再自动停靠；避让只认上一帧真盒子（_countdownBounds）",
+        "if (!bar || _drawToolbarDragged) return;" in _dock_fn and
+        "hostW - cd.x + DRAW_TOOLBAR_DOCK_GAP" in _dock_fn and
+        "cd.h - barH" in _dock_fn and
+        "_calcCountdownState" not in _dock_fn)
+    rec("S20", "双窗重建 #chart-container 后画线工具条归位（innerHTML='' 不丢节点）",
+        js.count("innerHTML = ''") == 2 and
+        'const keepDrawBar = document.getElementById("draw-toolbar");' in js and
+        js.count("if (keepDrawBar) container.appendChild(keepDrawBar);") == 1 and
+        js.count("if (keepDrawBar) container2.appendChild(keepDrawBar);") == 1)
+
 
 # ══════════════════ node 行为断言 ══════════════════
 FNS = ["_drawCurrentKey", "_drawVisibleLines", "buildGlobalDateMap", "globalIdxToX",
@@ -211,7 +241,7 @@ FNS = ["_drawCurrentKey", "_drawVisibleLines", "buildGlobalDateMap", "globalIdxT
        "_drawReanchor", "drawGlobalIdxToX", "drawXToGlobalIdx",
        "drawPointSegDist", "drawHitTest", "drawDrawings", "_drawMousePos",
        "_drawHandleDown", "_drawHandleMove", "_drawHandleUp", "_drawCancelGesture",
-       "deleteSelectedDraw", "clearAllDraws", "_drawToolbarPos",
+       "deleteSelectedDraw", "clearAllDraws", "_drawToolbarPos", "_drawToolbarDock",
        "_drawSerialize", "_drawDeserialize", "_drawNextIdFrom", "priceToY", "yToPrice"]
 
 PREAMBLE = r"""
@@ -246,6 +276,23 @@ function check(no,actual,expected){
 }
 function near(a,b,eps){ return Math.abs(a-b)<=(eps||1e-6); }
 function arrNear(a,b,eps){ return a.length===b.length && a.every((v,i)=>near(v,b[i],eps)); }
+// ── 工具条停靠桩：style 用 Proxy 记写入次数（验「只在变化时写」）、
+//    容器宽可变（验「右偏移与窗口宽无关」）。DRAW_TOOLBAR_DOCK_* 由抽取脚本
+//    从 app.js 正则取真值注入，这里不写死，避免两份默认值各说各话。
+let _dockWrites = 0;
+const _dockStyle = new Proxy({}, {
+  set(t, k, v) { _dockWrites++; t[k] = v; return true; },
+  get(t, k) { return t[k]; }
+});
+const _dockHost = { clientWidth: 1500 };
+// offsetHeight 给真机工具条高度（真机 ~33px）；隐藏态量到 0 的分支由 B39f 单独覆盖
+const _dockBar = { style: _dockStyle, parentNode: _dockHost, offsetHeight: 33 };
+const document = { getElementById(id) { return id === "draw-toolbar" ? _dockBar : null; } };
+let _drawToolbarDragged = false;
+let _countdownBounds = null;
+// 绘图区宽度跟着容器宽走（真机：w = clientWidth − PADDING.left/right − rightGap(55)）；
+// 写死 1413 会让「右偏移与窗口宽无关」那条断言假红/假绿
+function getChartArea() { return { x: 10, y: 20, w: _dockHost.clientWidth - 87, h: 700 }; }
 """
 
 SCENARIOS = r"""
@@ -511,6 +558,47 @@ check('B36b',_drawDrag&&_drawDrag.ln.gx0,2);        // 按下即兑现成当前�
 _drawHandleUp(ev(360,180));
 check('B36c',_drawLines[0].t0,'d102');              // 原位不动 ⇒ 锚点不变
 
+// ── B38-B42 工具条停靠（右上角 + 避开流逝时间）──
+function resetDock() { _dockWrites = 0; _drawToolbarDragged = false; _countdownBounds = null;
+  delete _dockStyle.right; delete _dockStyle.top; delete _dockStyle.left; }
+// B38 无倒计时：贴右上角，右沿对齐绘图区右沿（1500-(10+1413)=77）
+resetDock(); _drawToolbarDock();
+check('B38a', _dockStyle.right, '77px');
+check('B38b', _dockStyle.top, DRAW_TOOLBAR_DOCK_TOP + 'px');
+check('B38c', _dockStyle.left, 'auto');
+check('B38d', _dockWrites, 3);
+// B39 流逝时间在画：让到它**左边**、跟它**同一行**（用户口径：左工具、右流逝时间）
+_dockWrites = 0;
+_countdownBounds = { x: 1350, y: 26, w: 33, h: 18 };
+_drawToolbarDock();
+check('B39a', _dockStyle.right, (1500 - 1350 + DRAW_TOOLBAR_DOCK_GAP) + 'px');
+check('B39b', 1500 - parseInt(_dockStyle.right, 10) <= 1350, true);   // 右沿停在倒计时左沿之外
+check('B39c', parseInt(_dockStyle.top, 10) < 26 + 18, true);          // 没掉到流逝时间下面
+check('B39d', Math.abs((parseInt(_dockStyle.top, 10) + 33 / 2) - (26 + 18 / 2)) <= 1, true);
+check('B39e', _dockWrites, 2);                                        // right + top 各写一次
+// B39f 隐藏态量不到高度（offsetHeight = 0）⇒ 退回贴顶，不抛（下次显示再对齐）
+resetDock(); _dockBar.offsetHeight = 0;
+_countdownBounds = { x: 1350, y: 26, w: 33, h: 18 };
+_drawToolbarDock();
+check('B39f', _dockStyle.top, DRAW_TOOLBAR_DOCK_TOP + 'px');
+_dockBar.offsetHeight = 33;
+// B40 手动拖过 ⇒ 位置归用户，dock 一个字都不写
+_dockStyle.top = '200px'; _dockStyle.right = 'auto'; _dockWrites = 0;
+_drawToolbarDragged = true;
+_drawToolbarDock();
+check('B40a', [_dockStyle.top, _dockStyle.right], ['200px', 'auto']);
+check('B40b', _dockWrites, 0);
+// B41 倒计时消失 ⇒ 回贴顶；同状态重复调用不重复写（幂等）
+resetDock(); _drawToolbarDock();
+check('B41a', _dockStyle.top, DRAW_TOOLBAR_DOCK_TOP + 'px');
+check('B41b', _dockWrites, 3);
+_dockWrites = 0; _drawToolbarDock();
+check('B41c', _dockWrites, 0);
+// B42 右偏移与窗口宽度无关（resize 后无需重算停靠）
+_dockHost.clientWidth = 1000; resetDock(); _drawToolbarDock();
+check('B42', _dockStyle.right, '77px');
+_dockHost.clientWidth = 1500;
+
 console.log(JSON.stringify(res));
 """
 
@@ -518,6 +606,12 @@ console.log(JSON.stringify(res));
 def behavior_checks():
     try:
         parts = [PREAMBLE]
+        # 停靠常量取 app.js 真值（测试不另写一份默认值，避免两边各说各话）
+        consts = re.findall(r"^\s*const (DRAW_TOOLBAR_DOCK_\w+) = (\d+);", js, re.M)
+        if len(consts) != 2:
+            rec("B0b", "抽取停靠常量", False, repr(consts))
+            return
+        parts.append("".join("const %s = %s;\n" % (k, v) for k, v in consts))
         for name in FNS:
             parts.append(fn_src(js, name) + "\n")
         parts.append(SCENARIOS)

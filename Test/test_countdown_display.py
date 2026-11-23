@@ -138,6 +138,11 @@ var _subCountdownBounds = null;
 var renderCount = 0;
 function render() { renderCount++; _countdownBounds = null; _subCountdownBounds = null; }
 function _drawCountdownImpl(area, state) { return {x: 1, y: 2, w: 3, h: 4}; }
+// 工具条停靠（2026-11-23：右上角要避开「流逝时间」）——本用例只验「有没有被通知」，
+// 几何/避让量在 test_draw_tool.py 的 B38-B42 里钉。
+var dockCalls = 0;
+function _drawToolbarDock(area) { dockCalls++; }
+
 
 // ── 被测源码（从 Frontend/app.js 抽取，逐字）──
 @@CALC@@
@@ -227,6 +232,20 @@ drawCountdownBar({x: 0, y: 0, w: 100, h: 100});
 OUT.b_live = (_countdownBounds !== null && _subCountdownBounds === null
               && _countdownBounds.w === 3);
 
+// ⑧d 停靠回调：倒计时**消失/在画**两条路径都要通知工具条
+//   （漏一条 = 工具条永远悬在半空，或灯亮着却压住流逝时间）
+dockCalls = 0; chartData = {klines: _klineFinished()};
+drawCountdownBar({x: 0, y: 0, w: 100, h: 100});
+OUT.dock_off = dockCalls;
+dockCalls = 0; chartData = {klines: _klineRunning()};
+drawCountdownBar({x: 0, y: 0, w: 100, h: 100});
+OUT.dock_on = dockCalls;
+// ⑧e 下窗的倒计时不落在「整页右上角」⇒ 不参与停靠
+dockCalls = 0; subCanvas = canvas;
+drawCountdownBar({x: 0, y: 0, w: 100, h: 100});
+OUT.dock_sub = dockCalls;
+canvas = {}; subCanvas = {};
+
 // ⑩ 复盘挂起（点下复盘 → 复盘数据落地之间，2026-10-09 用户反馈）
 //   此时 chartData 还是**实时那份**、末根正在走，但 R 已指向复盘点 ⇒ 必须立即消失
 //   （报障原状：倒计时照样把剩余 15 秒走完才不见）
@@ -303,6 +322,11 @@ def test_display_judgement(src, failures):
     _check(failures, "[⑧b] 下窗焦点 + 状态为 null → 只归下窗边界",
            res["b_null_sub"], True)
     _check(failures, "[⑧c] 状态非 null → 只写焦点窗边界", res["b_live"], True)
+
+    print("-- 工具条停靠回调（2026-11-23：右上角避让「流逝时间」）--")
+    _check(failures, "[⑧d] 倒计时消失 → 回调停靠 1 次（避让复位）", res["dock_off"], 1)
+    _check(failures, "[⑧e] 倒计时在画 → 回调停靠 1 次（让到它左边、同一行）", res["dock_on"], 1)
+    _check(failures, "[⑧f] 下窗倒计时不参与停靠", res["dock_sub"], 0)
 
     print("-- 复盘挂起（2026-10-09 用户反馈：点下复盘必须立即消失）--")
     _check(failures, "[⑩a] 挂起前（实时态、末根在走）→ 显示", res["c10_live"], True)
