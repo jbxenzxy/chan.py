@@ -9,6 +9,9 @@
 v2（2026-11-26）：按钮改名「盘中量能」，「市场量能」改名「盘后量能」，
    顶栏顺序改为「盘中量能 → 盘后量能 → 两融余额」。**面板内文字不动**：
    标题「市场量能」、「今日｜预测量能 NNNN亿」、底部注释仍是截图原文。
+v3（2026-11-26，评审 P2）：`pre`/`closed` 在本地 09:15~15:05 窗口内改走 60s
+   慢轮询（`energyIdlePollMs`），修「盘前打开面板、开盘后不自愈」；拉数失败按
+   2s/4s/8s 退避重试 3 次（`energyRetryDelay`）。⑨ 断言口径随之改写。
 
 静态层（零浏览器、零网络）：
   ① 按钮顺序：btn-amo-pred（盘中量能）在 btn-amo（盘后量能）之前，
@@ -30,13 +33,15 @@ v2（2026-11-26）：按钮改名「盘中量能」，「市场量能」改名�
      放量态 y 轴镜像后红点仍在绘图区内
   ⑧c 红点只跟数据走：同数据重复渲染不闪（连 .flash 都清掉）、数据变了才闪，
      且位置随末点移动
-  ⑨ 轮询节奏：trading→3000ms / break→30000ms / pre、closed→不轮询
+  ⑨ 轮询节奏：trading→3000ms / break→30000ms / pre、closed 在本地 09:15~15:05
+     窗口内→60000ms、窗口外→不排（含 15:04 / 15:06 边界）；
+     失败退避 energyRetryDelay：0 / 2s / 4s / 8s / 放弃
 
 后端行为层（合成数据，无网络）：
   ⑩ r(t) 表：等速放量下 r[k] = (k+1)/240，单调递增且末根为 1
   ⑪ 预测反推：P = C / r，第 k 根与第 k+1 根的比值符合 r 的比值
   ⑫ 缓存过期：收盘后「样本末日 < 今天」判 stale，盘中不判 stale；
-     周末/假日 15:00 后当天只重建一次（built_at 兜底，防每请求重拉 3×2400 根）
+     周末/假日 15:00 后当天只重建一次（built_at 兜底，防每请求重拉全量分钟线）
   ⑬ 会话状态：非当日一律 closed
   ⑭ 收盘后基准不塌：r 表样本末日=当日 ⇒ 用 prev_total，不用今天自己
   ⑮ 非交易日基准：周日/法定假日打开，「昨日」= 展示日的前一交易日（不是周六、
@@ -210,6 +215,15 @@ var _energySig = null;        // 与 app.js 同名：renderEnergyPanel 读写它
 var EN_SHRINK = "#0aa53c", EN_UP = "#e33b3b";
 __FUNCS__
 
+// ── 可控本地时钟：energyIdlePollMs() 按 HH:MM 判窗口，必须能钉住「现在几点」──
+var _clockHM = 10 * 60;                  // 默认 10:00（慢轮询窗口内）
+Date = function () {
+  return {
+    getHours: function () { return Math.floor(_clockHM / 60); },
+    getMinutes: function () { return _clockHM % 60; }
+  };
+};
+
 // ── DOM / canvas 桩：只记录被写入的文案与 class，不渲染像素 ──
 var _els = {};
 var _ctxCalls = [];
@@ -283,8 +297,18 @@ var upCase = runCase(Object.assign({}, base, {
 // 用户口径：实际量能只留整数亿（13261.46 → 13261），不显示两位小数
 var intCase = runCase(Object.assign({}, base, { actual: 13261.46, points: [[1, -7.49], [240, -4.79]] }));
 
-scheduleEnergyPoll("trading"); scheduleEnergyPoll("break");
-scheduleEnergyPoll("pre"); scheduleEnergyPoll("closed");
+// 轮询节奏：3s / 30s / 慢轮询窗口（本地 09:15~15:05）内 60s / 窗口外不排
+_clockHM = 10 * 60;
+scheduleEnergyPoll("trading");
+scheduleEnergyPoll("break");
+scheduleEnergyPoll("pre");
+scheduleEnergyPoll("closed");
+_clockHM = 8 * 60;                    // 08:00 盘前早段 → 不排
+scheduleEnergyPoll("closed");
+_clockHM = 15 * 60 + 4;               // 15:04 窗口右边界内 → 60s
+scheduleEnergyPoll("closed");
+_clockHM = 15 * 60 + 6;               // 15:06 窗口外 → 不排
+scheduleEnergyPoll("closed");
 
 // ── 指纹语义：同一份数据重复渲染不闪，数据变了才闪 ──
 function _snapDot() {
@@ -314,6 +338,8 @@ var out = {
   sig: [g1, g2, g3, g4],
   sigLeft: [g1x, g3x],
   delays: _timerDelays,
+  retry: [energyRetryDelay(0), energyRetryDelay(1), energyRetryDelay(2),
+          energyRetryDelay(3), energyRetryDelay(4)],
   pctFmt: [fmtEnergyPct(-5.65), fmtEnergyPct(3.2), fmtEnergyPct(0)],
   hasEnterPoll: typeof scheduleEnergyPoll === "function"
 };
@@ -330,7 +356,8 @@ def test_real_render():
     src = read(APP_JS)
     funcs = []
     for name in ("fmtEnergyPct", "stopEnergyPolling", "energySig", "renderEnergyPanel",
-                 "renderEnergyChart", "flashEnergyDot", "scheduleEnergyPoll"):
+                 "renderEnergyChart", "flashEnergyDot", "scheduleEnergyPoll",
+                 "energyIdlePollMs", "energyRetryDelay"):
         fn = _extract_fn(src, name)
         if fn is None:
             check(False, f"未能从 app.js 抽出 {name}()")
@@ -417,9 +444,16 @@ def test_real_render():
     check(out["pctFmt"] == ["-5.65", "+3.20", "+0.00"], "涨跌幅格式带符号两位小数",
           f"实测 {out['pctFmt']}")
     delays = out["delays"]
-    check(delays[:2] == [3000, 30000], "trading→3000ms / break→30000ms",
-          f"实测 {delays[:2]}")
-    check(len(delays) == 2, "pre / closed 不排轮询（不产生定时器）", f"实测 {delays}")
+    check(delays == [3000, 30000, 60000, 60000, 60000],
+          "trading→3s / break→30s / pre·closed 窗口内→60s / 窗口外不排",
+          f"实测 {delays}")
+    check(out["retry"] == [0, 2000, 4000, 8000, 0],
+          "失败退避 2s/4s/8s，第 4 次失败不再重试", f"实测 {out['retry']}")
+    # 退避函数测了还不够：得确认它真的接在 loadEnergyData 的失败分支上
+    body = _extract_fn(src, "loadEnergyData") or ""
+    check("energyRetryDelay(_energyFail + 1)" in body
+          and "_energyFail += 1" in body and "_energyFail = 0" in body,
+          "loadEnergyData 已接线：成功清零 / 失败按次数退避", f"函数体 {len(body)} 字符")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -474,7 +508,7 @@ def test_energy_behavior():
         tried = {"trade_date": "2000-01-01", "bars": [0.1] * 240,
                  "built_at": today + " 16:00:00"}
         check(E._is_stale(tried) is False,
-              "周末/假日 15:00 后：今天已建过表 → 不再判过期（否则每个请求都重拉 3×2400 根）")
+              "周末/假日 15:00 后：今天已建过表 → 不再判过期（否则每个请求都重拉全量分钟线）")
         premade = {"trade_date": "2000-01-01", "bars": [0.1] * 240,
                    "built_at": today + " 09:00:00"}
         check(E._is_stale(premade) is True,
@@ -585,7 +619,7 @@ def test_energy_behavior():
           "假日 10:00 与 16:00 同基准同 pct（不会在 15:00 那一刻跳变）",
           f"{hol_am['yesterday']}/{hol_am['pct']} vs {hol_pm['yesterday']}/{hol_pm['pct']}")
     check(sun["status"] == "closed" and hol_am["status"] == "closed",
-          "非交易日 status=closed（前端据此停止轮询）")
+          "非交易日 status=closed（前端只走 60s 兜底轮询）")
 
 
 # ═══════════════════════════════════════════════════════════════════════

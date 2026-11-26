@@ -15,6 +15,9 @@ App/AppEnergy.py —— 预测量能功能域（沪深京盘中预测量能）
   - 当日/历史分钟成交额：bars.get(code, period="1m", count=..., all_pages=True)
     1 分钟 K 线自带 amount 字段（元），每日固定 240 根
     （09:31..11:30 + 13:01..15:00）。
+    注意 all_pages=True 时 count 不生效（eltdx 只校验 page_size，逐页拉到服务端
+    空页为止）：实测单只 23280 根 / 97 个交易日 / 约 3~4s。样本不是「2400 根」，
+    而是由 _RATIO_DAYS=20 从这堆全量里截最近 20 个完整交易日。
 
 三市口径（2026-11-26 与开盘红 App 逐位对齐，见 Docs/预测量能.md）：
   - 沪市 = sh000001（上证指数，amount = 沪市成交额）
@@ -33,11 +36,12 @@ App/AppEnergy.py —— 预测量能功能域（沪深京盘中预测量能）
   14:00 3.3%、收盘 0.1%。
 
 r 表缓存：落 {app_data_dir}/energy_ratio.json，每天收盘后首次请求重建一次
-（重建要拉 3 × 2400 根分钟线，实测 3~10s，不能每请求都拉）。
+（重建走全量翻页：三只各约 3~4s、合计约 10s，不能每请求都拉）。
 实时快照 2s TTL、当日分钟线 60s TTL，避免前端轮询打穿行情主站。
 
 锁：本模块**无锁**。只读在线行情 + 算统计，不进 CChan 引擎、不写共享状态；
-缓存是模块级 dict 的纯赋值替换（GIL 原子），不做就地修改。
+缓存是模块级 dict 的键级赋值 / 整体替换（GIL 下单键写原子），不做「读-改-写」
+序列、也不原地 append —— 读方最坏读到「新 cum 配旧 ts」，多拉一次行情。
 """
 import json
 import os
@@ -91,10 +95,10 @@ _PM_OPEN, _PM_CLOSE = (13, 0), (15, 0)
 # 缓存文件版本号：结构变更时自增，旧缓存自动失效重建
 _CACHE_VERSION = 1
 
-# 模块级缓存（纯赋值替换，无锁）
+# 模块级缓存（键级赋值 / 整体替换，无锁）
 _RATIO_CACHE = None          # {"trade_date","yesterday_total","bars","samples","built_at"}
 _SNAP_CACHE = {"ts": 0.0, "amount": 0.0}
-_MINUTE_CACHE = {"ts": 0.0, "day": "", "cum": [], "snap": 0.0}
+_MINUTE_CACHE = {"ts": 0.0, "day": "", "cum": []}
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -143,7 +147,12 @@ def _call(fn):
 
 
 def _fetch_minute_days(client, code: str) -> dict:
-    """拉某标的的 1 分钟 K 线，按交易日切分 → {日期: [每分钟成交额(元), ...]}"""
+    """拉某标的的 1 分钟 K 线，按交易日切分 → {日期: [每分钟成交额(元), ...]}
+
+    all_pages=True 时 count 不生效（eltdx 只校验 page_size，逐页拉到服务端返回
+    空页为止），传 2400 只是表达「要分钟线」的意图，实收是全量：实测单只 23280
+    根 / 97 个交易日。样本由 _build_ratio 截最近 _RATIO_DAYS=20 个完整交易日。
+    """
     series = client.bars.get(code, period="1m", count=2400, all_pages=True)
     days = {}
     for bar in series.bars:
@@ -290,8 +299,8 @@ def _is_stale(data: dict) -> bool:
 
     判据：样本末日落后于「最近一个已收盘交易日」才重建。周末与法定假日行情源
     不产生新分钟线，重建也推不动样本末日；若没有「今天收盘后已试过」这层兜底，
-    同一个缓存会一直被判定过期 —— 15:00 之后每个请求都重拉 3×2400 根分钟线
-    （3~10s），长假里天天如此。所以用 built_at 记一笔：今天收盘后已经建过就
+    同一个缓存会一直被判定过期 —— 15:00 之后每个请求都重拉全量分钟线（三只各
+    约 3~4s），长假里天天如此。所以用 built_at 记一笔：今天收盘后已经建过就
     不再试。反向条件同样重要：built_at 是今天**收盘前**的（例如盘前冷启动建过
     一次），15:00 后仍要重建一次，好把今天的完整数据收进样本。
     """
@@ -345,7 +354,7 @@ def _get_ratio() -> dict:
 def _live() -> dict:
     """实时取数（单连接内按各自 TTL 决定要不要真拉）
 
-    曲线（3 次 bars）与快照（1 次 snapshots）的 TTL 不同：曲线 60s、快照 3s。
+    曲线（3 次 bars）与快照（1 次 snapshots）的 TTL 不同：曲线 60s、快照 2s。
     两者都没过期时不建连接；只有一个过期时共用同一条连接，省一次握手。
     返回 {"day", "cum": [...], "snap": 三市合计(元)}
     """
@@ -446,8 +455,9 @@ def call_energy():
     actual = cum[-1]
     predict = _predict(ratio_bars, actual, bars_done) or actual
 
-    # r 表最后一根是「收盘集合竞价那一分钟」，占比略小于 1；走完 240 根即收盘，
-    # 预测值直接取实际值，避免末点出现 +0.1% 的虚假偏差。
+    # 走完 240 根即收盘，预测值直接取实际值。r 表末根其实恒等于 1（_build_ratio
+    # 的分母就是当日 cum[-1]，末根分子也是 cum[-1]），所以这一步通常等于没做；
+    # 保留它是兜底：r 表被外部改坏 / 缓存被手改成末根 < 1 时，末点会冒出虚假正偏差。
     if bars_done >= _BARS_PER_DAY:
         predict = actual
 
@@ -497,8 +507,12 @@ def call_energy():
 
 
 def clear_cache() -> None:
-    """清空进程内缓存（测试 / 手动刷新用；不动磁盘）"""
+    """清空进程内缓存（当前无调用方，保留作手动刷新 / 排障入口；不动磁盘）
+
+    全仓无人调用、测试也是直接 mock _get_ratio/_live，评审记为清洁度项。保留的
+    理由是它只做键级复位、无副作用，出问题时能一行把进程拉回「冷启动」语义。
+    """
     global _RATIO_CACHE
     _RATIO_CACHE = None
     _SNAP_CACHE.update({"ts": 0.0, "amount": 0.0})
-    _MINUTE_CACHE.update({"ts": 0.0, "day": "", "cum": [], "snap": 0.0})
+    _MINUTE_CACHE.update({"ts": 0.0, "day": "", "cum": []})

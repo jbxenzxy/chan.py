@@ -9793,6 +9793,9 @@
         var _energySig = null;
         var EN_SHRINK = "#0aa53c";
         var EN_UP = "#e33b3b";
+        // 连续失败次数：0 = 正常。拉数失败后按 energyRetryDelay() 退避重试，
+        // 成功 / 关面板即清零。
+        var _energyFail = 0;
 
         // 指纹取「驱动曲线形状」的三样：实际量能、曲线长度、末点值。
         // 盘中主站每 1.3s 推一次成交额，三者任一变化即视为新数据；
@@ -9820,23 +9823,47 @@
             stopEnergyPolling();
             // 关面板即丢弃指纹：下次打开会用最新数据重画一次曲线，该闪还是要闪
             _energySig = null;
+            _energyFail = 0;   // 重开重新计失败次数，不带着上次的退避状态
         };
 
         function stopEnergyPolling() {
             if (_energyTimer) { clearTimeout(_energyTimer); _energyTimer = null; }
         }
 
+        // 盘前 / 收盘后的兜底慢轮询窗口（本地时间，含边界）。
+        // 为什么需要：1m 首根是 09:31，之前当日没有任何 bar，后端拿到的 day 还是
+        // 昨日 → _session_status 首判 day != today 直接返回 closed（pre 分支要
+        // 「当日已有 bar」才可达，真实盘前走不到）。若这时不排定时器，盘前打开的面板
+        // 会永远停在昨日曲线上，只能关开一次自愈。窗口内按 60s 慢轮询，开盘后第一次
+        // 拿到 trading 自动切回 3s；窗口外（收盘后/深夜）仍然不排。
+        // 只依赖本地时钟，不判断「今天是不是交易日」—— 门禁 tdx_no_calendar_dep
+        // 禁止 TDX 侧依赖交易日历。
+        // 窗口常量写死在函数内（不外提模块级 var）：测试是按函数名抽出去跑的，
+        // 外提的常量抽不走，只会逼测试在桩里复制一份数字、失去单一口径。
+        function energyIdlePollMs() {
+            var d = new Date();
+            var hm = d.getHours() * 60 + d.getMinutes();
+            return (hm >= 9 * 60 + 15 && hm <= 15 * 60 + 5) ? 60000 : 0;
+        }
+
         function scheduleEnergyPoll(status) {
             stopEnergyPolling();
             // 盘中 3s（主站快照实测约 1.3s 刷新，后端 TTL 2s）；午休 30s；
-            // 盘前/收盘不再轮询
-            var ms = status === "trading" ? 3000 : (status === "break" ? 30000 : 0);
+            // 盘前/收盘走兜底慢轮询（见energyIdlePollMs）
+            var ms = status === "trading" ? 3000
+                   : (status === "break" ? 30000 : energyIdlePollMs());
             if (!ms) return;
             _energyTimer = setTimeout(function() {
                 var p = document.getElementById("energy-panel");
                 if (!p || !p.classList.contains("show")) { stopEnergyPolling(); return; }
                 loadEnergyData();
             }, ms);
+        }
+
+        // 失败退避：第 n 次失败后等 2s / 4s / 8s，第 4 次失败放弃（返回 0）。
+        // 盘中一次网络抖动或后端 500 不该让面板僵死在「加载失败」等用户关开面板。
+        function energyRetryDelay(n) {
+            return (n >= 1 && n <= 3) ? 2000 * Math.pow(2, n - 1) : 0;
         }
 
         function loadEnergyData() {
@@ -9857,6 +9884,7 @@
                     return resp.json();
                 })
                 .then(function(data) {
+                    _energyFail = 0;
                     renderEnergyPanel(data);
                     scheduleEnergyPoll(data.status);
                 })
@@ -9864,6 +9892,16 @@
                     stopEnergyPolling();
                     var empty = document.getElementById("energy-empty");
                     if (empty) { empty.style.display = "block"; empty.textContent = "加载失败: " + err.message; }
+                    // 退避重试（见energyRetryDelay）：重试成功由 renderEnergyPanel 收起
+                    // 这行错误文案；面板已被关掉就不再排。
+                    var wait = energyRetryDelay(_energyFail + 1);
+                    if (!wait) return;
+                    _energyFail += 1;
+                    _energyTimer = setTimeout(function() {
+                        var p = document.getElementById("energy-panel");
+                        if (!p || !p.classList.contains("show")) { stopEnergyPolling(); return; }
+                        loadEnergyData();
+                    }, wait);
                 });
         }
 
