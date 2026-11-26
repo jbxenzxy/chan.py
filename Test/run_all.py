@@ -261,8 +261,9 @@ COMPONENTS = [
      [sys.executable, os.path.join("Test", "test_app_margin.py")]),
     ("margin_panel_guard",
      [sys.executable, os.path.join("Test", "test_margin_panel.py")]),
-    # 预测量能（AppEnergy，eltdx 7709 盘中实时）：按钮恒可用（期货页/任意周期）+
-    #   左下角面板版式逐字契约 + 真渲染文案 + r(t) 解析解/缓存过期/会话状态
+    # 盘中量能（AppEnergy，eltdx 7709 盘中实时，原名「预测量能」）：按钮恒可用
+    #   （期货页/任意周期）+ 左下角面板版式逐字契约 + 真渲染文案 + r(t) 解析解/
+    #   缓存过期/会话状态/非交易日基准
     ("energy_panel_guard",
      [sys.executable, os.path.join("Test", "test_energy_panel.py")]),
     # 两融余额类MACD 指标（静态契约 + node 数值对齐 + canvas 真渲染 + 真浏览器柱子上屏 + 重试/chip 重选行为探针）

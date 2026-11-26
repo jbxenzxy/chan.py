@@ -7,9 +7,11 @@
 v2 追加：两融余额按钮的可用性与「市场量能」一致。
 v3（2026-11-21）：可用性改由「是否期货 + 当前周期」决定（见 ⑫），不再认标的；
    与「市场量能」同口径，且「股票扫描」另有一条独立规则。
+v4（2026-11-26）：用户把「市场量能」改名「盘后量能」，并要求「两融余额」排到它
+   后面 —— 顶栏顺序改为「盘中量能 → 盘后量能 → 两融余额」，故 ① 的顺序断言反转。
 
 静态层（零浏览器、零网络）：
-  ① 按钮顺序：btn-margin 必须排在 btn-amo 之前
+  ① 按钮顺序：btn-margin 必须排在 btn-amo（盘后量能）**之后**
   ② 按钮文案 / 内联事件 / 面板骨架（canvas + 三格统计 + 空态）
   ③ 面板标题写明沪 / 深 / 北三市口径
   ④ 样式与市场量能同源（同一个 #amo-chart 规则带上 #margin-chart）
@@ -18,7 +20,7 @@ v3（2026-11-21）：可用性改由「是否期货 + 当前周期」决定（�
   ⑦ phase6 window API 面登记（新增两个内联事件桥）
   ⑫ 三按钮可用性契约（2026-11-21 用户口径，取代 2026-11-20 的「恒可用」）：
      期货页三个按钮全灰；股票页「股票扫描」恒可用、与周期无关；股票页仅日K
-     才放行「两融余额」「市场量能」。判据只认「是否期货 + 周期」不认标的，
+     才放行「两融余额」「盘后量能」。判据只认「是否期货 + 周期」不认标的，
      唯一写入点是 syncDataBtnState()，由 updateFreqButtonStates() 与
      _setScanRunning() 收口；按钮变灰时面板必须同时关闭。
 
@@ -132,8 +134,9 @@ def test_static():
 
     i_margin = html.find('id="btn-margin"')
     i_amo = html.find('id="btn-amo"')
-    check(i_margin >= 0 and i_amo >= 0 and i_margin < i_amo,
-          "① 两融余额按钮在市场量能按钮之前", f"margin={i_margin} amo={i_amo}")
+    check(i_margin >= 0 and i_amo >= 0 and i_amo < i_margin,
+          "① 两融余额按钮在盘后量能按钮之后（2026-11-26 起顺序：盘中量能→盘后量能→两融余额）",
+          f"margin={i_margin} amo={i_amo}")
     check('onclick="toggleMarginPanel()"' in html
           and ">两融余额</button>" in html,
           "② 按钮文案与内联事件", html[i_margin:i_margin + 200])
@@ -198,7 +201,7 @@ def test_static():
           html_title.group(1) if html_title else "缺 title")
     check(bool(amo_html_title)
           and "仅上证指数日K可用" not in amo_html_title.group(1),
-          "⑫ 市场量能按钮静态 title 同上",
+          "⑫ 盘后量能按钮静态 title 同上",
           amo_html_title.group(1) if amo_html_title else "缺 title")
     # 唯一写入点：三个按钮的 disabled / title 只在 syncDataBtnState 里写
     sync_fn = _extract_fn(js, "syncDataBtnState") or ""
@@ -206,7 +209,7 @@ def test_static():
     check(all(sync_fn.count('"%s"' % b) == 1
               for b in ("btn-scan", "btn-amo", "btn-margin")),
           "⑫ 三个按钮在写入点里各出现 1 次（无遗漏）", sync_fn[:200])
-    check('title = av.panels ? "市场量能" : "市场量能（仅股票日K可用）"' in sync_fn
+    check('title = av.panels ? "盘后量能" : "盘后量能（仅股票日K可用）"' in sync_fn
           and 'title = _scanRunning ? "扫描股票买卖点（正在扫描，点击中断）"' in sync_fn
           and '仅股票日K可用' in sync_fn,
           "⑫ 灰化文案写清原因（扫描=仅股票页面 / 面板=仅股票日K）；扫描中的 title "
@@ -544,7 +547,7 @@ def test_button_availability():
         check(got == want, f"⑫ {cn}：disabled 三元组 = {want}", str(got))
         # title：灰化的必须写明原因，可用的回到静态口径（无「仅」字样）
         ok_title = True
-        for k, base in (("scan", "扫描股票买卖点"), ("amo", "市场量能"),
+        for k, base in (("scan", "扫描股票买卖点"), ("amo", "盘后量能"),
                         ("margin", "两融余额")):
             t = r[k + "Title"]
             if want[k]:

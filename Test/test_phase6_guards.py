@@ -99,7 +99,8 @@ WINDOW_BASELINE = {
 #     app.html 不直接引用它（HTML 那颗按钮走 toggleStats 分流），因此**不算** ③b 桥。
 WINDOW_ALLOWED_NEW = {"ChanApp", "stockTpslFromMenu", "stockTpslCancel",
                       "toggleBacktestPanel",
-                      # 预测量能面板（AppEnergy，2026-11-26）：面板关闭口只被
+                      # 盘中量能面板（AppEnergy，2026-11-26，按钮原名「预测量能」）：
+                      # 面板关闭口只被
                       # app.js 内部的「点击面板外」监听与 toggleEnergyPanel 调用，
                       # app.html 没有任何内联事件引用它 ⇒ 归「登记性新增」，
                       # 不进 WINDOW_INLINE_BRIDGES（③b 要求桥必须被 html 引用）。
@@ -121,7 +122,7 @@ WINDOW_INLINE_BRIDGES = {
     "closeBacktestPanel",
     # 两融余额面板（app.html 内联 onclick）
     "toggleMarginPanel", "closeMarginPanel",
-    #   toggleEnergyPanel <- app.html  onclick="toggleEnergyPanel()"（顶栏「预测量能」）
+    #   toggleEnergyPanel <- app.html  onclick="toggleEnergyPanel()"（顶栏「盘中量能」）
     #     2026-11-26：与 amo/margin 同一范式，业务函数在 IIFE 闭包内故必须挂 window。
     #     注意它**不进** syncDataBtnState() 的灰化名单（期货页/任意周期都可点）。
     "toggleEnergyPanel",

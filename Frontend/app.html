@@ -113,18 +113,18 @@
                  顶栏是 overflow-x:auto 横向滚动兜底，不是空间无限。
                  window.toggleOverlay 仍保留（控制台入口 / 快捷键挂点），状态变量与
                  localStorage 键 chan_overlay_settings 一律未变 —— 只有入口位置变了。 -->
-            <!-- 这两个面板展示的是「全市场日频聚合序列」（沪+深+北两融余额 / 沪+深成交额），
-                 只依赖视口日期区间，与当前 K 线是什么标的无关 —— 但能否点由「是否期货 +
-                 当前周期」决定（不认标的）。disabled 与 title 的唯一写入点是
-                 window.syncDataBtnState()：期货页全灰，股票页仅日K 放行；下面静态写的是
-                 初始值，运行时会按状态覆写成「仅股票日K可用」。 -->
+            <!-- 「盘中量能」取 eltdx 盘中实时口径的沪深京三市成交额（App/AppEnergy.py），
+                 与当前标的、当前周期都无关，因此**不进 syncDataBtnState() 的灰化名单**
+                 ——期货页、任意周期都可点。静态不写 disabled，运行时也没有任何地方会写它。 -->
+            <button class="btn" id="btn-amo-pred" onclick="toggleEnergyPanel()" title="盘中量能（沪深京，盘中实时）">盘中量能</button>
+            <!-- 「盘后量能」与「两融余额」两个面板展示的是「全市场日频聚合序列」
+                 （沪+深成交额 / 沪+深+北两融余额），只依赖视口日期区间，与当前 K 线是
+                 什么标的无关 —— 但能否点由「是否期货 + 当前周期」决定（不认标的）。
+                 disabled 与 title 的唯一写入点是 window.syncDataBtnState()：期货页全灰，
+                 股票页仅日K 放行；下面静态写的是初始值，运行时会按状态覆写成
+                 「仅股票日K可用」。 -->
+            <button class="btn" id="btn-amo" onclick="toggleAmoPanel()" title="盘后量能">盘后量能</button>
             <button class="btn" id="btn-margin" onclick="toggleMarginPanel()" title="两融余额（全A股沪深北三市）">两融余额</button>
-            <!-- 「预测量能」与上面两颗**不同类**：它取的是 eltdx 盘中实时口径的
-                 沪深京三市成交额（App/AppEnergy.py），与当前标的、当前周期都无关，
-                 因此**不进 syncDataBtnState() 的灰化名单**——期货页、任意周期都可点。
-                 静态不写 disabled，运行时也没有任何地方会写它。 -->
-            <button class="btn" id="btn-amo-pred" onclick="toggleEnergyPanel()" title="预测量能（沪深京，盘中实时）">预测量能</button>
-            <button class="btn" id="btn-amo" onclick="toggleAmoPanel()" title="市场量能">市场量能</button>
             <button class="btn" id="btn-scan" onclick="startScanZxg()" title="扫描股票买卖点">股票扫描</button>
             <button class="btn" id="btn-draw" onclick="toggleDrawToolbar()" title="画线工具（同花顺式：倾斜线 / 水平线）">画线</button>
             <button class="btn" id="btn-stats" onclick="toggleStats()">统计</button>

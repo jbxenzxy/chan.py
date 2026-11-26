@@ -1,14 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-「预测量能」按钮与面板的契约护栏（静态层 + 真函数层 + 后端行为层）
+「盘中量能」按钮与面板的契约护栏（静态层 + 真函数层 + 后端行为层）
 =====================================================================
 需求原文：在「市场量能」按钮**前面**增加一个「预测量能」按钮；该按钮在
 任何页面（股票 / 期货）、任何周期都可点；点击后在页面**左下角**弹出面板，
 面板版式照「开盘红」App 的「沪深京预测量能」截图 1:1 复刻（蓝色标签条 /
 绿色缩量 / 0 轴蓝线 + 「昨日|总量能」图例 / 绿色 y 轴刻度 / 底部注释）。
+v2（2026-11-26）：按钮改名「盘中量能」，「市场量能」改名「盘后量能」，
+   顶栏顺序改为「盘中量能 → 盘后量能 → 两融余额」。**面板内文字不动**：
+   标题「市场量能」、「今日｜预测量能 NNNN亿」、底部注释仍是截图原文。
 
 静态层（零浏览器、零网络）：
-  ① 按钮顺序：btn-amo-pred 必须排在 btn-amo 之前，文案「预测量能」
+  ① 按钮顺序：btn-amo-pred（盘中量能）在 btn-amo（盘后量能）之前，
+     btn-margin（两融余额）在 btn-amo 之后；文案「盘中量能」
   ② 恒可用：按钮标签内无 disabled；syncDataBtnState() 函数体里不出现
      btn-amo-pred（它不进「仅股票日K」那条灰化判据）
   ③ 面板骨架：en-panel / energy-date / energy-actual / energy-pred /
@@ -103,12 +107,18 @@ def test_static(failures_ignored=None):
     print("[①] 按钮顺序与文案")
     i_pred = html.find('id="btn-amo-pred"')
     i_amo = html.find('id="btn-amo"')
+    i_margin = html.find('id="btn-margin"')
     check(i_pred > 0, "app.html 存在 #btn-amo-pred")
-    check(i_pred < i_amo, "「预测量能」排在「市场量能」之前",
+    check(0 < i_pred < i_amo, "「盘中量能」排在「盘后量能」之前",
           f"(pred@{i_pred} amo@{i_amo})")
+    check(0 < i_amo < i_margin, "「两融余额」排在「盘后量能」之后",
+          f"(amo@{i_amo} margin@{i_margin})")
     m = re.search(r'<button[^>]*id="btn-amo-pred"[^>]*>(.*?)</button>', html, re.S)
-    check(bool(m) and m.group(1).strip() == "预测量能", "按钮文案为「预测量能」",
+    check(bool(m) and m.group(1).strip() == "盘中量能", "按钮文案为「盘中量能」",
           "" if not m else f"实测 {m.group(1)!r}")
+    check(bool(m) and 'title="盘中量能（沪深京，盘中实时）"' in m.group(0),
+          "title 写清口径「盘中量能（沪深京，盘中实时）」",
+          "" if not m else m.group(0)[:120])
     check(bool(m) and "onclick=\"toggleEnergyPanel()\"" in m.group(0),
           "按钮内联事件为 toggleEnergyPanel()")
 
@@ -580,7 +590,7 @@ def test_energy_behavior():
 
 # ═══════════════════════════════════════════════════════════════════════
 def main():
-    print("===== 预测量能面板契约护栏 =====")
+    print("===== 盘中量能面板契约护栏 =====")
     test_static()
     test_real_render()
     test_energy_behavior()
