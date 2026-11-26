@@ -98,7 +98,12 @@ WINDOW_BASELINE = {
 #     同一范式（两个面板占同一屏位、由市场态二选一），故同样挂 window 供控制台调试；
 #     app.html 不直接引用它（HTML 那颗按钮走 toggleStats 分流），因此**不算** ③b 桥。
 WINDOW_ALLOWED_NEW = {"ChanApp", "stockTpslFromMenu", "stockTpslCancel",
-                      "toggleBacktestPanel"}
+                      "toggleBacktestPanel",
+                      # 预测量能面板（AppEnergy，2026-11-26）：面板关闭口只被
+                      # app.js 内部的「点击面板外」监听与 toggleEnergyPanel 调用，
+                      # app.html 没有任何内联事件引用它 ⇒ 归「登记性新增」，
+                      # 不进 WINDOW_INLINE_BRIDGES（③b 要求桥必须被 html 引用）。
+                      "closeEnergyPanel"}
 # 允许的登记性新增（HTML 内联事件桥）
 # app.html 的 on* 属性在**全局作用域**执行，而 app.js 的业务函数都在 IIFE
 # 闭包内 —— 不挂 window 时点击即抛 ReferenceError。两起真实故障（自动下单开关
@@ -116,6 +121,10 @@ WINDOW_INLINE_BRIDGES = {
     "closeBacktestPanel",
     # 两融余额面板（app.html 内联 onclick）
     "toggleMarginPanel", "closeMarginPanel",
+    #   toggleEnergyPanel <- app.html  onclick="toggleEnergyPanel()"（顶栏「预测量能」）
+    #     2026-11-26：与 amo/margin 同一范式，业务函数在 IIFE 闭包内故必须挂 window。
+    #     注意它**不进** syncDataBtnState() 的灰化名单（期货页/任意周期都可点）。
+    "toggleEnergyPanel",
     #   onCodeInputFocus     <- app.html  onfocus="onCodeInputFocus()"
     #     2026-10-20：输入框聚焦不再清空已有代码（原先是聚焦即先 clearInput()，
     #     导致 CFFEX.IF2409 只能整串重打、没法只改末两位）。聚焦链路上的

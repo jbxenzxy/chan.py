@@ -755,6 +755,109 @@
         .amo-empty {
             text-align: center; color: #555; padding: 40px 0;
         }
+        /* 预测量能面板（左下角浮层）
+           版式照「开盘红」App 截图 1:1 复刻：白底 / 蓝色标签条 / 绿色缩量 /
+           0 轴蓝线 + 蓝色「昨日总量能」图例 / 绿色 y 轴刻度 / 底部注释。
+           刻意不跟随站内深色主题 —— 用户要求与截图一致。 */
+        .en-panel {
+            position: fixed; left: 10px; bottom: 40px;
+            width: 460px;
+            background: #ffffff;
+            border: 1px solid #ececec;
+            border-radius: 10px;
+            box-shadow: 0 6px 28px rgba(0, 0, 0, 0.18);
+            z-index: 200;
+            display: none;
+            flex-direction: column;
+            overflow: hidden;
+            font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+        }
+        .en-panel.show { display: flex; }
+        .en-head {
+            display: flex; align-items: center; gap: 8px;
+            padding: 12px 16px;
+            border-bottom: 1px solid #f2f2f2;
+        }
+        .en-mark {
+            width: 4px; height: 16px; border-radius: 2px;
+            background: #2f7ce0; flex: none;
+        }
+        .en-title { font-size: 15px; font-weight: 500; color: #222222; }
+        .en-date { font-size: 15px; color: #9aa0a8; }
+        .en-hist { margin-left: auto; font-size: 13px; color: #c9ced6; cursor: default; }
+        .en-body { padding: 10px 16px 12px; position: relative; }
+        .en-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+        .en-ico {
+            width: 22px; height: 22px; border-radius: 4px; background: #f4f5f7;
+            color: #9aa0a8; flex: none;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .en-ico svg { width: 15px; height: 15px; fill: currentColor; }
+        .en-actual { font-size: 16px; color: #2c2c2c; }
+        .en-actual b { font-weight: 400; }
+        .en-swatch {
+            width: 22px; height: 22px; border-radius: 4px;
+            background: #0aa53c; flex: none;
+        }
+        .en-pred { font-size: 16px; font-weight: 500; color: #0aa53c; }
+        /* 曲线末端「刚刷新」红点：实心点常驻 = 「现在到哪了」，外圈一圈扩散淡出的
+           光晕在每次取数成功后播一遍 = 「刚刷新了」。用 CSS 动画而不是 canvas 逐帧
+           重绘：刷新间隔 3s，为闪一个点重画整条曲线不值，也省掉 rAF 生命周期管理。 */
+        /* 曲线末端「刚刷新」指示点：**平时完全不可见**，只有真拿到新数据、把曲线
+           重画了一遍才闪一次（亮起 → 外圈扩散 → 淡出 900ms），闪完自己回到不可见。
+           因此数据没更新的那些轮询（后端 2s TTL 合并、午休/收盘静止）不会闪。
+           ① 实心点 5px；② 外圈光圈 16px。尺寸照截图量：整卡 1080px = 360dp@3x，
+           红点直径 ≈12 图像px ⇒ 4dp；本面板 plotW 348 对截图 300，放大 1.16 倍
+           ⇒ 5px 实心 / 16px 光圈。径向透明度剖面实测（按绿通道反解）：r 3.1→5.8px
+           恒为 0.24~0.25 再线性收敛到 0 —— 有平台，所以必须用 radial-gradient 而不是
+           box-shadow（后者只有高斯衰减，边缘会显出一道硬圈）。
+           用 CSS 动画而不是 canvas 逐帧重绘：为闪一个点重画整条曲线不值，也省掉
+           rAF 生命周期管理（面板关闭/切页都不用手动收尾）。 */
+        .en-chart-wrap { position: relative; margin-top: 4px; }
+        #energy-chart { width: 100%; height: auto; display: block; }
+        /* 容器只当定位锚点（left/top 由 canvas 的 xOf/yOf 算出），本身不画东西；
+           两个伪元素基础 opacity 0 —— 不加 .flash 时红点等于不存在 */
+        .en-dot {
+            position: absolute; left: 0; top: 0; display: none; pointer-events: none;
+            width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%;
+        }
+        .en-dot.show { display: block; }
+        .en-dot::before, .en-dot::after {
+            content: ""; position: absolute; left: 50%; top: 50%;
+            border-radius: 50%; transform: translate(-50%, -50%); opacity: 0;
+        }
+        /* ② 实心点（z 高于脉冲，脉冲是半透明的，盖上去会把它染淡） */
+        .en-dot::before { width: 5px; height: 5px; background: #f5222d; z-index: 2; }
+        /* ③ 脉冲层：0~55% 平台 0.30，到边缘收到 0（消除硬边） */
+        .en-dot::after {
+            width: 16px; height: 16px; z-index: 1;
+            background: radial-gradient(circle closest-side,
+                rgba(245, 34, 45, 0.45) 0%, rgba(245, 34, 45, 0.30) 55%,
+                rgba(245, 34, 45, 0) 100%);
+        }
+        /* 一次刷新 = 实心点亮住前半程再淡出 + 外圈扩散淡出，两层同时收尾（900ms） */
+        .en-dot.flash::before { animation: en-dot-core 900ms ease-out; }
+        .en-dot.flash::after { animation: en-dot-pulse 900ms ease-out; }
+        @keyframes en-dot-core {
+            0%   { opacity: 1; }
+            55%  { opacity: 1; }
+            100% { opacity: 0; }
+        }
+        @keyframes en-dot-pulse {
+            0%   { transform: translate(-50%, -50%) scale(1);   opacity: 0.95; }
+            70%  { opacity: 0.12; }
+            100% { transform: translate(-50%, -50%) scale(2.2); opacity: 0; }
+        }
+        /* 放量态曲线本身转红：实心点补一圈白描边，避免糊在红线上看不见 */
+        .en-panel.en-up .en-dot::before { box-shadow: 0 0 0 1.5px #fff; }
+        .en-note { font-size: 12px; color: #9aa0a8; margin-top: 6px; }
+        .en-empty {
+            position: absolute; left: 0; right: 0; top: 52%;
+            text-align: center; font-size: 12px; color: #9aa0a8;
+        }
+        /* 增量（放量）态：色块与文案转红，与「红增量 / 绿缩量」注释一致 */
+        .en-panel.en-up .en-swatch { background: #e33b3b; }
+        .en-panel.en-up .en-pred { color: #e33b3b; }
         .range-slider {
             position: fixed; bottom: 0; left: 0; width: 100%; height: 32px;
             background: rgba(22, 33, 62, 0.92); z-index: 100;

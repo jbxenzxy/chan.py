@@ -313,6 +313,15 @@ class _AppConfigBase:
         """批量扫描任务 SQLite 数据库文件"""
         return os.path.join(self.app_data_dir, "scan_tasks.db")
 
+    @property
+    def energy_ratio_file(self) -> str:
+        """预测量能 r(t) 占比表缓存（每日收盘后重建一次）。
+
+        表体 = 240 个「历史同时段累计成交额占全日比例」，由 eltdx 分钟线
+        现算。重建一次要拉 3×2400 根分钟线（实测 3~10s），故必须落盘复用。
+        """
+        return os.path.join(self.app_data_dir, "energy_ratio.json")
+
     # ── TQ 凭据（本地文件 / 环境变量，不进缓存）────────────────────
     def load_tq_account(self) -> dict:
         """

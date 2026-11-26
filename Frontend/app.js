@@ -9773,6 +9773,290 @@
 
 
 // ══════════════════════════════════════════════════════════════════
+        // [COMPONENT] EnergyPanel —— 预测量能面板（顶栏「预测量能」/ 左下角浮层）
+        // 数据源：/api/energy/read → orch.call_energy（eltdx 7709 盘中实时口径）。
+        //   · 面板内容是「沪深京三市盘中预测量能」，与当前标的、周期、股票/期货
+        //     一律无关，因此按钮恒可用，**不进 syncDataBtnState() 的灰化名单**
+        //     （那一套只服务 amo/margin 的「仅股票日K」判据）。
+        //   · 打开即拉一次；轮询节奏按后端 status：trading→3s / break→30s /
+        //     pre、closed→停。主站快照实测约 1.3s 刷新一次，3s 轮询 + 后端 2s TTL
+        //     合起来最坏滞后约 5s（含网络），再密既没有信息增量也白白压主站。
+        //   · 关闭面板即停轮询并释放数据（只留一个「上次指纹」用于下次首屏重闪）。
+        //   · 末端指示点只在「数据指纹变了」时闪一次；没新数据的轮询不闪。
+        //   · 版式照「开盘红」App 截图 1:1 复刻：白底、蓝色标签条、绿缩量/红增量、
+        //     0 轴蓝线 + 「昨日|总量能」图例、绿色 y 轴刻度、底部注释。
+// ══════════════════════════════════════════════════════════════════
+
+        var _energyTimer = null;
+        // 上次真正上屏的数据指纹。新指纹与它相同 ⇒ 后端这轮没有新数据（快照 TTL 合并、
+        // 午休/收盘静止）⇒ 曲线原样重画，末端指示点不闪。null = 还没画过 ⇒ 首屏要闪。
+        var _energySig = null;
+        var EN_SHRINK = "#0aa53c";
+        var EN_UP = "#e33b3b";
+
+        // 指纹取「驱动曲线形状」的三样：实际量能、曲线长度、末点值。
+        // 盘中主站每 1.3s 推一次成交额，三者任一变化即视为新数据；
+        // 后端 2s TTL 让前端 3s 轮询时常拿到同一份，三样全不变 ⇒ 不闪。
+        function energySig(data) {
+            var pts = data.points || [];
+            var last = pts.length ? pts[pts.length - 1] : null;
+            return [data.actual, pts.length, last ? String(last[1]) : "-"].join("|");
+        }
+
+        window.toggleEnergyPanel = function() {
+            var panel = document.getElementById("energy-panel");
+            if (!panel) return;
+            if (panel.classList.contains("show")) {
+                closeEnergyPanel();
+            } else {
+                panel.classList.add("show");
+                loadEnergyData();
+            }
+        };
+
+        window.closeEnergyPanel = function() {
+            var panel = document.getElementById("energy-panel");
+            if (panel) panel.classList.remove("show");
+            stopEnergyPolling();
+            // 关面板即丢弃指纹：下次打开会用最新数据重画一次曲线，该闪还是要闪
+            _energySig = null;
+        };
+
+        function stopEnergyPolling() {
+            if (_energyTimer) { clearTimeout(_energyTimer); _energyTimer = null; }
+        }
+
+        function scheduleEnergyPoll(status) {
+            stopEnergyPolling();
+            // 盘中 3s（主站快照实测约 1.3s 刷新，后端 TTL 2s）；午休 30s；
+            // 盘前/收盘不再轮询
+            var ms = status === "trading" ? 3000 : (status === "break" ? 30000 : 0);
+            if (!ms) return;
+            _energyTimer = setTimeout(function() {
+                var p = document.getElementById("energy-panel");
+                if (!p || !p.classList.contains("show")) { stopEnergyPolling(); return; }
+                loadEnergyData();
+            }, ms);
+        }
+
+        function loadEnergyData() {
+            // 首次打开要给反馈：r(t) 表在缓存缺失时要现拉 20 天分钟线（约 10s）
+            var emptyEl = document.getElementById("energy-empty");
+            var actualEl = document.getElementById("energy-actual");
+            if (emptyEl && actualEl && actualEl.textContent === "--") {
+                emptyEl.style.display = "block";
+                emptyEl.textContent = "正在读取沪深京实时成交额（首次需构建历史样本，约 10 秒）…";
+            }
+            fetch("/api/energy/read")
+                .then(function(resp) {
+                    if (!resp.ok) {
+                        return resp.json().then(function(e) {
+                            throw new Error(e.detail || e.error || "查询失败");
+                        });
+                    }
+                    return resp.json();
+                })
+                .then(function(data) {
+                    renderEnergyPanel(data);
+                    scheduleEnergyPoll(data.status);
+                })
+                .catch(function(err) {
+                    stopEnergyPolling();
+                    var empty = document.getElementById("energy-empty");
+                    if (empty) { empty.style.display = "block"; empty.textContent = "加载失败: " + err.message; }
+                });
+        }
+
+        function fmtEnergyPct(v) {
+            // 固定两位小数并带符号：-5.65 / +3.20（与截图「(-5.65%,缩量787亿)」同格式）
+            var a = Math.abs(Number(v) || 0).toFixed(2);
+            return (Number(v) < 0 ? "-" : "+") + a;
+        }
+
+        function renderEnergyPanel(data) {
+            var panel = document.getElementById("energy-panel");
+            if (!panel) return;
+            var up = !data.shrink;                 // 放量 → 红，缩量 → 绿
+            panel.classList.toggle("en-up", up);
+
+            document.getElementById("energy-date").textContent = data.date || "--";
+            // 实际量能只留整数亿（13261.46 → 13261）；继续传两位小数会让这行过长，
+            // 与右侧「预测量能 13114亿」的整数口径也不一致
+            document.getElementById("energy-actual").textContent =
+                String(Math.round(Number(data.actual) || 0));
+            var word = up ? "增量" : "缩量";
+            var absDelta = Math.abs(Math.round(Number(data.delta) || 0));
+            document.getElementById("energy-pred").textContent =
+                "今日｜预测量能 " + data.predict + "亿(" + fmtEnergyPct(data.pct) + "%,"
+                + word + absDelta + "亿)";
+
+            var empty = document.getElementById("energy-empty");
+            if (empty) empty.style.display = "none";
+
+            // 只有「数据真的变了」才让末端红点闪 —— 否则每 3s 无脑闪一次，
+            // 用户会以为一直在刷新。首屏（_energySig 为 null）算一次新数据。
+            var sig = energySig(data);
+            var fresh = sig !== _energySig;
+            _energySig = sig;
+            renderEnergyChart(data, up ? EN_UP : EN_SHRINK, fresh);
+        }
+
+        function renderEnergyChart(data, color, flash) {
+            var canvas = document.getElementById("energy-chart");
+            if (!canvas) return;
+
+            // 响应式画布：按容器宽度定 CSS 尺寸，再按 DPR 放大内部分辨率
+            var cssW = canvas.clientWidth || 428;
+            var cssH = Math.round(cssW * 0.54);
+            var dpr = window.devicePixelRatio || 1;
+            canvas.width = Math.round(cssW * dpr);
+            canvas.height = Math.round(cssH * dpr);
+            var ctx = canvas.getContext("2d");
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            ctx.clearRect(0, 0, cssW, cssH);
+
+            var W = cssW, H = cssH;
+            var padL = 68, padR = 10, padT = 14, padB = 30;
+            var plotW = W - padL - padR;
+            var plotH = H - padT - padB;
+            var pts = data.points || [];
+            var font = "12px -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif";
+
+            // y 轴量程按「曲线在 0 的哪一侧」选映射：
+            //  · 缩量（全在 0 下）：照截图 —— 0 贴顶，向下 4 等分到最小值，
+            //    间距 = |min|/4（-8.30/-16.61/-24.91/-33.22 就是这么来的）；
+            //  · 放量（全在 0 上）：镜像 —— 0 贴底，向上 4 等分到最大值，刻度为正；
+            //  · 跨 0（罕见）：按 {hi..lo} 整体 4 等分，0 轴落在区间内。
+            // 三条分支只换 yOf 的映射，画法（虚线网格/刻度/0 轴/面积/曲线）完全共用。
+            var loV = 0, hiV = 0;
+            for (var i = 0; i < pts.length; i++) {
+                if (pts[i][1] < loV) loV = pts[i][1];
+                if (pts[i][1] > hiV) hiV = pts[i][1];
+            }
+            if (loV > -0.5 && hiV < 0.5) loV = -1;   // 全 0（刚开盘）→ 给个最小量程
+
+            function xOf(k) { return padL + (Math.max(0, Math.min(240, k)) / 240) * plotW; }
+            function yOf(v) {
+                if (hiV > 0 && loV < 0) return padT + (hiV - v) / (hiV - loV) * plotH;
+                if (hiV > 0) return padT + (hiV - v) / hiV * plotH;
+                return padT + (0 - v) / (0 - loV) * plotH;
+            }
+
+            var tickVals = [];
+            for (var g = 1; g <= 4; g++) {
+                if (hiV > 0 && loV < 0) tickVals.push(hiV - (hiV - loV) * g / 4);
+                else if (hiV > 0) tickVals.push(hiV * g / 4);
+                else tickVals.push(loV * g / 4);
+            }
+
+            // 虚线网格 + 刻度值（缩量绿 / 放量红，同截图）
+            ctx.font = font;
+            ctx.textAlign = "right";
+            ctx.textBaseline = "middle";
+            for (var ti = 0; ti < tickVals.length; ti++) {
+                var v = tickVals[ti];
+                var gy = yOf(v);
+                ctx.save();
+                ctx.strokeStyle = "#ececec";
+                ctx.lineWidth = 1;
+                ctx.setLineDash([4, 4]);
+                ctx.beginPath(); ctx.moveTo(padL, gy); ctx.lineTo(W - padR, gy); ctx.stroke();
+                ctx.restore();
+                ctx.fillStyle = color;
+                ctx.fillText((v > 0 ? "+" : "") + v.toFixed(2) + "%", padL - 8, gy);
+            }
+
+            // 0 轴：蓝色实线（= 昨日总量能基准）
+            var y0 = yOf(0);
+            ctx.strokeStyle = "#2f7ce0";
+            ctx.lineWidth = 1.4;
+            ctx.beginPath(); ctx.moveTo(padL, y0); ctx.lineTo(W - padR, y0); ctx.stroke();
+            ctx.fillStyle = "#8a8f99";
+            ctx.fillText("0", padL - 8, y0);
+
+            // 「昨日|总量能」图例（蓝方块 + 灰字）：缩量时 0 轴在顶 → 贴轴下方；
+            // 放量时 0 轴在底、下面没空间 → 翻到轴上方。
+            var legend = "昨日|总量能 " + Math.round(data.yesterday) + "亿";
+            ctx.textAlign = "left";
+            var lw = ctx.measureText(legend).width;
+            var lx = W - padR - lw;
+            var ly = (y0 + 26 <= padT + plotH) ? y0 + 26 : y0 - 26;
+            ctx.fillStyle = "#2f7ce0";
+            ctx.fillRect(lx - 21, ly - 7, 14, 14);
+            ctx.fillStyle = "#8a8f99";
+            ctx.fillText(legend, lx, ly);
+
+            if (!pts.length) return;
+
+            // 面积：曲线下方到底部（浅色，量级低到不影响读数）
+            ctx.beginPath();
+            ctx.moveTo(xOf(pts[0][0]), yOf(pts[0][1]));
+            for (var j = 1; j < pts.length; j++) ctx.lineTo(xOf(pts[j][0]), yOf(pts[j][1]));
+            ctx.lineTo(xOf(pts[pts.length - 1][0]), padT + plotH);
+            ctx.lineTo(xOf(pts[0][0]), padT + plotH);
+            ctx.closePath();
+            ctx.fillStyle = (color === EN_UP) ? "rgba(227,59,59,0.08)" : "rgba(10,165,60,0.08)";
+            ctx.fill();
+
+            // 曲线
+            ctx.beginPath();
+            ctx.moveTo(xOf(pts[0][0]), yOf(pts[0][1]));
+            for (var m = 1; m < pts.length; m++) ctx.lineTo(xOf(pts[m][0]), yOf(pts[m][1]));
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
+            ctx.lineJoin = "round";
+            ctx.stroke();
+
+            // 横轴刻度：09:30 / 10:30 / 11:30 / 14:00 / 15:00（交易分钟线性）
+            ctx.fillStyle = "#8a8f99";
+            var marks = data.marks || [];
+            for (var t = 0; t < marks.length; t++) {
+                if (t === 0) ctx.textAlign = "left";
+                else if (t === marks.length - 1) ctx.textAlign = "right";
+                else ctx.textAlign = "center";
+                ctx.fillText(marks[t].label, xOf(marks[t].k), padT + plotH + 20);
+            }
+            ctx.textAlign = "left";
+
+            // 末端指示点：仅当这次是「新数据」才闪一下（与线用同一套 xOf/yOf，不会错位）。
+            // 没有新数据就把上一轮的 .flash 摘掉 —— class 在不在严格等于「本次闪没闪」，
+            // 也顺手掐断还没播完的动画，不让余影拖到下一轮。
+            var dot = document.getElementById("energy-dot");
+            if (!flash) {
+                if (dot) dot.classList.remove("flash");
+                return;
+            }
+            var last = pts[pts.length - 1];
+            flashEnergyDot(xOf(last[0]), yOf(last[1]));
+        }
+
+        // 曲线末端「刚刷新」指示点：只在拿到新数据时调用，900ms 后自己淡回不可见。
+        // 坐标由 renderEnergyChart 用 canvas 的 xOf/yOf 算好后传入（CSS px，与画布同原点）。
+        function flashEnergyDot(x, y) {
+            var dot = document.getElementById("energy-dot");
+            if (!dot) return;
+            dot.style.left = x + "px";
+            dot.style.top = y + "px";
+            dot.classList.add("show");
+            // 同一个 animation 要重播，必须摘掉 class 再强制重排一次；
+            // 否则第二次刷新时 class 已在，浏览器认为没变化，动画不动。
+            dot.classList.remove("flash");
+            void dot.offsetWidth;
+            dot.classList.add("flash");
+        }
+
+        // 点击面板之外区域 → 关闭（与「市场量能 / 两融余额」同款 mousedown 语义）
+        document.addEventListener("mousedown", function(e) {
+            var panel = document.getElementById("energy-panel");
+            if (!panel || !panel.classList.contains("show")) return;
+            if (panel.contains(e.target)) return;
+            var btn = document.getElementById("btn-amo-pred");
+            if (btn && btn.contains(e.target)) return;
+            closeEnergyPanel();
+        });
+
+
+// ══════════════════════════════════════════════════════════════════
         // [COMPONENT] AmoPanel —— 市场量能面板（右上角「市场量能」按钮）
         // 数据源仅 TDX 本地指数日线（sh000001 + sz399106 成交额相加），无兜底。
         // 面板取的是全市场日频聚合序列，只需视口日期区间（getViewportDateRange 只读

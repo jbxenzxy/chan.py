@@ -119,6 +119,11 @@
                  window.syncDataBtnState()：期货页全灰，股票页仅日K 放行；下面静态写的是
                  初始值，运行时会按状态覆写成「仅股票日K可用」。 -->
             <button class="btn" id="btn-margin" onclick="toggleMarginPanel()" title="两融余额（全A股沪深北三市）">两融余额</button>
+            <!-- 「预测量能」与上面两颗**不同类**：它取的是 eltdx 盘中实时口径的
+                 沪深京三市成交额（App/AppEnergy.py），与当前标的、当前周期都无关，
+                 因此**不进 syncDataBtnState() 的灰化名单**——期货页、任意周期都可点。
+                 静态不写 disabled，运行时也没有任何地方会写它。 -->
+            <button class="btn" id="btn-amo-pred" onclick="toggleEnergyPanel()" title="预测量能（沪深京，盘中实时）">预测量能</button>
             <button class="btn" id="btn-amo" onclick="toggleAmoPanel()" title="市场量能">市场量能</button>
             <button class="btn" id="btn-scan" onclick="startScanZxg()" title="扫描股票买卖点">股票扫描</button>
             <button class="btn" id="btn-draw" onclick="toggleDrawToolbar()" title="画线工具（同花顺式：倾斜线 / 水平线）">画线</button>
@@ -230,6 +235,41 @@
                 <div class="amo-stat"><span class="amo-label" title="当前成交额缩至峰值的百分比（成交额/峰值，越低越接近地量）">缩至峰值</span><span class="amo-value" id="amo-shrink">--</span></div>
             </div>
             <div class="amo-empty" id="amo-empty" style="display:none;">当前视口区间无成交额数据</div>
+        </div>
+    </div>
+    <!-- 预测量能面板（左下角浮层，白底版式照 App 截图复刻）
+         与「市场量能」面板不同源：本面板取 eltdx 盘中实时口径，数据与当前标的/
+         周期无关，故任何页面都可打开；关闭即释放数据，不落任何前端状态。 -->
+    <div class="en-panel" id="energy-panel">
+        <div class="en-head">
+            <span class="en-mark"></span>
+            <span class="en-title">市场量能</span>
+            <span class="en-date" id="energy-date">--</span>
+            <span class="en-hist" title="历史量能（暂未实现）">历史量能</span>
+        </div>
+        <div class="en-body">
+            <div class="en-row">
+                <span class="en-ico">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M3 5h13l-4.4 5.4V19l-4.2-2.1v-6.5L3 5z"></path>
+                        <path d="M19 8h2M19 12h2M19 16h2" stroke-width="1.6" fill="none" stroke="currentColor" stroke-linecap="round"></path>
+                    </svg>
+                </span>
+                <span class="en-actual">沪深京｜实际量能 <b id="energy-actual">--</b>亿</span>
+            </div>
+            <div class="en-row">
+                <span class="en-swatch" id="energy-swatch"></span>
+                <span class="en-pred" id="energy-pred">今日｜预测量能 --</span>
+            </div>
+            <div class="en-chart-wrap">
+                <canvas id="energy-chart" width="880" height="380"></canvas>
+                <!-- 曲线末端「刚刷新」指示点：坐标由 app.js 的 flashEnergyDot() 按曲线末点写入。
+                     平时不可见；只有拿到新数据、曲线真的重画了才闪一次（亮起→扩散→淡出
+                     900ms），闪完回到不可见，所以没更新的轮询不会留下红点 -->
+                <span class="en-dot" id="energy-dot" aria-hidden="true"></span>
+            </div>
+            <div class="en-note">注：红色曲线代表当日预测量能增量，绿色代表缩量</div>
+            <div class="en-empty" id="energy-empty" style="display:none;">预测量能加载中…</div>
         </div>
     </div>
     <!-- 红框调试面板（已暂时注释禁用，2026-08-26；需要时解开本注释即可恢复显示） -->

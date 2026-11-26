@@ -546,6 +546,28 @@ async def api_amo_read(
     return _json_response(result)
 
 
+# ── 路由 — 预测量能（盘中实时）────────────────────────────────────────
+
+@router.get("/api/energy/read")
+async def api_energy_read():
+    """获取沪深京预测量能（orch.call_energy）
+
+    盘中实时口径，数据源为 eltdx 7709 行情通道（三市指数快照 + 分钟线），
+    无本地兜底。不接任何标的/周期参数 —— 面板内容与当前看图标的无关，
+    故股票页、期货页、任意周期都可调用。
+    """
+    try:
+        result = await run_in_threadpool(orch.call_energy)
+    except AppError:
+        raise  # 领域异常：交给统一异常处理器
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"服务器内部错误: {exc}")
+    if "error" in result:
+        return _json_response(result, 400)
+    return _json_response(result)
+
+
 # ── 路由 — 自选股保存 ─────────────────────────────────────────────────
 
 @router.post("/api/stocks/scan/save/zxg")

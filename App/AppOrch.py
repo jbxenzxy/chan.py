@@ -55,6 +55,8 @@ from App.AppRefresh import (
 )
 from App.AppMargin import call_margin
 from App.AppAMO import call_amo
+# 预测量能（AppEnergy）：盘中实时口径，走 eltdx 7709（与市场量能的本地日线口径不同源）
+from App.AppEnergy import call_energy
 # 自动下单（AppTrader）：进程托管单例 + 三个 call_* 漏斗（API 层只认 orch.*）
 from App.AppTrader import AppTrader, trader  # noqa: E402
 
@@ -328,6 +330,8 @@ __all__ = [
     "call_margin",
     # 市场量能（AppAMO）
     "call_amo",
+    # 预测量能（AppEnergy）
+    "call_energy",
     # 标注（AppChart）
     "get_annotations", "handle_annotation_action",
     # 自动下单（AppTrader）
