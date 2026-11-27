@@ -43,9 +43,15 @@ v3（2026-11-26，评审 P2）：`pre`/`closed` 在本地 09:15~15:05 窗口内�
   ⑫ 缓存过期：收盘后「样本末日 < 今天」判 stale，盘中不判 stale；
      周末/假日 15:00 后当天只重建一次（built_at 兜底，防每请求重拉全量分钟线）
   ⑬ 会话状态：非当日一律 closed
-  ⑭ 收盘后基准不塌：r 表样本末日=当日 ⇒ 用 prev_total，不用今天自己
+  ⑭ 基准只认 live 的「上一交易日总量」：r 表样本末日在不在当日都不影响基准，
+     收盘前后同基准同 pct；prev_total 缺失 ⇒ 直接报错（不许退回表里的旧数）
   ⑮ 非交易日基准：周日/法定假日打开，「昨日」= 展示日的前一交易日（不是周六、
      不是假日当天），且假日盘前/盘后同基准同 pct
+  ⑯ 当日永不进 r 表样本：收盘后 15:00:13 那次重建拿到的 15:00 那根只有收盘竞价
+     的零头（2026-11-26 实测 0.08 亿 vs 回填后 156.67 亿），根数与「末格有量」
+     都挡不住它，只能靠「d < today」这条日历条件（v1 漏了，当日被少记 1.2%）
+  ⑰ 盘前：只有服务端那根占位 bar（amount=0）时 bars_done=0 / points=[] /
+     pct=0 / delta=0，不吐 -100%；前端那行改「盘前｜昨日总量能 NNNN亿」
 
 运行：python Test/test_energy_panel.py
 """
@@ -274,6 +280,7 @@ function runCase(data) {
     actual: _el("energy-actual").textContent,
     pred: _el("energy-pred").textContent,
     up: _el("energy-panel").classList.contains("en-up"),
+    pre: _el("energy-panel").classList.contains("en-pre"),
     ctxText: _ctxCalls.slice(),
     dotLeft: dot.style.left,
     dotTop: dot.style.top,
@@ -296,6 +303,11 @@ var upCase = runCase(Object.assign({}, base, {
 }));
 // 用户口径：实际量能只留整数亿（13261.46 → 13261），不显示两位小数
 var intCase = runCase(Object.assign({}, base, { actual: 13261.46, points: [[1, -7.49], [240, -4.79]] }));
+// 盘前（2026-11-27 09:20 实测形态）：只报基准，不报 0 亿 / -100%
+var preCase = runCase(Object.assign({}, base, {
+  date: "11-27", status: "pre", actual: 0, predict: 0, yesterday: 13261.46,
+  pct: 0, delta: 0, shrink: false, bars_done: 0, points: []
+}));
 
 // 轮询节奏：3s / 30s / 慢轮询窗口（本地 09:15~15:05）内 60s / 窗口外不排
 _clockHM = 10 * 60;
@@ -335,6 +347,7 @@ var g4 = _snapDot().flash;               // 再同数据 → 不闪
 
 var out = {
   shrinkCase: shrinkCase, upCase: upCase, intActual: intCase.actual,
+  preCase: preCase,
   sig: [g1, g2, g3, g4],
   sigLeft: [g1x, g3x],
   delays: _timerDelays,
@@ -392,6 +405,15 @@ def test_real_render():
     want_up = "今日｜预测量能 14500亿(+4.10%,增量572亿)"
     check(up["pred"] == want_up, "放量文案逐字一致", f"实测 {up['pred']!r}")
     check(up["up"] is True, "放量态加 .en-up（色块与文字转红）")
+
+    print("[⑦b] 盘前文案：只报基准，不报 0 亿 / -100%")
+    pc = out["preCase"]
+    check(pc["actual"] == "--", "盘前实际量能显示 --（不写 0 亿）",
+          f"实测 {pc['actual']!r}")
+    check(pc["pred"] == "盘前｜昨日总量能 13261亿", "盘前文案逐字一致",
+          f"实测 {pc['pred']!r}")
+    check(pc["up"] is False and pc["pre"] is True,
+          "盘前走中性灰：不加 .en-up、加 .en-pre", f"实测 up={pc['up']} pre={pc['pre']}")
 
     print("[⑧] 画布绘制内容")
     texts = " ".join(sc["ctxText"])
@@ -482,8 +504,7 @@ def test_energy_behavior():
     check(table["samples"] == 7, "样本天数 = 合成 7 天", f"实测 {table['samples']}")
 
     print("[⑪] 预测反推 P = C / r")
-    table2 = {"bars": [0.1, 0.2, 0.4, 1.0], "yesterday_total": 100.0,
-              "prev_total": 90.0, "samples": 4}
+    table2 = {"bars": [0.1, 0.2, 0.4, 1.0], "samples": 4}
     p1 = E._predict(table2["bars"], 10.0, 1)
     p2 = E._predict(table2["bars"], 20.0, 2)
     check(abs(p1 - 100.0) < 1e-9 and abs(p2 - 100.0) < 1e-9,
@@ -512,7 +533,7 @@ def test_energy_behavior():
         premade = {"trade_date": "2000-01-01", "bars": [0.1] * 240,
                    "built_at": today + " 09:00:00"}
         check(E._is_stale(premade) is True,
-              "盘前冷启动建过表：收盘后仍要重建一次（把今天收进样本）")
+              "盘前冷启动建过表：收盘后仍要重建一次（把昨日收进样本）")
         E._now_after_close = lambda: False
         mid = {"trade_date": "2000-01-01", "bars": [0.1] * 240}
         check(E._is_stale(mid) is False, "盘中不因交易日推进而重建（当日未收盘）")
@@ -524,17 +545,20 @@ def test_energy_behavior():
     check(E._session_status("2000-01-01") in ("closed", "pre", "trading", "break"),
           "状态取值在四个枚举内")
 
-    print("[⑭] 收盘后基准不塌：r 表样本末日=当日 ⇒ 用 prev_total，不用 today 自己")
+    print("[⑭] 基准只认 live 的「上一交易日总量」：与 r 表样本末日无关")
     n = E._BARS_PER_DAY
     today = E.datetime.now().strftime("%Y-%m-%d")
     bars = [min(1.0, (k + 1) / n) for k in range(n)]
     tot_today, tot_prev = 13261.46e8, 13928.30e8
     cum = [tot_today * (k + 1) / n for k in range(n)]
 
-    def _ratio_of(trade_date, ytot, ptot):
+    def _ratio_of(trade_date):
         return {"version": E._CACHE_VERSION, "trade_date": trade_date,
-                "yesterday_total": ytot, "prev_total": ptot, "bars": bars,
-                "samples": 20, "built_at": ""}
+                "bars": bars, "samples": 20, "built_at": ""}
+
+    def _live_of(day, cum_, prev_total, prev_day="2026-01-04"):
+        return {"day": day, "cum": cum_, "snap": 0.0,
+                "prev_day": prev_day, "prev_total": prev_total}
 
     orig_ratio, orig_live = E._get_ratio, E._live
 
@@ -546,18 +570,19 @@ def test_energy_behavior():
         finally:
             E._get_ratio, E._live = orig_ratio, orig_live
 
-    # 盘中：今天未收盘、不进 full，样本末日仍是昨天 ⇒ 基准 = yesterday_total
-    mid = _run(_ratio_of("2026-01-05", tot_prev, 13000e8),
-               {"day": today, "cum": cum[:n // 2], "snap": 0.0})
-    # 收盘后：r 表重建把今天收进样本，样本末日=今天 ⇒ 基准必须回退到 prev_total
-    closed = _run(_ratio_of(today, tot_today, tot_prev),
-                  {"day": today, "cum": cum, "snap": 0.0})
+    # 三种表状态（盘中样本末日=昨天 / 收盘后=今天 / 表落后一天）基准必须同一个数
+    mid = _run(_ratio_of("2026-01-05"), _live_of(today, cum[:n // 2], tot_prev))
+    closed = _run(_ratio_of(today), _live_of(today, cum, tot_prev))
+    lagged = _run(_ratio_of("2026-01-04"), _live_of(today, cum, tot_prev))
 
     check(abs(mid["yesterday"] - 13928.3) < 0.01,
-          "盘中「昨日」= 13928.30 亿", f"实测 {mid['yesterday']}")
+          "盘中「昨日」= live.prev_total 13928.30 亿", f"实测 {mid['yesterday']}")
     check(abs(closed["yesterday"] - 13928.3) < 0.01,
           "收盘后「昨日」仍是 13928.30 亿（不是今天自己的 13261.46）",
           f"实测 {closed['yesterday']}")
+    check(abs(lagged["yesterday"] - 13928.3) < 0.01,
+          "r 表样本末日落后一天也不影响基准（不再读表里的日总量）",
+          f"实测 {lagged['yesterday']}")
     check(closed["shrink"] is True, "收盘后仍判缩量（不会误判成放量、整条曲线转红）",
           f"实测 shrink={closed['shrink']} pct={closed['pct']}")
     check(closed["pct"] == mid["pct"],
@@ -566,6 +591,18 @@ def test_energy_behavior():
     check(closed["points"][-1][1] == closed["pct"],
           "曲线末点 = 面板 pct（两者用同一条基准）",
           f"末点 {closed['points'][-1]} / pct {closed['pct']}")
+
+    # 基准取不到时不许退回表里的旧数（那正是 13105 的来路），必须显式报错
+    E._get_ratio = lambda: _ratio_of("2026-01-05")
+    E._live = lambda: _live_of(today, cum, 0.0)
+    try:
+        E.call_energy()
+        raised = False
+    except Exception:                       # noqa: BLE001 —— 只关心有没有抛
+        raised = True
+    finally:
+        E._get_ratio, E._live = orig_ratio, orig_live
+    check(raised, "prev_total 缺失 ⇒ DataFetchError（不静默退回 r 表旧值）")
 
     print("[⑮] 非交易日：「昨日」= 展示日的前一交易日，不是周六/假日当天")
 
@@ -579,25 +616,25 @@ def test_energy_behavior():
 
     orig_dt = E.datetime
 
-    def _run_at(when, ratio, day, cum_):
+    def _run_at(when, ratio, day, cum_, prev_total):
         _FakeDT.now_value = when
         E.datetime = _FakeDT
-        return _run(ratio, {"day": day, "cum": cum_, "snap": 0.0})
+        return _run(ratio, _live_of(day, cum_, prev_total))
 
     tot_tue, tot_mon = 13000e8, 11000e8
     cum_tue = [tot_tue * (k + 1) / n for k in range(n)]
     try:
         # 周日 11-29 打开：最近交易日是周五 11-27，昨日必须是周四 11-26
         sun = _run_at(datetime(2026, 11, 29, 11, 0),
-                      _ratio_of("2026-11-27", tot_today, tot_prev), "2026-11-27", cum)
+                      _ratio_of("2026-11-27"), "2026-11-27", cum, tot_prev)
         # 同一天，但 r 表还是周五收盘前建的（样本末日=周四）
         sun2 = _run_at(datetime(2026, 11, 29, 11, 0),
-                       _ratio_of("2026-11-26", tot_prev, 12400e8), "2026-11-27", cum)
+                       _ratio_of("2026-11-26"), "2026-11-27", cum, tot_prev)
         # 周中法定假日（周三 11-25 休市，最近交易日是周二 11-24）
         hol_am = _run_at(datetime(2026, 11, 25, 10, 0),
-                         _ratio_of("2026-11-24", tot_tue, tot_mon), "2026-11-24", cum_tue)
+                         _ratio_of("2026-11-24"), "2026-11-24", cum_tue, tot_mon)
         hol_pm = _run_at(datetime(2026, 11, 25, 16, 0),
-                         _ratio_of("2026-11-24", tot_tue, tot_mon), "2026-11-24", cum_tue)
+                         _ratio_of("2026-11-24"), "2026-11-24", cum_tue, tot_mon)
     finally:
         E.datetime = orig_dt
 
@@ -610,7 +647,7 @@ def test_energy_behavior():
           "「昨日」不等于展示日自己（否则 pct 塌成 0、整条曲线贴 0 轴）",
           f"昨日 {sun['yesterday']} / 实际 {sun['actual']}")
     check(abs(sun2["yesterday"] - 13928.3) < 0.01,
-          "r 表还停在周四时，周日仍取 13928.30（改由 yesterday_total 提供）",
+          "r 表还停在周四时，周日仍取 13928.30（改由 live.prev_total 提供）",
           f"实测 {sun2['yesterday']}")
     check(abs(hol_am["yesterday"] - 11000.0) < 0.01,
           "法定假日打开「昨日」= 周一 11000 亿（不是假日当天）",
@@ -620,6 +657,38 @@ def test_energy_behavior():
           f"{hol_am['yesterday']}/{hol_am['pct']} vs {hol_pm['yesterday']}/{hol_pm['pct']}")
     check(sun["status"] == "closed" and hol_am["status"] == "closed",
           "非交易日 status=closed（前端只走 60s 兜底轮询）")
+
+    print("[⑯] 当日永不进 r 表样本（15:00:13 那根只有收盘竞价的零头）")
+    today_key = today
+    synth = {f"2026-01-{d:02d}": [1.0] * 240 for d in range(2, 9)}
+    # 当日：240 根齐全，末根只有 0.01（2026-11-26 15:00:13 的真实形态：
+    # 0.08 亿 vs 回填后 156.67 亿）——「根数够 / 末格有量」两条都挡不住它
+    synth[today_key] = [1.0] * 239 + [0.01]
+    orig_days = E._fetch_minute_days
+    E._fetch_minute_days = lambda client, code: synth
+    try:
+        table = E._build_ratio(None)
+    finally:
+        E._fetch_minute_days = orig_days
+    check(table["trade_date"] == "2026-01-08",
+          "样本末日 = 昨日 2026-01-08（当日 1.00 亿那根没被当成完整日）",
+          f"实测 {table['trade_date']}")
+    # 当日若混进样本，r 表末段会被拉高：末根 0.01 那天的「末根占比」= 1.0 但
+    # 分母只有 238.01，权重最大 ⇒ r[238] 明显 > 1.0 的邻值。这里只用样本末日断言。
+    check(table["samples"] == 7, "样本 7 天（当日被剔掉）", f"实测 {table['samples']}")
+
+    print("[⑰] 盘前：只有服务端那根占位 bar 时不吐 -100%")
+    pre = _run(_ratio_of("2026-01-05"), _live_of(today, [0.0], tot_prev))
+    check(pre["bars_done"] == 0, "bars_done = 0（占位 bar 不算已走完）",
+          f"实测 {pre['bars_done']}")
+    check(pre["points"] == [], "曲线为空（不画一点 -100%）", f"实测 {pre['points']}")
+    check(pre["predict"] == 0 and pre["pct"] == 0.0 and pre["delta"] == 0,
+          "预测 0 / pct 0.00 / 增量 0（不是 -100%）",
+          f"实测 predict={pre['predict']} pct={pre['pct']} delta={pre['delta']}")
+    check(abs(pre["yesterday"] - 13928.3) < 0.01,
+          "盘前照样报准昨日总量能 13928.30 亿", f"实测 {pre['yesterday']}")
+    check(pre["shrink"] is False, "盘前不判缩量/放量（前端走中性灰）",
+          f"实测 shrink={pre['shrink']}")
 
 
 # ═══════════════════════════════════════════════════════════════════════

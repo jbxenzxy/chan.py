@@ -800,6 +800,9 @@
             background: #0aa53c; flex: none;
         }
         .en-pred { font-size: 16px; font-weight: 500; color: #0aa53c; }
+        /* 盘前：这行报的是「昨日总量能」基准，不是当日涨跌，红/绿都在表达不存在
+           的信号 ⇒ 灰化（`.en-up` 的红色优先级更高，所以 JS 在 pre 时根本不加它） */
+        .en-panel.en-pre .en-pred { color: #8a8f99; }
         /* 曲线末端「刚刷新」红点：实心点常驻 = 「现在到哪了」，外圈一圈扩散淡出的
            光晕在每次取数成功后播一遍 = 「刚刷新了」。用 CSS 动画而不是 canvas 逐帧
            重绘：刷新间隔 3s，为闪一个点重画整条曲线不值，也省掉 rAF 生命周期管理。 */

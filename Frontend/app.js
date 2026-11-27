@@ -9914,19 +9914,25 @@
         function renderEnergyPanel(data) {
             var panel = document.getElementById("energy-panel");
             if (!panel) return;
-            var up = !data.shrink;                 // 放量 → 红，缩量 → 绿
+            // 盘前（后端 status=pre，当日一根成交量都没有）：只报「昨日总量能」。
+            // 后端此时 actual=0/pct=0/points=[]，若照常拼文案会变成
+            // 「预测量能 0亿(+0.00%,缩量0亿)」；-100% 那种假信号已在后端掐掉。
+            var pre = data.status === "pre";
+            var up = !pre && !data.shrink;          // 放量 → 红，缩量 → 绿；盘前走中性灰
             panel.classList.toggle("en-up", up);
+            panel.classList.toggle("en-pre", pre);
 
             document.getElementById("energy-date").textContent = data.date || "--";
             // 实际量能只留整数亿（13261.46 → 13261）；继续传两位小数会让这行过长，
-            // 与右侧「预测量能 13114亿」的整数口径也不一致
-            document.getElementById("energy-actual").textContent =
+            // 与右侧「预测量能 13114亿」的整数口径也不一致。盘前尚未成交 → "--"。
+            document.getElementById("energy-actual").textContent = pre ? "--" :
                 String(Math.round(Number(data.actual) || 0));
             var word = up ? "增量" : "缩量";
             var absDelta = Math.abs(Math.round(Number(data.delta) || 0));
-            document.getElementById("energy-pred").textContent =
-                "今日｜预测量能 " + data.predict + "亿(" + fmtEnergyPct(data.pct) + "%,"
-                + word + absDelta + "亿)";
+            document.getElementById("energy-pred").textContent = pre
+                ? "盘前｜昨日总量能 " + Math.round(Number(data.yesterday) || 0) + "亿"
+                : "今日｜预测量能 " + data.predict + "亿(" + fmtEnergyPct(data.pct) + "%,"
+                  + word + absDelta + "亿)";
 
             var empty = document.getElementById("energy-empty");
             if (empty) empty.style.display = "none";

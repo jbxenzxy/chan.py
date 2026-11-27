@@ -35,6 +35,11 @@ App/AppEnergy.py —— 预测量能功能域（沪深京盘中预测量能）
   回测（2026-10-15~11-25，30 个交易日，r 表用前 20 日）：11:30 MAPE 5.7%、
   14:00 3.3%、收盘 0.1%。
 
+基准（面板「昨日|总量能」）= **展示日的前一个交易日**，取自与曲线同一次分钟线
+拉取（`_fetch_today_minutes` 的 520 根窗口装得下「当日 + 上一交易日」）。
+不取 r 表里的日总量：那是「建表那一刻」的快照，收盘后首次重建落在 15:00:13，
+服务端那时还没发布当日 15:00 那根（收盘集合竞价），当日的合计会少一根。
+
 r 表缓存：落 {app_data_dir}/energy_ratio.json，每天收盘后首次请求重建一次
 （重建走全量翻页：三只各约 3~4s、合计约 10s，不能每请求都拉）。
 实时快照 2s TTL、当日分钟线 60s TTL，避免前端轮询打穿行情主站。
@@ -85,20 +90,30 @@ _SNAP_TTL_SEC = 2.0
 # 所以曲线最右端仍然每 2 秒动一次，只是横轴位置一分钟才右移一格。
 _MINUTE_TTL_SEC = 60.0
 
-# 拉分钟线的根数：240 根当日 + 余量，确保「最后一天」是完整的
-_MINUTE_COUNT = 320
+# 拉分钟线的根数：240 当日 + 240 上一交易日 + 余量。**必须装得下两天**：
+# 「昨日总量能」直接从这条窗口里取（见 `_fetch_today_minutes`），窗口只够一天
+# 就只能回头去求 r 表的快照值 —— 那正是 2026-11-26 把 13261.46 亿记成
+# 13104.88 亿的来路。实测 520 根 = 11-25 240 根 + 11-26 240 根 + 今日 1 根，
+# 三只合计 0.17s（与 320 根的耗时无差别，都是一次请求）。
+_MINUTE_COUNT = 520
+
+# 「昨日总量能」的完整性以沪深两市为准（北交所 bj899050 只覆盖 50 只、
+# 占全市场 <1%，缺日按 0 计 —— 与当日曲线的合并口径一致）
+_BASIS_CODES = _CODES[:2]
 
 # 交易时段（本地时间，含边界）
 _AM_OPEN, _AM_CLOSE = (9, 30), (11, 30)
 _PM_OPEN, _PM_CLOSE = (13, 0), (15, 0)
 
 # 缓存文件版本号：结构变更时自增，旧缓存自动失效重建
-_CACHE_VERSION = 1
+# v2：删掉「表内记昨日总量」（yesterday_total / prev_total），基准改由实时分钟线
+#     窗口提供 —— v1 的表会把 2026-11-26 记成 13104.88 亿（少一根 15:00）
+_CACHE_VERSION = 2
 
 # 模块级缓存（键级赋值 / 整体替换，无锁）
-_RATIO_CACHE = None          # {"trade_date","yesterday_total","bars","samples","built_at"}
+_RATIO_CACHE = None          # {"trade_date","bars","samples","built_at"}
 _SNAP_CACHE = {"ts": 0.0, "amount": 0.0}
-_MINUTE_CACHE = {"ts": 0.0, "day": "", "cum": []}
+_MINUTE_CACHE = {"ts": 0.0, "day": "", "prev_day": "", "prev_total": 0.0, "cum": []}
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -152,6 +167,10 @@ def _fetch_minute_days(client, code: str) -> dict:
     all_pages=True 时 count 不生效（eltdx 只校验 page_size，逐页拉到服务端返回
     空页为止），传 2400 只是表达「要分钟线」的意图，实收是全量：实测单只 23280
     根 / 97 个交易日。样本由 _build_ratio 截最近 _RATIO_DAYS=20 个完整交易日。
+
+    ⚠️ 返回的日数组是**变长**的（每日本身有多少根就多少根，只封顶 240），
+    且收盘那一刻最后一根会先带一个几乎为 0 的占位值（见 `_build_ratio`），
+    所以「当日能不能进样本」由 `_build_ratio` 的日历条件决定，不看这里的形状。
     """
     series = client.bars.get(code, period="1m", count=2400, all_pages=True)
     days = {}
@@ -173,10 +192,17 @@ def _fetch_snapshot_total(client) -> float:
 
 
 def _fetch_today_minutes(client) -> tuple:
-    """当日（或最近交易日）三市分钟成交额 → (日期, [累计成交额(元), ...], bar 数)
+    """当日（或最近交易日）三市分钟成交额
+
+    返回 (日期, [累计成交额(元), ...], bar 数, 上一交易日, 上一交易日总量(元))
 
     注意 count 是**跨日总根数**，必须按日期切出最后一天；直接累加会把昨日
     尾巴算进来（实测会把 8017 亿做成 13591 亿）。
+
+    上一交易日与当日出自**同一次拉取、同一条窗口**（`_MINUTE_COUNT` 装得下两天），
+    所以「昨日总量能」恒等于展示日的前一个交易日，与 r 表何时重建无关。
+    上一交易日总量在沪深两市都满 240 根时才认，否则回 0（调用方据此报错），
+    绝不拿一条残缺的日线去当基准。
     """
     per_code = {}
     last_day = ""
@@ -184,18 +210,25 @@ def _fetch_today_minutes(client) -> tuple:
         series = client.bars.get(code, period="1m", count=_MINUTE_COUNT)
         if not series.bars:
             raise DataFetchError(f"eltdx 未返回分钟线: {code}")
+        days = {}
+        for b in series.bars:
+            days.setdefault(b.time.strftime("%Y-%m-%d"), []).append(float(b.amount))
         day = series.bars[-1].time.strftime("%Y-%m-%d")
         last_day = max(last_day, day)
-        same_day = [float(b.amount) for b in series.bars
-                    if b.time.strftime("%Y-%m-%d") == day]
-        per_code[code] = (day, same_day)
+        per_code[code] = days
+
+    # 上一交易日 = 窗口里早于 last_day 的最大日期（取 max 而非 min：窗口最左
+    # 那天常被截断，比如 11-24 只有尾巴 39 根）
+    prev_day = max((d for days in per_code.values() for d in days if d < last_day),
+                   default="")
 
     # 只用「三市共同的最新交易日」；个别市场缺当日数据时按 0 计（北交所 <1%）
     merged = [0.0] * _BARS_PER_DAY
     bars_seen = 0
-    for code, (day, arr) in per_code.items():
-        if day != last_day:
-            log.warning(f"[预测量能] {code} 最新分钟线日期 {day} != 三市最新 {last_day}，按 0 计")
+    for code, days in per_code.items():
+        arr = days.get(last_day)
+        if arr is None:
+            log.warning(f"[预测量能] {code} 无 {last_day} 分钟线，按 0 计")
             continue
         bars_seen = max(bars_seen, min(len(arr), _BARS_PER_DAY))
         for i, amt in enumerate(arr[:_BARS_PER_DAY]):
@@ -206,7 +239,20 @@ def _fetch_today_minutes(client) -> tuple:
     for i in range(bars_seen):
         acc += merged[i]
         cum.append(acc)
-    return last_day, cum, bars_seen
+
+    prev_total = 0.0
+    if prev_day:
+        complete = True
+        for code, days in per_code.items():
+            arr = days.get(prev_day) or []
+            if code in _BASIS_CODES and len(arr) < _BARS_PER_DAY:
+                complete = False
+            prev_total += sum(arr)
+        if not complete:
+            log.warning(f"[预测量能] 上一交易日 {prev_day} 分钟线不足 "
+                        f"{_BARS_PER_DAY} 根，基准不可用")
+            prev_total = 0.0
+    return last_day, cum, bars_seen, prev_day, prev_total
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -225,8 +271,14 @@ def _build_ratio(client) -> dict:
             for i, amt in enumerate(arr):
                 agg[i] += amt
 
-    # 完整交易日 = 首尾都有量（垫零的残缺日/未收盘日会被 v[-1] == 0 剔除）
-    full = {d: v for d, v in per_day.items() if v[0] > 0 and v[-1] > 0}
+    # 完整交易日：① **当日一律不进样本** —— 收盘后首次重建落在 15:00:13，服务端
+    # 那时才吐出 15:00 那根，里面只有收盘竞价的前几秒（2026-11-26 实测那一刻合计
+    # 0.08 亿，回填后 156.67 亿）；它根数够、末格也有量，任何「结构完整性」判据都
+    # 看不出来，只有「今天是哪天」这个日历条件挡得住。② 首尾都有量（剔除半天/
+    # 停市/残缺日：per_day 的数组是 240 格定长，残缺日的尾格是 0）。
+    today = datetime.now().strftime("%Y-%m-%d")
+    full = {d: v for d, v in per_day.items()
+            if d < today and v[0] > 0 and v[-1] > 0}
     hist = sorted(full)[-_RATIO_DAYS:]
     if len(hist) < 5:
         raise DataFetchError(f"eltdx 可用完整交易日不足（{len(hist)} 天），无法构建 r(t) 表")
@@ -251,9 +303,7 @@ def _build_ratio(client) -> dict:
 
     return {
         "version": _CACHE_VERSION,
-        "trade_date": hist[-1],                  # r 表的样本末日 = 上一交易日
-        "yesterday_total": tot_of[hist[-1]],     # 昨日沪深京总量（元）
-        "prev_total": tot_of[hist[-2]] if len(hist) >= 2 else tot_of[hist[-1]],
+        "trade_date": hist[-1],                  # r 表的样本末日（最近一个完整交易日）
         "bars": bars,
         "samples": len(hist),
         "built_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -276,7 +326,7 @@ def _load_ratio_disk():
         return None
     if (data.get("version") != _CACHE_VERSION
             or len(data.get("bars") or []) != _BARS_PER_DAY
-            or not data.get("yesterday_total")):
+            or not data.get("trade_date")):
         log.info("[预测量能] r(t) 缓存结构过期，将重建")
         return None
     return data
@@ -302,7 +352,8 @@ def _is_stale(data: dict) -> bool:
     同一个缓存会一直被判定过期 —— 15:00 之后每个请求都重拉全量分钟线（三只各
     约 3~4s），长假里天天如此。所以用 built_at 记一笔：今天收盘后已经建过就
     不再试。反向条件同样重要：built_at 是今天**收盘前**的（例如盘前冷启动建过
-    一次），15:00 后仍要重建一次，好把今天的完整数据收进样本。
+    一次），15:00 后仍要重建一次，好把**昨日**的完整数据收进样本
+    （当日永不进样本，见 `_build_ratio`）。
     """
     trade_date = data.get("trade_date") or ""
     if not trade_date:
@@ -311,7 +362,7 @@ def _is_stale(data: dict) -> bool:
     if trade_date > today:
         return True                      # 脏数据 / 系统时钟回拨
     if trade_date >= today:
-        return False                     # 已含今天，今天不用再建
+        return False                     # 当日不进样本，正常走不到这里；留作防御
     if not _now_after_close():
         return False                     # 今天还没收盘，今天的数据不该进样本
     # 15:00 之后样本末日仍落后：今天可能不是交易日（周末/法定假日），也可能
@@ -356,7 +407,9 @@ def _live() -> dict:
 
     曲线（3 次 bars）与快照（1 次 snapshots）的 TTL 不同：曲线 60s、快照 2s。
     两者都没过期时不建连接；只有一个过期时共用同一条连接，省一次握手。
-    返回 {"day", "cum": [...], "snap": 三市合计(元)}
+    返回 {"day", "cum": [...], "snap": 三市合计(元), "prev_day", "prev_total"}
+    其中 prev_day/prev_total 是「展示日的前一个交易日」及其总量 —— 基准与曲线
+    同源，两者一起进 60s 缓存，不会出现「曲线换了日、基准还停在上一版」。
     """
     now = time.time()
     minute_fresh = bool(_MINUTE_CACHE["cum"]) and (now - _MINUTE_CACHE["ts"] < _MINUTE_TTL_SEC)
@@ -365,9 +418,11 @@ def _live() -> dict:
     if not (minute_fresh and snap_fresh):
         def _pull(client):
             if not minute_fresh:
-                day, cum, _ = _fetch_today_minutes(client)
+                day, cum, _, prev_day, prev_total = _fetch_today_minutes(client)
                 _MINUTE_CACHE["day"] = day
                 _MINUTE_CACHE["cum"] = cum
+                _MINUTE_CACHE["prev_day"] = prev_day
+                _MINUTE_CACHE["prev_total"] = prev_total
                 _MINUTE_CACHE["ts"] = time.time()
             if not snap_fresh:
                 _SNAP_CACHE["amount"] = _fetch_snapshot_total(client)
@@ -378,6 +433,8 @@ def _live() -> dict:
         "day": _MINUTE_CACHE["day"],
         "cum": _MINUTE_CACHE["cum"],
         "snap": _SNAP_CACHE["amount"],
+        "prev_day": _MINUTE_CACHE["prev_day"],
+        "prev_total": _MINUTE_CACHE["prev_total"],
     }
 
 
@@ -426,7 +483,7 @@ def call_energy():
         "status": "trading|break|closed|pre",
         "actual": 8017.80,          # 实际量能
         "predict": 13140,           # 预测量能（整数）
-        "yesterday": 13928.30,      # 昨日总量能
+        "yesterday": 13928.30,      # 昨日总量能（= 展示日的前一个交易日）
         "pct": -5.65,               # 较昨日（%，两位小数）
         "delta": -787,              # 增量(+) / 缩量(-)，整数亿
         "shrink": True,             # 是否缩量（前端配色用）
@@ -434,16 +491,26 @@ def call_energy():
         "points": [[k, pct], ...],  # 曲线：bar 序号 → 较昨日 %
         "marks": [{"k":0,"label":"09:30"}, ...]   # 横轴刻度
       }
+
+    盘前（当日还没有成交量）时 bars_done=0、points=[]、predict=0、pct=0.0、
+    delta=0 —— 只把「昨日总量能」报准，不吐 -100% 这种假信号。
     """
     t0 = time.time()
     ratio = _get_ratio()
     ratio_bars = ratio["bars"]
-    yesterday = float(ratio["yesterday_total"])
 
     curve = _live()
     day, cum = curve["day"], curve["cum"]
     if not cum:
         raise DataFetchError("eltdx 未返回当日分钟线（行情主站不可用）")
+
+    # 基准 = 展示日的前一个交易日，与曲线出自同一次分钟线拉取（`_live` 的 60s 缓存）。
+    # **不读 r 表里的日总量**：那是「建表那一刻」的快照，收盘后首次重建落在 15:00:13，
+    # 服务端那时还没发布当日 15:00 那根（收盘集合竞价），当日合计会少一根；
+    # 且当天不会再次重建（`_is_stale` 首判 trade_date >= today），错值一直冻到次日。
+    yesterday = float(curve.get("prev_total") or 0.0)
+    if yesterday <= 0:
+        raise DataFetchError("未取到上一交易日总量（分钟线窗口不足两个交易日）")
 
     # 当日累计：末尾用实时快照覆盖（快照比分钟线新一拍）
     snap_total = curve["snap"]
@@ -453,25 +520,23 @@ def call_energy():
 
     bars_done = len(cum)
     actual = cum[-1]
-    predict = _predict(ratio_bars, actual, bars_done) or actual
+    if actual <= 0:
+        # 盘前：服务端已经吐出当日 09:31 那根占位 bar（amount=0），照常换算会得到
+        # 「预测 0 亿 / -100.00% / 缩量 yesterday 亿」纯噪声 —— 盘前只报基准。
+        bars_done = 0
+        predict, pct, delta, shrink = 0, 0.0, 0, False
+    else:
+        predict = _predict(ratio_bars, actual, bars_done) or actual
 
-    # 走完 240 根即收盘，预测值直接取实际值。r 表末根其实恒等于 1（_build_ratio
-    # 的分母就是当日 cum[-1]，末根分子也是 cum[-1]），所以这一步通常等于没做；
-    # 保留它是兜底：r 表被外部改坏 / 缓存被手改成末根 < 1 时，末点会冒出虚假正偏差。
-    if bars_done >= _BARS_PER_DAY:
-        predict = actual
+        # 走完 240 根即收盘，预测值直接取实际值。r 表末根其实恒等于 1（_build_ratio
+        # 的分母就是当日 cum[-1]，末根分子也是 cum[-1]），所以这一步通常等于没做；
+        # 保留它是兜底：r 表被外部改坏 / 缓存被手改成末根 < 1 时，末点会冒出虚假正偏差。
+        if bars_done >= _BARS_PER_DAY:
+            predict = actual
 
-    # 基准永远是「展示日的前一个交易日」。
-    # r 表样本末日 == 展示日时 —— 收盘后 r 表重建会把今天收进样本，或周末看最近
-    # 交易日 —— yesterday_total 存的是「样本末日自己的总量」= 今天，不能当基准：
-    # 用它会让 pct 塌成 0、shrink 判成放量，整条曲线在收盘那一刻从绿翻红。
-    # 此时正确基准是样本倒数第二天，即 prev_total。
-    # 反过来，盘中样本末日仍是昨天（今天未收盘、不进 full），直接用 yesterday_total。
-    if ratio.get("trade_date") == day:
-        yesterday = float(ratio.get("prev_total") or yesterday)
-
-    pct = round((predict / yesterday - 1.0) * 100.0, 2) if yesterday > 0 else 0.0
-    delta = int(round((predict - yesterday) / 1e8))
+        pct = round((predict / yesterday - 1.0) * 100.0, 2)
+        delta = int(round((predict - yesterday) / 1e8))
+        shrink = predict < yesterday
 
     points = []
     for k in range(1, bars_done + 1):
@@ -489,7 +554,7 @@ def call_energy():
         "yesterday": _yi(yesterday),
         "pct": pct,
         "delta": delta,
-        "shrink": predict < yesterday,
+        "shrink": shrink,
         "bars_done": bars_done,
         "points": points,
         "marks": [
@@ -515,4 +580,4 @@ def clear_cache() -> None:
     global _RATIO_CACHE
     _RATIO_CACHE = None
     _SNAP_CACHE.update({"ts": 0.0, "amount": 0.0})
-    _MINUTE_CACHE.update({"ts": 0.0, "day": "", "cum": []})
+    _MINUTE_CACHE.update({"ts": 0.0, "day": "", "prev_day": "", "prev_total": 0.0, "cum": []})
