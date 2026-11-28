@@ -222,6 +222,42 @@ def test_backfill_failure_safe(failures):
          pool_mod._active_scans) = saved
 
 
+def test_existing_seqs_called_once(failures):
+    """⑥ 缺口比对只查一次库：调用次数与 futures 数量无关
+
+    回归：原写法把 `existing_seqs` 写进列表推导式的**条件**
+        [.. for _f, seq, code in futures if seq not in store.existing_seqs(tid)]
+    每个 future 都会调一次；该函数每次新建 SQLite 连接 + 全表扫描，
+    5028 只票实测 42.9s（单次 8.5ms × 5028）。这段正好在「worker 全部
+    落库之后、set_status(done) 之前」，前端于是停在 5028/5028 干等
+    40+ 秒。进度数字骗人（已完成却还在转），比单纯慢更糟。
+    """
+    store = get_scan_store()
+    n = 5
+    tid = _new_task(store, n)
+    futures = []
+    for s in range(n):
+        code = "C%04d" % s
+        store.put_result(tid, s, code, "ok", {"code": code})
+        futures.append((_StubFuture(), s, code))
+
+    calls = {"n": 0}
+    real = store.existing_seqs
+
+    def _counted(task_id):
+        calls["n"] += 1
+        return real(task_id)
+
+    with mock.patch.object(store, "existing_seqs", side_effect=_counted):
+        pool_mod._monitor_task(tid, futures)
+
+    if calls["n"] != 1:
+        failures.append(f"⑥ existing_seqs 调用 {calls['n']} 次（应为 1 次）")
+        print(f"[FAIL] ⑥ existing_seqs 调用 {calls['n']} 次（缺口比对待 O(N²)）")
+        return
+    print("[PASS] ⑥ 缺口比对只查一次库（existing_seqs × 1，与 futures 数无关）")
+
+
 def main():
     ap = argparse.ArgumentParser(description="收割线程结果缺口补齐测试")
     ap.add_argument("--update", action="store_true", help="兼容 run_all --update")
@@ -233,6 +269,7 @@ def main():
     test_no_gap_untouched(failures)
     test_aborted_gap_shape(failures)
     test_backfill_failure_safe(failures)
+    test_existing_seqs_called_once(failures)
 
     # 清理临时 DB
     try:

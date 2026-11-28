@@ -9268,6 +9268,7 @@
             return '<div class="scan-summary" style="font-size:10px;color:#7a8399;">'
                 + '最近 ' + _scanRecentDays + ' 根 · 判据：其中成交额最大的一根'
                 + ' > ' + windowTxt + '的最高成交额（成交额创新高即放量，比较窗口不足则不参评）'
+                + '<br>成交额最大的那根K线收阳=红放量，收阴或平盘=青放量'
                 + '</div>';
         }
 

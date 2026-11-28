@@ -227,8 +227,14 @@ def _monitor_task(task_id, futures):
         # 补写状态按任务是否处于中止语义分流，避免中止行的既有口径被破坏
         # （worker 侧中止行是 status=aborted + data.aborted，汇总时排除）。
         try:
+            # 先取一次已落库集合，再做差集：`existing_seqs` 每次调用都新建
+            # SQLite 连接并全表扫描，写进推导式的条件里会被**每个 future
+            # 调一次**（O(N²)）。N=5028 时实测 42.9s（单次 8.5ms × 5028），
+            # 而这段正好在所有 worker 落库之后、`set_status("done")` 之前，
+            # 于是前端看到「5028/5028」后干等 40+ 秒才收尾。
+            _existing = store.existing_seqs(task_id)
             lack = [(seq, code) for _fut, seq, code in futures
-                    if seq not in store.existing_seqs(task_id)]
+                    if seq not in _existing]
             if lack:
                 _task = store.get_task(task_id)
                 aborting = bool(_task and (_task.get("abort_requested")
