@@ -228,9 +228,9 @@ def test_existing_seqs_called_once(failures):
     回归：原写法把 `existing_seqs` 写进列表推导式的**条件**
         [.. for _f, seq, code in futures if seq not in store.existing_seqs(tid)]
     每个 future 都会调一次；该函数每次新建 SQLite 连接 + 全表扫描，
-    5028 只票实测 42.9s（单次 8.5ms × 5028）。这段正好在「worker 全部
-    落库之后、set_status(done) 之前」，前端于是停在 5028/5028 干等
-    40+ 秒。进度数字骗人（已完成却还在转），比单纯慢更糟。
+    5028 只票本机实测 42.9s（单次约 8.5ms；换机器/磁盘为数十秒量级）。
+    这段正好在「worker 全部落库之后、set_status(done) 之前」，前端于是
+    停在 5028/5028 干等 40+ 秒。进度数字骗人（已完成却还在转），比单纯慢更糟。
     """
     store = get_scan_store()
     n = 5

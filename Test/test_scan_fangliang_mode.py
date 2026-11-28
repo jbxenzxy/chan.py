@@ -55,6 +55,7 @@ from App.AppConfig import app_config                  # noqa: E402
 FIXTURES = os.path.join(ROOT, "Test", "fixtures_real")
 APPJS = os.path.join(ROOT, "Frontend", "app.js")
 APPHTML = os.path.join(ROOT, "Frontend", "app.html")
+APPCSS = os.path.join(ROOT, "Frontend", "app.css")
 
 _OK = []
 
@@ -348,6 +349,11 @@ def part3():
         # ── ③c 非 120 的配置值必须原样带出（证明不是写死 120） ──
         "_scanFangliangWindowBars = 250;\n"
         "out.push('W250=' + JSON.stringify({ h: _fangliangCaliberHtml() }));\n"
+        # ── ③f 标签真函数：a_is_rise 的 true/false 必须落到不同 class ──
+        #   只钉文案不够：文案说「收阳=红」，若 buildFangliangTagHtml 的
+        #   分支被改反，文字仍然对、颜色却反了，面板会自相矛盾。
+        "out.push('TAG_TRUE=' + JSON.stringify({ h: buildFangliangTagHtml({a_is_rise: true}) }));\n"
+        "out.push('TAG_FALSE=' + JSON.stringify({ h: buildFangliangTagHtml({a_is_rise: false}) }));\n"
         # ── ③d 终态渲染：披露行 + 数据行共存 ──
         "_scanFangliangWindowBars = 120;\n"
         "document.getElementById('scan-body').innerHTML = '';\n"
@@ -395,6 +401,8 @@ def part3():
     w120 = json.loads(kv["W120"])["h"]
     wnul = json.loads(kv["WNUL"])["h"]
     w250 = json.loads(kv["W250"])["h"]
+    tag_true = json.loads(kv["TAG_TRUE"])["h"]
+    tag_false = json.loads(kv["TAG_FALSE"])["h"]
     fin = json.loads(kv["FIN"])["html"]
     empty = json.loads(kv["EMPTY"])["html"]
 
@@ -428,6 +436,31 @@ def part3():
           empty[:300])
     check("③e 空结果态数据行数为 0（无残留行）",
           "scan-stock-row" not in empty, empty[:200])
+
+    # ── ③f 文案 ↔ 真实着色的一致性 ──────────────────────────────────
+    #   ① 段只证明后端 a_is_rise 取值对；③a 只证明文案写了「收阳=红」。
+    #   两者各自漂移（把 branch 改反、把 CSS 换色）时都能全绿，直到面板
+    #   上文字说红、标签却显青才被发现。故这里直接喂 true/false 给
+    #   buildFangliangTagHtml，再把 app.css 的色值读出来对账。
+    appcss = io.open(APPCSS, encoding="utf-8").read()
+
+    def _tag_color(cls):
+        m = re.search(r"\.scan-bsp-tag\." + cls + r"\s*\{([^}]*)\}", appcss)
+        if not m:
+            return ""
+        c = re.search(r"color:\s*([^;]+);", m.group(1))
+        return c.group(1).strip() if c else ""
+
+    up_color = _tag_color("scan-tag-up")
+    down_color = _tag_color("scan-tag-down")
+    check("③f a_is_rise=True ⇒ scan-tag-up、False ⇒ scan-tag-down（文案颜色落到真实 class）",
+          ("scan-tag-up" in tag_true and "scan-tag-down" not in tag_true
+           and "scan-tag-down" in tag_false and "scan-tag-up" not in tag_false),
+          (tag_true, tag_false))
+    check("③f CSS 色值与文案一致：scan-tag-up 为红 #ff3c3c、scan-tag-down 为青 rgba(0,240,240,…)",
+          ("ff3c3c" in up_color.lower())
+          and ("0,240,240" in down_color.replace(" ", "")),
+          (up_color, down_color))
 
 
 # ══════════════════════════════════════════════════════════════════════
